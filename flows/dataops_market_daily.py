@@ -79,7 +79,6 @@ def run_dataops_market_daily(
         required_symbols=normalized_symbols,
         prices_frame=cached_prices,
         quotes_frame=cached_quotes,
-        as_of_date=end,
     )
     coverage_summary = assess_symbol_coverage(
         required_symbols=normalized_symbols,
@@ -96,7 +95,6 @@ def run_dataops_market_daily(
     )
 
     status_rows = _build_asset_status_rows(
-        as_of_date=end,
         prices_frame=cached_prices,
         quotes_frame=cached_quotes,
         market_stats_frame=market_stats,
@@ -107,10 +105,12 @@ def run_dataops_market_daily(
         _refresh_run_to_row(prices_run),
         _refresh_run_to_row(quotes_run),
         _flow_run_row(
-            flow_run_id=flow_run_id,
+            job_name="dataops_market_daily",
+            source_type="orchestration",
+            scope=f"{start}:{end}",
             flow_started_at=flow_started_at,
             status=str(_overall_status(status_rows)),
-            details={
+            context={
                 "symbols": normalized_symbols,
                 "start": start,
                 "end": end,
@@ -160,10 +160,12 @@ def run_dataops_market_daily(
         for failure in publish_failures:
             run_rows.append(
                 _flow_run_row(
-                    flow_run_id=f"{flow_run_id}_publish_{failure['step']}",
+                    job_name=f"dataops_market_daily_publish_{failure['step']}",
+                    source_type="publish",
+                    scope=str(failure["step"]),
                     flow_started_at=flow_started_at,
                     status=failure["classification"]["code"],
-                    details={
+                    context={
                         "step": failure["step"],
                         "error": failure["error"],
                         "retryable": failure["classification"]["retryable"],
@@ -172,11 +174,14 @@ def run_dataops_market_daily(
             )
         status_rows.append(
             {
-                "asset_name": "data_ops_publish_pipeline",
-                "as_of_date": pd.Timestamp(end).date().isoformat(),
+                "asset_key": "data_ops_publish_pipeline",
+                "asset_type": "pipeline",
+                "provider": "data_ops",
+                "last_success_at": None,
+                "last_available_date": pd.Timestamp(end).date().isoformat(),
                 "freshness_status": FreshnessState.FAILED_HARD,
-                "last_observed_at": datetime.now(UTC).isoformat(),
-                "details": {"failures": publish_failures},
+                "coverage_status": FreshnessState.FAILED_HARD,
+                "reason": "publish_failure",
                 "updated_at": datetime.now(UTC).isoformat(),
             }
         )
@@ -274,47 +279,60 @@ def _refresh_run_to_row(result: RefreshRunResult) -> dict[str, Any]:
         if str(result.status).strip().lower() in {"failed_hard", "failed_retrying"}
         else None
     )
+    error_messages = [str(value) for value in result.error_messages if str(value).strip()]
+    error_message = error_messages[0] if error_messages else None
     return {
-        "run_id": result.run_id,
-        "asset_name": result.asset_name,
+        "job_name": result.asset_name,
+        "source_type": "refresh",
+        "scope": "symbol_universe",
         "status": result.status,
-        "failure_classification": failure_classification,
         "started_at": result.started_at,
-        "ended_at": result.ended_at,
+        "finished_at": result.ended_at,
+        "rows_written": int(result.rows_written),
+        "error_class": failure_classification,
+        "error_message": error_message,
+        "failure_classification": failure_classification,
         "symbols_requested": result.symbols_requested,
         "symbols_succeeded": result.symbols_succeeded,
         "symbols_failed": result.symbols_failed,
-        "rows_written": int(result.rows_written),
-        "error_messages": result.error_messages,
+        "error_messages": error_messages,
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
 def _flow_run_row(
     *,
-    flow_run_id: str,
+    job_name: str,
+    source_type: str,
+    scope: str,
     flow_started_at: datetime,
     status: str,
-    details: dict[str, Any],
+    context: dict[str, Any],
 ) -> dict[str, Any]:
-    failure_classification = str(status) if str(status) in {"failed_hard", "failed_retrying"} else None
+    normalized_status = str(status).strip().lower()
+    failure_classification = normalized_status if normalized_status in {"failed_hard", "failed_retrying"} else None
+    details = json.dumps(context, default=str)
     return {
-        "run_id": flow_run_id,
-        "asset_name": "dataops_market_daily",
+        "job_name": job_name,
+        "source_type": source_type,
+        "scope": scope,
         "status": status,
-        "failure_classification": failure_classification,
         "started_at": flow_started_at.isoformat(),
-        "ended_at": datetime.now(UTC).isoformat(),
-        "symbols_requested": details.get("symbols", []),
+        "finished_at": datetime.now(UTC).isoformat(),
+        "rows_written": int(context.get("rows_written", 0) or 0),
+        "error_class": failure_classification,
+        "error_message": details if failure_classification else None,
+        "failure_classification": failure_classification,
+        "symbols_requested": context.get("symbols", []),
         "symbols_succeeded": [],
         "symbols_failed": [],
-        "rows_written": 0,
-        "error_messages": [json.dumps(details, default=str)],
+        "error_messages": [details],
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
 def _build_asset_status_rows(
     *,
-    as_of_date: str,
     prices_frame: pd.DataFrame,
     quotes_frame: pd.DataFrame,
     market_stats_frame: pd.DataFrame,
@@ -350,33 +368,83 @@ def _build_asset_status_rows(
         failure_state="failed_hard" if market_stats_frame.empty else None,
     )
 
-    as_of = pd.Timestamp(as_of_date).date().isoformat()
+    prices_provider = _provider_from_frame(prices_frame, fallback="unknown")
+    quotes_provider = _provider_from_frame(quotes_frame, fallback="unknown")
+    now_iso = now.isoformat()
     return [
         {
-            "asset_name": "market_price_daily",
-            "as_of_date": as_of,
+            "asset_key": "market_price_daily",
+            "asset_type": "market_data",
+            "provider": prices_provider,
+            "last_success_at": _last_success_timestamp(prices_last, price_state),
+            "last_available_date": _date_or_none(prices_last),
             "freshness_status": str(price_state),
-            "last_observed_at": None if pd.isna(prices_last) else pd.Timestamp(prices_last).isoformat(),
-            "details": {"rows": int(len(prices_frame.index)), "run_id": prices_run.run_id},
-            "updated_at": now.isoformat(),
+            "coverage_status": str(prices_run.status),
+            "reason": _asset_reason(
+                rows_written=int(len(prices_frame.index)),
+                run_id=prices_run.run_id,
+                errors=prices_run.error_messages,
+            ),
+            "updated_at": now_iso,
         },
         {
-            "asset_name": "market_quotes",
-            "as_of_date": as_of,
+            "asset_key": "market_quotes",
+            "asset_type": "market_data",
+            "provider": quotes_provider,
+            "last_success_at": _last_success_timestamp(quotes_last, quote_state),
+            "last_available_date": _date_or_none(quotes_last),
             "freshness_status": str(quote_state),
-            "last_observed_at": None if pd.isna(quotes_last) else pd.Timestamp(quotes_last).isoformat(),
-            "details": {"rows": int(len(quotes_frame.index)), "run_id": quotes_run.run_id},
-            "updated_at": now.isoformat(),
+            "coverage_status": str(quotes_run.status),
+            "reason": _asset_reason(
+                rows_written=int(len(quotes_frame.index)),
+                run_id=quotes_run.run_id,
+                errors=quotes_run.error_messages,
+            ),
+            "updated_at": now_iso,
         },
         {
-            "asset_name": "ticker_market_stats_snapshot",
-            "as_of_date": as_of,
+            "asset_key": "ticker_market_stats_snapshot",
+            "asset_type": "derived",
+            "provider": "data_ops",
+            "last_success_at": _last_success_timestamp(stats_last, stats_state),
+            "last_available_date": _date_or_none(stats_last),
             "freshness_status": str(stats_state),
-            "last_observed_at": None if pd.isna(stats_last) else pd.Timestamp(stats_last).isoformat(),
-            "details": {"rows": int(len(market_stats_frame.index))},
-            "updated_at": now.isoformat(),
+            "coverage_status": "fresh" if not market_stats_frame.empty else "failed_hard",
+            "reason": _asset_reason(
+                rows_written=int(len(market_stats_frame.index)),
+                run_id="ticker_market_stats_snapshot_build",
+                errors=["no_rows_computed"] if market_stats_frame.empty else [],
+            ),
+            "updated_at": now_iso,
         },
     ]
+
+
+def _provider_from_frame(frame: pd.DataFrame, *, fallback: str) -> str:
+    if "provider" not in frame.columns:
+        return fallback
+    providers = [str(value).strip() for value in frame["provider"].dropna().tolist() if str(value).strip()]
+    return providers[0] if providers else fallback
+
+
+def _date_or_none(value: Any) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value).date().isoformat()
+
+
+def _last_success_timestamp(value: Any, freshness_state: str) -> str | None:
+    if str(freshness_state).strip().lower() in {"failed_hard", "failed_retrying"}:
+        return None
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value).isoformat()
+
+
+def _asset_reason(*, rows_written: int, run_id: str, errors: list[str]) -> str:
+    if errors:
+        return f"rows={rows_written}; run_id={run_id}; errors={'; '.join(errors)}"
+    return f"rows={rows_written}; run_id={run_id}"
 
 
 def _overall_status(status_rows: list[dict[str, Any]]) -> str:

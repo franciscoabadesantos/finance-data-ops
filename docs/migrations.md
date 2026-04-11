@@ -10,7 +10,7 @@ Apply:
 
 - [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
 
-This script is idempotent (`create table if not exists`, `add column if not exists`).
+This script is idempotent (`create table if not exists`, `add column if not exists`, guarded compatibility renames/backfills).
 
 ## Surfaces that must already exist before first daily run
 

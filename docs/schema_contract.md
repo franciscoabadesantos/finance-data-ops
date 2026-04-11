@@ -22,33 +22,43 @@ SQL file: [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-dat
 
 `data_source_runs`:
 
-- `run_id`
-- `asset_name`
+- `job_name`
+- `source_type`
+- `scope`
 - `status`
-- `failure_classification` (when failed)
-- `started_at`, `ended_at`
+- `started_at`, `finished_at`
 - `rows_written`
+- `error_class`, `error_message`
+- `failure_classification` (when failed)
 - `symbols_requested`, `symbols_succeeded`, `symbols_failed`
 - `error_messages`
+- `created_at`
 
 `data_asset_status`:
 
-- `asset_name`
-- `as_of_date`
+- `asset_key`
+- `asset_type`
+- `provider`
+- `last_success_at`
+- `last_available_date`
 - `freshness_status`
-- `last_observed_at`
-- `details`
+- `coverage_status`
+- `reason`
+- `updated_at`
 
 `symbol_data_coverage`:
 
-- `symbol`
-- `as_of_date`
-- `has_market_price_daily`
-- `has_market_quote`
-- `latest_market_date`
-- `latest_quote_ts`
+- `ticker`
+- `market_data_available`
+- `fundamentals_available`
+- `earnings_available`
+- `signal_available`
+- `market_data_last_date`
+- `fundamentals_last_date`
+- `next_earnings_date`
 - `coverage_status`
 - `reason`
+- `updated_at`
 
 `ticker_market_stats_snapshot`:
 

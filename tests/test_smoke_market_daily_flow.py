@@ -96,7 +96,7 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     status_upsert = next(call for call in publisher.upserts if call["table"] == "symbol_data_coverage")
     assert status_upsert["rows"]
     coverage_row = status_upsert["rows"][0]
-    assert coverage_row["latest_market_date"] is not None
+    assert coverage_row["market_data_last_date"] is not None
     assert coverage_row["reason"] == "market_price_and_quote_available"
 
 

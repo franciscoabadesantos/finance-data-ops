@@ -72,19 +72,23 @@ def test_publish_contract_writes_expected_tables() -> None:
         publisher=publisher,
         data_source_runs=[
             {
-                "run_id": "run_1",
-                "asset_name": "market_price_daily",
+                "job_name": "market_price_daily",
+                "source_type": "refresh",
+                "scope": "symbol_universe",
                 "status": "fresh",
                 "failure_classification": None,
             }
         ],
-        data_asset_status=[{"asset_name": "market_price_daily", "as_of_date": "2026-04-10", "freshness_status": "fresh"}],
+        data_asset_status=[{"asset_key": "market_price_daily", "freshness_status": "fresh"}],
         symbol_data_coverage=[
             {
-                "symbol": "SPY",
-                "as_of_date": "2026-04-10",
+                "ticker": "SPY",
+                "market_data_available": True,
+                "fundamentals_available": False,
+                "earnings_available": False,
+                "signal_available": False,
+                "market_data_last_date": "2026-04-10",
                 "coverage_status": "fresh",
-                "latest_market_date": "2026-04-10T00:00:00+00:00",
                 "reason": "market_price_and_quote_available",
             }
         ],
@@ -100,4 +104,8 @@ def test_publish_contract_writes_expected_tables() -> None:
         "data_asset_status",
         "symbol_data_coverage",
     ]
+    conflict_by_table = {call["table"]: call["on_conflict"] for call in publisher.upserts}
+    assert conflict_by_table["data_source_runs"] is None
+    assert conflict_by_table["data_asset_status"] == "asset_key"
+    assert conflict_by_table["symbol_data_coverage"] == "ticker"
     assert publisher.rpcs and publisher.rpcs[0]["name"] == "refresh_mv_latest_prices"

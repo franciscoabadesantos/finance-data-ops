@@ -64,5 +64,5 @@ Look for:
 
 1. Check workflow logs (`daily_market_refresh.yml`) for publish/refresh step failure.
 2. Inspect `data_source_runs.error_messages` and `failure_classification`.
-3. Inspect `data_asset_status.details` and `symbol_data_coverage.reason`.
+3. Inspect `data_asset_status.reason` and `symbol_data_coverage.reason`.
 4. If configured, verify webhook alert delivery for the failure run.

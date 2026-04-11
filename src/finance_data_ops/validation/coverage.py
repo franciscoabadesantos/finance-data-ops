@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -41,9 +41,7 @@ def build_symbol_coverage_rows(
     required_symbols: list[str],
     prices_frame: pd.DataFrame,
     quotes_frame: pd.DataFrame,
-    as_of_date: str | date,
 ) -> list[dict[str, object]]:
-    date_value = pd.Timestamp(as_of_date).date().isoformat()
     observed_prices = set(
         str(v).strip().upper()
         for v in prices_frame.get("symbol", pd.Series([], dtype=str)).dropna().tolist()
@@ -62,6 +60,10 @@ def build_symbol_coverage_rows(
             continue
         has_price = symbol in observed_prices
         has_quote = symbol in observed_quotes
+        has_market_data = has_price or has_quote
+        latest_market_price = latest_price_date_by_symbol.get(symbol)
+        latest_market_quote = latest_quote_ts_by_symbol.get(symbol)
+        latest_market_date = _max_date(latest_market_price, latest_market_quote)
         if has_price and has_quote:
             status = "fresh"
             reason = "market_price_and_quote_available"
@@ -73,12 +75,14 @@ def build_symbol_coverage_rows(
             reason = "missing_market_price_and_quote"
         rows.append(
             {
-                "symbol": symbol,
-                "as_of_date": date_value,
-                "has_market_price_daily": bool(has_price),
-                "has_market_quote": bool(has_quote),
-                "latest_market_date": latest_price_date_by_symbol.get(symbol),
-                "latest_quote_ts": latest_quote_ts_by_symbol.get(symbol),
+                "ticker": symbol,
+                "market_data_available": bool(has_market_data),
+                "fundamentals_available": False,
+                "earnings_available": False,
+                "signal_available": False,
+                "market_data_last_date": latest_market_date,
+                "fundamentals_last_date": None,
+                "next_earnings_date": None,
                 "coverage_status": status,
                 "reason": reason,
                 "updated_at": updated_at,
@@ -104,3 +108,11 @@ def _latest_date_by_symbol(frame: pd.DataFrame, *, date_col: str) -> dict[str, s
             continue
         out[str(symbol)] = pd.Timestamp(value).isoformat()
     return out
+
+
+def _max_date(*values: str | None) -> str | None:
+    timestamps = [pd.to_datetime(value, utc=True, errors="coerce") for value in values if value is not None]
+    valid = [value for value in timestamps if not pd.isna(value)]
+    if not valid:
+        return None
+    return pd.Timestamp(max(valid)).date().isoformat()

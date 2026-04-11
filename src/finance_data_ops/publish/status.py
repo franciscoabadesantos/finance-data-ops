@@ -14,16 +14,16 @@ def publish_status_surfaces(
     data_asset_status: list[dict[str, Any]],
     symbol_data_coverage: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    runs_result = publisher.upsert("data_source_runs", data_source_runs, on_conflict="run_id")
+    runs_result = publisher.upsert("data_source_runs", data_source_runs)
     asset_result = publisher.upsert(
         "data_asset_status",
         data_asset_status,
-        on_conflict="asset_name,as_of_date",
+        on_conflict="asset_key",
     )
     coverage_result = publisher.upsert(
         "symbol_data_coverage",
         symbol_data_coverage,
-        on_conflict="symbol,as_of_date",
+        on_conflict="ticker",
     )
     return {
         "data_source_runs": runs_result,
