@@ -19,18 +19,14 @@ Data Ops now writes three product-data domains: market, fundamentals, earnings.
 `market_fundamentals_v2` write contract:
 
 - `ticker`
+- `period`
+- `period_end`
 - `metric`
 - `value`
-- `period_end`
-- `period_type`
-- `fiscal_year`
-- `fiscal_quarter`
-- `currency`
+- `value_text`
 - `source`
 - `fetched_at`
-- `created_at`
-- `updated_at`
-- upsert key: `ticker,metric,period_end,period_type`
+- upsert key: `ticker,period,period_end,metric`
 
 `ticker_fundamental_summary` write contract:
 

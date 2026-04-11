@@ -88,6 +88,19 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     assert summary["refresh"]["fundamentals_daily"]["status"] == "fresh"
     assert summary["coverage"]["status"] == "fresh"
     assert summary["publish_failures"] == []
+    fundamentals_upsert = next(call for call in publisher.upserts if call["table"] == "market_fundamentals_v2")
+    assert fundamentals_upsert["on_conflict"] == "ticker,period,period_end,metric"
+    fundamentals_row = fundamentals_upsert["rows"][0]
+    assert set(fundamentals_row.keys()) == {
+        "ticker",
+        "period",
+        "period_end",
+        "metric",
+        "value",
+        "value_text",
+        "source",
+        "fetched_at",
+    }
 
     status_upsert = next(call for call in publisher.upserts if call["table"] == "symbol_data_coverage")
     coverage_row = status_upsert["rows"][0]

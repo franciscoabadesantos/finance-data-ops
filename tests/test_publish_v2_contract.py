@@ -16,10 +16,11 @@ def test_publish_v2_contract_writes_expected_tables() -> None:
         [
             {
                 "ticker": "SPY",
+                "period": "2025",
                 "metric": "revenue",
                 "value": 550.0,
+                "value_text": "550.0",
                 "period_end": "2025-12-31",
-                "period_type": "annual",
                 "fiscal_year": 2025,
                 "fiscal_quarter": None,
                 "currency": "USD",
@@ -99,7 +100,7 @@ def test_publish_v2_contract_writes_expected_tables() -> None:
     ]
 
     conflicts = {call["table"]: call["on_conflict"] for call in publisher.upserts}
-    assert conflicts["market_fundamentals_v2"] == "ticker,metric,period_end,period_type"
+    assert conflicts["market_fundamentals_v2"] == "ticker,period,period_end,metric"
     assert conflicts["ticker_fundamental_summary"] == "ticker"
     assert conflicts["market_earnings_events"] == "ticker,earnings_date"
     assert conflicts["market_earnings_history"] == "ticker,earnings_date,fiscal_period"
@@ -107,17 +108,13 @@ def test_publish_v2_contract_writes_expected_tables() -> None:
     fundamentals_row = next(call for call in publisher.upserts if call["table"] == "market_fundamentals_v2")["rows"][0]
     assert set(fundamentals_row.keys()) == {
         "ticker",
+        "period",
+        "period_end",
         "metric",
         "value",
-        "period_end",
-        "period_type",
-        "fiscal_year",
-        "fiscal_quarter",
-        "currency",
+        "value_text",
         "source",
         "fetched_at",
-        "created_at",
-        "updated_at",
     }
 
     summary_row = next(call for call in publisher.upserts if call["table"] == "ticker_fundamental_summary")["rows"][0]
