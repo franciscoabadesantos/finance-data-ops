@@ -59,6 +59,7 @@ Look for:
 - `data_source_runs` rows for `market_price_daily`, `market_quotes`, and `dataops_market_daily`
 - `data_asset_status` rows showing `fresh` or acceptable tolerance
 - `symbol_data_coverage` rows with expected symbols and non-empty reasons
+- `ticker_market_stats_snapshot` rows keyed by `ticker` with recent `as_of_date`
 
 ## Failure triage
 

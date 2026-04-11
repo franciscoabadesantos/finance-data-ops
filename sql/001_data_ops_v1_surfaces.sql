@@ -5,19 +5,19 @@
 create extension if not exists pgcrypto;
 
 create table if not exists public.ticker_market_stats_snapshot (
-  symbol text not null,
+  ticker text not null,
   as_of_date date not null,
-  latest_price double precision,
-  return_1d double precision,
-  return_1m double precision,
-  return_3m double precision,
-  return_1y double precision,
-  volatility_30d double precision,
-  drawdown_1y double precision,
-  distance_from_52w_high double precision,
-  distance_from_52w_low double precision,
+  last_price double precision,
+  return_1d_pct double precision,
+  return_1m_pct double precision,
+  return_3m_pct double precision,
+  return_1y_pct double precision,
+  vol_30d_pct double precision,
+  drawdown_1y_pct double precision,
+  dist_from_52w_high_pct double precision,
+  dist_from_52w_low_pct double precision,
   updated_at timestamptz not null default now(),
-  primary key (symbol, as_of_date)
+  primary key (ticker)
 );
 
 create table if not exists public.data_source_runs (
@@ -67,6 +67,166 @@ create table if not exists public.symbol_data_coverage (
 
 do $$
 begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'symbol'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'ticker'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot rename column symbol to ticker';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'latest_price'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'last_price'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot rename column latest_price to last_price';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'return_1d'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'return_1d_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot rename column return_1d to return_1d_pct';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'return_1m'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'return_1m_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot rename column return_1m to return_1m_pct';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'return_3m'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'return_3m_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot rename column return_3m to return_3m_pct';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'return_1y'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'return_1y_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot rename column return_1y to return_1y_pct';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'volatility_30d'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'vol_30d_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot rename column volatility_30d to vol_30d_pct';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'drawdown_1y'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'drawdown_1y_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot rename column drawdown_1y to drawdown_1y_pct';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'distance_from_52w_high'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'dist_from_52w_high_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot rename column distance_from_52w_high to dist_from_52w_high_pct';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'distance_from_52w_low'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_market_stats_snapshot'
+      and column_name = 'dist_from_52w_low_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot rename column distance_from_52w_low to dist_from_52w_low_pct';
+  end if;
+
   if exists (
     select 1
     from information_schema.columns
@@ -164,6 +324,31 @@ begin
   end if;
 end $$;
 
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists ticker text;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists as_of_date date;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists last_price double precision;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists return_1d_pct double precision;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists return_1m_pct double precision;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists return_3m_pct double precision;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists return_1y_pct double precision;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists vol_30d_pct double precision;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists drawdown_1y_pct double precision;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists dist_from_52w_high_pct double precision;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists dist_from_52w_low_pct double precision;
+alter table if exists public.ticker_market_stats_snapshot
+  add column if not exists updated_at timestamptz not null default now();
+
 alter table if exists public.data_source_runs
   add column if not exists job_name text;
 alter table if exists public.data_source_runs
@@ -238,7 +423,305 @@ alter table if exists public.symbol_data_coverage
   add column if not exists updated_at timestamptz not null default now();
 
 do $$
+declare
+  ticker_stats_pk text;
 begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'ticker'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set ticker = nullif(upper(trim(ticker)), '''')
+      where ticker is not null
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'ticker'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'symbol'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set ticker = coalesce(nullif(ticker, ''''), nullif(upper(trim(symbol)), ''''))
+      where ticker is null or ticker = ''''
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'last_price'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'latest_price'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set last_price = coalesce(last_price, latest_price)
+      where last_price is null
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1d_pct'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1d'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set return_1d_pct = coalesce(return_1d_pct, return_1d)
+      where return_1d_pct is null
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1m_pct'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1m'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set return_1m_pct = coalesce(return_1m_pct, return_1m)
+      where return_1m_pct is null
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_3m_pct'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_3m'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set return_3m_pct = coalesce(return_3m_pct, return_3m)
+      where return_3m_pct is null
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1y_pct'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1y'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set return_1y_pct = coalesce(return_1y_pct, return_1y)
+      where return_1y_pct is null
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'vol_30d_pct'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'volatility_30d'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set vol_30d_pct = coalesce(vol_30d_pct, volatility_30d)
+      where vol_30d_pct is null
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'drawdown_1y_pct'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'drawdown_1y'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set drawdown_1y_pct = coalesce(drawdown_1y_pct, drawdown_1y)
+      where drawdown_1y_pct is null
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'dist_from_52w_high_pct'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'distance_from_52w_high'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set dist_from_52w_high_pct = coalesce(dist_from_52w_high_pct, distance_from_52w_high)
+      where dist_from_52w_high_pct is null
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'dist_from_52w_low_pct'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'distance_from_52w_low'
+  ) then
+    execute '
+      update public.ticker_market_stats_snapshot
+      set dist_from_52w_low_pct = coalesce(dist_from_52w_low_pct, distance_from_52w_low)
+      where dist_from_52w_low_pct is null
+    ';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'ticker'
+  ) then
+    execute '
+      delete from public.ticker_market_stats_snapshot
+      where ticker is null or ticker = ''''
+    ';
+
+    execute '
+      with ranked as (
+        select
+          ctid,
+          row_number() over (
+            partition by ticker
+            order by as_of_date desc nulls last, updated_at desc nulls last
+          ) as row_num
+        from public.ticker_market_stats_snapshot
+      )
+      delete from public.ticker_market_stats_snapshot target
+      using ranked
+      where target.ctid = ranked.ctid
+        and ranked.row_num > 1
+    ';
+  end if;
+
+  select constraint_name
+  into ticker_stats_pk
+  from information_schema.table_constraints
+  where table_schema = 'public'
+    and table_name = 'ticker_market_stats_snapshot'
+    and constraint_type = 'PRIMARY KEY';
+
+  if ticker_stats_pk is not null then
+    execute format('alter table public.ticker_market_stats_snapshot drop constraint %I', ticker_stats_pk);
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'symbol'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'ticker'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot drop column symbol';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'latest_price'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'last_price'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot drop column latest_price';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1d'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1d_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot drop column return_1d';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1m'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1m_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot drop column return_1m';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_3m'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_3m_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot drop column return_3m';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1y'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'return_1y_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot drop column return_1y';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'volatility_30d'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'vol_30d_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot drop column volatility_30d';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'drawdown_1y'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'drawdown_1y_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot drop column drawdown_1y';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'distance_from_52w_high'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'dist_from_52w_high_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot drop column distance_from_52w_high';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'distance_from_52w_low'
+  ) and exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'dist_from_52w_low_pct'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot drop column distance_from_52w_low';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'ticker_market_stats_snapshot' and column_name = 'ticker'
+  ) then
+    execute 'alter table public.ticker_market_stats_snapshot alter column ticker set not null';
+    execute 'alter table public.ticker_market_stats_snapshot add constraint ticker_market_stats_snapshot_pkey primary key (ticker)';
+  end if;
+
   if exists (
     select 1 from information_schema.columns
     where table_schema = 'public' and table_name = 'data_source_runs' and column_name = 'finished_at'

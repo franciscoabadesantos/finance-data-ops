@@ -21,13 +21,13 @@ def test_compute_ticker_market_stats_contains_expected_metrics() -> None:
 
     assert len(out.index) == 1
     row = out.iloc[0]
-    assert row["symbol"] == "SPY"
-    assert row["latest_price"] > 0
-    assert row["return_1d"] is not None
-    assert row["return_1m"] is not None
-    assert row["return_3m"] is not None
-    assert row["return_1y"] is not None
-    assert row["volatility_30d"] is not None
-    assert row["drawdown_1y"] <= 0
-    assert row["distance_from_52w_high"] <= 0
-    assert row["distance_from_52w_low"] >= 0
+    assert row["ticker"] == "SPY"
+    assert row["last_price"] > 0
+    assert row["return_1d_pct"] is not None
+    assert row["return_1m_pct"] is not None
+    assert row["return_3m_pct"] is not None
+    assert row["return_1y_pct"] is not None
+    assert row["vol_30d_pct"] is not None
+    assert row["drawdown_1y_pct"] <= 0
+    assert row["dist_from_52w_high_pct"] <= 0
+    assert row["dist_from_52w_low_pct"] >= 0

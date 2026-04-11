@@ -13,7 +13,7 @@ def build_ticker_market_stats_snapshot_payload(stats_frame: pd.DataFrame) -> lis
     if stats_frame.empty:
         return []
     frame = stats_frame.copy()
-    frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    frame["ticker"] = frame["ticker"].astype(str).str.upper()
     frame["as_of_date"] = pd.to_datetime(frame["as_of_date"], errors="coerce").dt.date.astype(str)
     return frame.to_dict(orient="records")
 
@@ -27,5 +27,5 @@ def publish_product_metrics(
     return publisher.upsert(
         "ticker_market_stats_snapshot",
         rows,
-        on_conflict="symbol,as_of_date",
+        on_conflict="ticker",
     )

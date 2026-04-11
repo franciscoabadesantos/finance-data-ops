@@ -17,17 +17,17 @@ def compute_ticker_market_stats(
     if prices_frame.empty:
         return pd.DataFrame(
             columns=[
-                "symbol",
+                "ticker",
                 "as_of_date",
-                "latest_price",
-                "return_1d",
-                "return_1m",
-                "return_3m",
-                "return_1y",
-                "volatility_30d",
-                "drawdown_1y",
-                "distance_from_52w_high",
-                "distance_from_52w_low",
+                "last_price",
+                "return_1d_pct",
+                "return_1m_pct",
+                "return_3m_pct",
+                "return_1y_pct",
+                "vol_30d_pct",
+                "drawdown_1y_pct",
+                "dist_from_52w_high_pct",
+                "dist_from_52w_low_pct",
                 "updated_at",
             ]
         )
@@ -56,17 +56,17 @@ def compute_ticker_market_stats(
 
         rows.append(
             {
-                "symbol": symbol,
+                "ticker": symbol,
                 "as_of_date": as_of,
-                "latest_price": latest_price,
-                "return_1d": _window_return(close, 1),
-                "return_1m": _window_return(close, 21),
-                "return_3m": _window_return(close, 63),
-                "return_1y": _window_return(close, 252),
-                "volatility_30d": _volatility_annualized(pct.tail(30)),
-                "drawdown_1y": _drawdown(trailing_252),
-                "distance_from_52w_high": _distance_from_high(latest_price, trailing_252),
-                "distance_from_52w_low": _distance_from_low(latest_price, trailing_252),
+                "last_price": latest_price,
+                "return_1d_pct": _window_return(close, 1),
+                "return_1m_pct": _window_return(close, 21),
+                "return_3m_pct": _window_return(close, 63),
+                "return_1y_pct": _window_return(close, 252),
+                "vol_30d_pct": _volatility_annualized(pct.tail(30)),
+                "drawdown_1y_pct": _drawdown(trailing_252),
+                "dist_from_52w_high_pct": _distance_from_high(latest_price, trailing_252),
+                "dist_from_52w_low_pct": _distance_from_low(latest_price, trailing_252),
                 "updated_at": updated_at,
             }
         )

@@ -20,6 +20,9 @@ Data Ops Service v1 for the Finance platform. This repository is a standalone op
   - `data_asset_status`
   - `symbol_data_coverage`
 
+`ticker_market_stats_snapshot` is published as a latest snapshot table keyed by `ticker`
+(`as_of_date` is informational).
+
 `Finance` (research/signals repo) continues to own:
 
 - Research

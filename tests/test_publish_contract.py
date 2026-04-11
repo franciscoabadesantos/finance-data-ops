@@ -45,17 +45,17 @@ def test_publish_contract_writes_expected_tables() -> None:
     metrics = pd.DataFrame(
         [
             {
-                "symbol": "SPY",
+                "ticker": "SPY",
                 "as_of_date": "2026-04-10",
-                "latest_price": 505.0,
-                "return_1d": 0.01,
-                "return_1m": 0.03,
-                "return_3m": 0.08,
-                "return_1y": 0.15,
-                "volatility_30d": 0.18,
-                "drawdown_1y": -0.09,
-                "distance_from_52w_high": -0.02,
-                "distance_from_52w_low": 0.40,
+                "last_price": 505.0,
+                "return_1d_pct": 0.01,
+                "return_1m_pct": 0.03,
+                "return_3m_pct": 0.08,
+                "return_1y_pct": 0.15,
+                "vol_30d_pct": 0.18,
+                "drawdown_1y_pct": -0.09,
+                "dist_from_52w_high_pct": -0.02,
+                "dist_from_52w_low_pct": 0.40,
                 "updated_at": "2026-04-10T21:00:00+00:00",
             }
         ]
@@ -108,4 +108,11 @@ def test_publish_contract_writes_expected_tables() -> None:
     assert conflict_by_table["data_source_runs"] is None
     assert conflict_by_table["data_asset_status"] == "asset_key"
     assert conflict_by_table["symbol_data_coverage"] == "ticker"
+    assert conflict_by_table["ticker_market_stats_snapshot"] == "ticker"
+    metrics_call = next(call for call in publisher.upserts if call["table"] == "ticker_market_stats_snapshot")
+    metric_row = metrics_call["rows"][0]
+    assert metric_row["ticker"] == "SPY"
+    assert "last_price" in metric_row
+    assert "return_1d_pct" in metric_row
+    assert "vol_30d_pct" in metric_row
     assert publisher.rpcs and publisher.rpcs[0]["name"] == "refresh_mv_latest_prices"

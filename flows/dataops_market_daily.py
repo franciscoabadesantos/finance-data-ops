@@ -91,7 +91,7 @@ def run_dataops_market_daily(
         market_stats,
         cache_root=settings.cache_root,
         mode="replace",
-        dedupe_subset=["symbol", "as_of_date"],
+        dedupe_subset=["ticker"],
     )
 
     status_rows = _build_asset_status_rows(

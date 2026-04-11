@@ -49,6 +49,9 @@ New v1 surfaces:
 - `data_asset_status`
 - `symbol_data_coverage`
 
+`ticker_market_stats_snapshot` is a latest-only serving table keyed by `ticker`.
+`as_of_date` is informational and not part of the write key.
+
 ## Operational shape
 
 - CI workflow: `.github/workflows/ci.yml`

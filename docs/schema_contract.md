@@ -62,9 +62,12 @@ SQL file: [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-dat
 
 `ticker_market_stats_snapshot`:
 
-- `latest_price`
-- `return_1d`, `return_1m`, `return_3m`, `return_1y`
-- `volatility_30d`
-- `drawdown_1y`
-- `distance_from_52w_high`
-- `distance_from_52w_low`
+- `ticker` (upsert key; latest snapshot row per ticker)
+- `last_price`
+- `as_of_date` (informational, not part of upsert key)
+- `return_1d_pct`, `return_1m_pct`, `return_3m_pct`, `return_1y_pct`
+- `vol_30d_pct`
+- `drawdown_1y_pct`
+- `dist_from_52w_high_pct`
+- `dist_from_52w_low_pct`
+- `updated_at`

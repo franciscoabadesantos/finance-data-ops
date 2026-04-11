@@ -26,6 +26,8 @@ This script is idempotent (`create table if not exists`, `add column if not exis
 - `data_asset_status`
 - `symbol_data_coverage`
 
+`ticker_market_stats_snapshot` is maintained as a latest snapshot table keyed by `ticker`.
+
 ## Apply steps
 
 1. Open Supabase SQL editor (or run via your DB migration tool).
