@@ -340,7 +340,19 @@ def _build_asset_status_rows(
     quotes_run: RefreshRunResult,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
-    prices_last = pd.to_datetime(prices_frame.get("date"), errors="coerce").max()
+    date_series = None
+    if isinstance(prices_frame, pd.DataFrame) and "date" in prices_frame.columns:
+        date_series = prices_frame["date"]
+
+    if date_series is None or len(date_series) == 0:
+        prices_last = None
+    else:
+        prices_last = pd.to_datetime(date_series, errors="coerce").max()
+
+    if prices_last is None:
+        # Optional signal hook for empty/malformed `prices_frame["date"]`.
+        pass
+
     quotes_last = pd.to_datetime(quotes_frame.get("quote_ts"), utc=True, errors="coerce").max()
     stats_last = pd.to_datetime(market_stats_frame.get("updated_at"), utc=True, errors="coerce").max()
 
