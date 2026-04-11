@@ -39,6 +39,20 @@ Write contract:
 
 - upsert key: `ticker`
 
+`market_quotes_history` (production-authoritative quote-history cache):
+
+- `ticker`
+- `fetched_at`
+- `price`
+- `change`
+- `change_percent`
+- `market_cap`
+- `source`
+
+Write contract:
+
+- upsert key: `ticker,fetched_at`
+
 ## New v1 surfaces (created by SQL in this repo if missing)
 
 - `ticker_market_stats_snapshot`

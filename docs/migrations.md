@@ -16,7 +16,7 @@ This script is idempotent (`create table if not exists`, `add column if not exis
 
 - `market_price_daily` (`ticker,date,close,source,fetched_at,created_at`)
 - `market_quotes` (`ticker,name,price,change,change_percent,market_cap_text,source,fetched_at,created_at,updated_at`)
-- `market_quotes_history`
+- `market_quotes_history` (`ticker,fetched_at,price,change,change_percent,market_cap,source`)
 - RPC/function `refresh_mv_latest_prices` for materialized view maintenance
 
 ## New surfaces created by migration if missing

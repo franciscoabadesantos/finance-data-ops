@@ -133,52 +133,58 @@ def build_market_quotes_history_payload(quotes_frame: pd.DataFrame) -> list[dict
     if quotes_frame.empty:
         return []
     frame = quotes_frame.copy()
-    symbol = frame["symbol"] if "symbol" in frame.columns else frame.get("ticker", pd.Series(index=frame.index, dtype=object))
-    quote_ts = frame["quote_ts"] if "quote_ts" in frame.columns else frame.get(
-        "fetched_at",
-        frame.get("updated_at", pd.Series(index=frame.index, dtype=object)),
+    ticker = frame["ticker"] if "ticker" in frame.columns else frame.get("symbol", pd.Series(index=frame.index, dtype=object))
+    fetched_at = frame["fetched_at"] if "fetched_at" in frame.columns else frame.get(
+        "quote_ts",
+        frame.get("ingested_at", frame.get("updated_at", pd.Series(index=frame.index, dtype=object))),
     )
-    provider = frame["provider"] if "provider" in frame.columns else frame.get(
-        "source",
+    source = frame["source"] if "source" in frame.columns else frame.get(
+        "provider",
         pd.Series(index=frame.index, dtype=object),
     )
-    ingested_at = frame["ingested_at"] if "ingested_at" in frame.columns else frame.get(
-        "fetched_at",
+    price = pd.to_numeric(frame.get("price"), errors="coerce")
+    previous_close = pd.to_numeric(frame.get("previous_close"), errors="coerce")
+    if "change" in frame.columns:
+        change = pd.to_numeric(frame["change"], errors="coerce")
+    else:
+        change = price - previous_close
+    if "change_percent" in frame.columns:
+        change_percent = pd.to_numeric(frame["change_percent"], errors="coerce")
+    else:
+        denominator = previous_close.where(previous_close != 0)
+        change_percent = (change / denominator) * 100.0
+    change_percent = change_percent.replace([np.inf, -np.inf], pd.NA)
+
+    market_cap_source = frame["market_cap"] if "market_cap" in frame.columns else frame.get(
+        "market_cap_text",
         pd.Series(index=frame.index, dtype=object),
     )
 
     payload = pd.DataFrame(
         {
-            "symbol": symbol.astype(str).str.upper(),
-            "quote_ts": pd.to_datetime(quote_ts, utc=True, errors="coerce"),
-            "price": pd.to_numeric(frame.get("price"), errors="coerce"),
-            "previous_close": pd.to_numeric(frame.get("previous_close"), errors="coerce"),
-            "open": pd.to_numeric(frame.get("open"), errors="coerce"),
-            "high": pd.to_numeric(frame.get("high"), errors="coerce"),
-            "low": pd.to_numeric(frame.get("low"), errors="coerce"),
-            "volume": pd.to_numeric(frame.get("volume"), errors="coerce"),
-            "provider": provider,
-            "ingested_at": pd.to_datetime(ingested_at, utc=True, errors="coerce"),
+            "ticker": ticker.astype(str).str.upper(),
+            "fetched_at": pd.to_datetime(fetched_at, utc=True, errors="coerce"),
+            "price": price,
+            "change": change,
+            "change_percent": change_percent,
+            "market_cap": _coerce_market_cap_series(market_cap_source),
+            "source": source,
         },
         index=frame.index,
     )
     now_utc = pd.Timestamp.now(tz="UTC")
-    payload["quote_ts"] = payload["quote_ts"].fillna(now_utc)
-    payload["ingested_at"] = payload["ingested_at"].fillna(payload["quote_ts"])
-    payload["symbol"] = payload["symbol"].replace({"": None, "NAN": None, "NONE": None})
-    payload = payload.dropna(subset=["symbol"])
+    payload["fetched_at"] = payload["fetched_at"].fillna(now_utc)
+    payload["ticker"] = payload["ticker"].replace({"": None, "NAN": None, "NONE": None})
+    payload = payload.dropna(subset=["ticker"])
     return payload[
         [
-            "symbol",
-            "quote_ts",
+            "ticker",
+            "fetched_at",
             "price",
-            "previous_close",
-            "open",
-            "high",
-            "low",
-            "volume",
-            "provider",
-            "ingested_at",
+            "change",
+            "change_percent",
+            "market_cap",
+            "source",
         ]
     ].to_dict(orient="records")
 
@@ -207,7 +213,7 @@ def publish_prices_surfaces(
     history_result = publisher.upsert(
         "market_quotes_history",
         history_rows,
-        on_conflict="symbol,quote_ts",
+        on_conflict="ticker,fetched_at",
     )
     rpc_result: dict[str, Any] | None = None
     if refresh_materialized_view:
@@ -218,3 +224,38 @@ def publish_prices_surfaces(
         "market_quotes_history": history_result,
         "mv_latest_prices": rpc_result,
     }
+
+
+def _coerce_market_cap_series(values: pd.Series) -> pd.Series:
+    parsed_numeric = pd.to_numeric(values, errors="coerce")
+    parsed_suffix = values.apply(_parse_market_cap_value)
+    return parsed_numeric.where(parsed_numeric.notna(), parsed_suffix)
+
+
+def _parse_market_cap_value(value: Any) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        casted = float(value)
+        return None if np.isnan(casted) else casted
+
+    token = str(value).strip().upper().replace(",", "")
+    if not token:
+        return None
+    multipliers = {
+        "K": 1e3,
+        "M": 1e6,
+        "B": 1e9,
+        "T": 1e12,
+    }
+    suffix = token[-1]
+    if suffix in multipliers:
+        try:
+            base = float(token[:-1])
+        except ValueError:
+            return None
+        return base * multipliers[suffix]
+    try:
+        return float(token)
+    except ValueError:
+        return None

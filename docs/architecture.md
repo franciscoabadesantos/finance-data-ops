@@ -39,7 +39,7 @@ Existing:
 
 - `market_price_daily` (minimal daily close publish surface)
 - `market_quotes` (latest-only quote cache publish surface)
-- `market_quotes_history`
+- `market_quotes_history` (quote-history cache publish surface)
 - `mv_latest_prices` refresh RPC
 
 New v1 surfaces:

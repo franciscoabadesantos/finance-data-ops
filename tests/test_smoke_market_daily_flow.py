@@ -116,6 +116,20 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     }
     assert "high" not in quote_row
 
+    quotes_history_upsert = next(call for call in publisher.upserts if call["table"] == "market_quotes_history")
+    assert quotes_history_upsert["on_conflict"] == "ticker,fetched_at"
+    history_row = quotes_history_upsert["rows"][0]
+    assert set(history_row.keys()) == {
+        "ticker",
+        "fetched_at",
+        "price",
+        "change",
+        "change_percent",
+        "market_cap",
+        "source",
+    }
+    assert "high" not in history_row
+
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     assert runs_upsert["rows"]
     for row in runs_upsert["rows"]:
