@@ -99,6 +99,11 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     assert coverage_row["market_data_last_date"] is not None
     assert coverage_row["reason"] == "market_price_and_quote_available"
 
+    runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
+    assert runs_upsert["rows"]
+    for row in runs_upsert["rows"]:
+        assert row["run_id"]
+
 
 def test_smoke_publish_failure_still_attempts_status(tmp_path) -> None:
     publisher = FailOncePublisher()

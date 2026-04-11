@@ -105,6 +105,7 @@ def run_dataops_market_daily(
         _refresh_run_to_row(prices_run),
         _refresh_run_to_row(quotes_run),
         _flow_run_row(
+            run_id=flow_run_id,
             job_name="dataops_market_daily",
             source_type="orchestration",
             scope=f"{start}:{end}",
@@ -160,6 +161,7 @@ def run_dataops_market_daily(
         for failure in publish_failures:
             run_rows.append(
                 _flow_run_row(
+                    run_id=f"{flow_run_id}_publish_{failure['step']}",
                     job_name=f"dataops_market_daily_publish_{failure['step']}",
                     source_type="publish",
                     scope=str(failure["step"]),
@@ -282,6 +284,7 @@ def _refresh_run_to_row(result: RefreshRunResult) -> dict[str, Any]:
     error_messages = [str(value) for value in result.error_messages if str(value).strip()]
     error_message = error_messages[0] if error_messages else None
     return {
+        "run_id": result.run_id,
         "job_name": result.asset_name,
         "source_type": "refresh",
         "scope": "symbol_universe",
@@ -302,6 +305,7 @@ def _refresh_run_to_row(result: RefreshRunResult) -> dict[str, Any]:
 
 def _flow_run_row(
     *,
+    run_id: str,
     job_name: str,
     source_type: str,
     scope: str,
@@ -313,6 +317,7 @@ def _flow_run_row(
     failure_classification = normalized_status if normalized_status in {"failed_hard", "failed_retrying"} else None
     details = json.dumps(context, default=str)
     return {
+        "run_id": str(run_id),
         "job_name": job_name,
         "source_type": source_type,
         "scope": scope,

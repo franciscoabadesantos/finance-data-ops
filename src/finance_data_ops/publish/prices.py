@@ -14,7 +14,7 @@ def build_market_price_daily_payload(prices_frame: pd.DataFrame) -> list[dict[st
         return []
     frame = prices_frame.copy()
     frame["symbol"] = frame["symbol"].astype(str).str.upper()
-    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.date.astype(str)
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.date
     return frame[
         [
             "symbol",
@@ -36,7 +36,7 @@ def build_market_quotes_payload(quotes_frame: pd.DataFrame) -> list[dict[str, An
         return []
     frame = quotes_frame.copy()
     frame["symbol"] = frame["symbol"].astype(str).str.upper()
-    frame["quote_ts"] = pd.to_datetime(frame["quote_ts"], utc=True, errors="coerce").astype(str)
+    frame["quote_ts"] = pd.to_datetime(frame["quote_ts"], utc=True, errors="coerce")
     return frame[
         [
             "symbol",

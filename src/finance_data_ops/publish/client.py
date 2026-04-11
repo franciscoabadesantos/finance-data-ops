@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 import json
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from numbers import Integral, Real
 from typing import Any, Protocol
+
+import numpy as np
+import pandas as pd
 
 
 class Publisher(Protocol):
@@ -16,6 +21,56 @@ class Publisher(Protocol):
 
     def rpc(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
         ...
+
+
+def to_json_safe(value: Any) -> Any:
+    """Recursively coerce pandas/numpy values into JSON-safe Python primitives."""
+
+    if value is None:
+        return None
+
+    if _is_missing_scalar(value):
+        return None
+
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        return float(value)
+
+    if isinstance(value, np.ndarray):
+        return [to_json_safe(inner) for inner in value.tolist()]
+    if isinstance(value, dict):
+        return {str(key): to_json_safe(inner) for key, inner in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [to_json_safe(inner) for inner in value]
+
+    return value
+
+
+def _is_missing_scalar(value: Any) -> bool:
+    if isinstance(value, (str, bytes, bytearray, dict, list, tuple, set)):
+        return False
+    try:
+        missing = pd.isna(value)
+    except Exception:
+        return False
+    if isinstance(missing, (bool, np.bool_)):
+        return bool(missing)
+    return False
 
 
 class SupabaseRestPublisher:
@@ -37,6 +92,7 @@ class SupabaseRestPublisher:
     ) -> dict[str, Any]:
         if not rows:
             return {"table": table, "status": "skipped", "rows": 0}
+        normalized_rows = to_json_safe(rows)
         query = {}
         if on_conflict:
             query["on_conflict"] = str(on_conflict)
@@ -46,10 +102,10 @@ class SupabaseRestPublisher:
         response = self._request(
             path=path,
             method="POST",
-            payload=rows,
+            payload=normalized_rows,
             prefer="resolution=merge-duplicates,return=minimal",
         )
-        response.update({"table": table, "rows": len(rows)})
+        response.update({"table": table, "rows": len(normalized_rows)})
         return response
 
     def rpc(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -96,14 +152,15 @@ class RecordingPublisher:
     rpcs: list[dict[str, Any]] = field(default_factory=list)
 
     def upsert(self, table: str, rows: list[dict[str, Any]], *, on_conflict: str | None = None) -> dict[str, Any]:
+        normalized_rows = to_json_safe(rows)
         self.upserts.append(
             {
                 "table": table,
-                "rows": list(rows),
+                "rows": list(normalized_rows),
                 "on_conflict": on_conflict,
             }
         )
-        return {"table": table, "status": "ok", "rows": len(rows)}
+        return {"table": table, "status": "ok", "rows": len(normalized_rows)}
 
     def rpc(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
         self.rpcs.append({"name": name, "args": dict(args or {})})

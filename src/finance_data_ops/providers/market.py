@@ -152,17 +152,31 @@ class MarketDataProvider:
         frame = raw.copy()
         if isinstance(frame.index, pd.DatetimeIndex):
             frame = frame.reset_index()
-        renamed = {str(col): str(col).strip().lower() for col in frame.columns}
-        frame = frame.rename(columns=renamed)
+
+        frame.columns = [_normalize_column_name(col) for col in frame.columns]
 
         date_col = "date" if "date" in frame.columns else None
         if date_col is None:
-            for candidate in ("datetime", "timestamp", "index"):
+            for candidate in ("datetime", "timestamp", "index", "level_0"):
                 if candidate in frame.columns:
                     date_col = candidate
                     break
         if date_col is None:
-            raise MarketProviderError(f"{symbol}: provider frame has no date column")
+            for candidate in frame.columns:
+                token = str(candidate).lower()
+                if "date" not in token and "time" not in token:
+                    continue
+                parsed = pd.to_datetime(frame[candidate], utc=False, errors="coerce")
+                if parsed.notna().any():
+                    date_col = str(candidate)
+                    break
+        if date_col is None:
+            raise MarketProviderError(
+                f"{symbol}: provider frame has no date column after normalization "
+                f"(columns={list(frame.columns)!r})"
+            )
+
+        adj_close = frame.get("adj_close", frame.get("adjclose", frame.get("close")))
 
         out = pd.DataFrame(
             {
@@ -172,10 +186,7 @@ class MarketDataProvider:
                 "high": pd.to_numeric(frame.get("high"), errors="coerce"),
                 "low": pd.to_numeric(frame.get("low"), errors="coerce"),
                 "close": pd.to_numeric(frame.get("close"), errors="coerce"),
-                "adj_close": pd.to_numeric(
-                    frame.get("adj close", frame.get("adj_close", frame.get("close"))),
-                    errors="coerce",
-                ),
+                "adj_close": pd.to_numeric(adj_close, errors="coerce"),
                 "volume": pd.to_numeric(frame.get("volume"), errors="coerce"),
                 "provider": self.provider_name,
                 "ingested_at": pd.Timestamp(ingested_at).tz_convert("UTC"),
@@ -216,3 +227,15 @@ def _coerce_float(value: Any) -> float | None:
     if pd.isna(casted):
         return None
     return float(casted)
+
+
+def _normalize_column_name(column: Any) -> str:
+    if isinstance(column, tuple):
+        parts = [str(part).strip() for part in column if str(part).strip()]
+        if parts:
+            raw = parts[0]
+        else:
+            raw = ""
+    else:
+        raw = str(column).strip()
+    return raw.lower().replace(" ", "_")

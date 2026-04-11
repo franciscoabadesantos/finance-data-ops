@@ -14,7 +14,7 @@ def build_ticker_market_stats_snapshot_payload(stats_frame: pd.DataFrame) -> lis
         return []
     frame = stats_frame.copy()
     frame["ticker"] = frame["ticker"].astype(str).str.upper()
-    frame["as_of_date"] = pd.to_datetime(frame["as_of_date"], errors="coerce").dt.date.astype(str)
+    frame["as_of_date"] = pd.to_datetime(frame["as_of_date"], errors="coerce").dt.date
     return frame.to_dict(orient="records")
 
 
