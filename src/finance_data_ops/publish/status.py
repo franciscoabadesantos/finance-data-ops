@@ -53,6 +53,7 @@ def fetch_symbol_data_coverage_rows(
     encoded_tickers = ",".join(urllib.parse.quote(f'"{ticker}"', safe="") for ticker in normalized)
     query = (
         "select=ticker,market_data_available,market_data_last_date,"
+        "fundamentals_available,fundamentals_last_date,"
         "earnings_available,next_earnings_date,signal_available"
         f"&ticker=in.({encoded_tickers})"
     )

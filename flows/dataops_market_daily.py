@@ -24,12 +24,16 @@ from finance_data_ops.providers.market import MarketDataProvider
 from finance_data_ops.publish.client import Publisher, RecordingPublisher, SupabaseRestPublisher
 from finance_data_ops.publish.prices import publish_prices_surfaces
 from finance_data_ops.publish.product_metrics import publish_product_metrics
-from finance_data_ops.publish.status import publish_status_surfaces
+from finance_data_ops.publish.status import fetch_symbol_data_coverage_rows, publish_status_surfaces
 from finance_data_ops.refresh.market_daily import RefreshRunResult, refresh_market_daily
 from finance_data_ops.refresh.quotes_latest import refresh_latest_quotes
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.settings import DataOpsSettings, load_settings
-from finance_data_ops.validation.coverage import assess_symbol_coverage, build_symbol_coverage_rows
+from finance_data_ops.validation.coverage import (
+    assess_symbol_coverage,
+    build_symbol_coverage_rows,
+    merge_symbol_coverage_rows_for_market,
+)
 from finance_data_ops.validation.freshness import FreshnessState, classify_freshness
 
 
@@ -42,6 +46,7 @@ def run_dataops_market_daily(
     publish_enabled: bool = True,
     provider: MarketDataProvider | None = None,
     publisher: Publisher | None = None,
+    existing_symbol_coverage_rows: list[dict[str, object]] | None = None,
     max_attempts: int = 3,
     raise_on_failed_hard: bool = True,
     symbol_batch_size: int | None = None,
@@ -84,6 +89,13 @@ def run_dataops_market_daily(
         cache_root=settings.cache_root,
         required=False,
     )
+    existing_coverage_rows = list(existing_symbol_coverage_rows or [])
+    if publish_enabled and publisher is None and not existing_coverage_rows:
+        existing_coverage_rows = _load_existing_symbol_coverage_rows(
+            supabase_url=settings.supabase_url,
+            service_role_key=settings.supabase_service_role_key,
+            symbols=normalized_symbols,
+        )
 
     coverage_rows = build_symbol_coverage_rows(
         required_symbols=normalized_symbols,
@@ -91,6 +103,10 @@ def run_dataops_market_daily(
         quotes_frame=cached_quotes,
         fundamentals_frame=(cached_fundamentals if not cached_fundamentals.empty else None),
         earnings_events_frame=(cached_earnings_events if not cached_earnings_events.empty else None),
+    )
+    coverage_rows = merge_symbol_coverage_rows_for_market(
+        computed_rows=coverage_rows,
+        existing_rows=existing_coverage_rows,
     )
     coverage_summary = assess_symbol_coverage(
         required_symbols=normalized_symbols,
@@ -548,6 +564,25 @@ def _overall_status(status_rows: list[dict[str, Any]]) -> str:
 
 def _parse_symbols(raw: str) -> list[str]:
     return [str(v).strip().upper() for v in str(raw).split(",") if str(v).strip()]
+
+
+def _load_existing_symbol_coverage_rows(
+    *,
+    supabase_url: str,
+    service_role_key: str,
+    symbols: list[str],
+) -> list[dict[str, object]]:
+    if not str(supabase_url).strip() or not str(service_role_key).strip():
+        return []
+    try:
+        rows = fetch_symbol_data_coverage_rows(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            tickers=symbols,
+        )
+        return [row for row in rows if isinstance(row, dict)]
+    except Exception:
+        return []
 
 
 def build_parser() -> argparse.ArgumentParser:

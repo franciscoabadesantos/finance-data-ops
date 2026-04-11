@@ -195,3 +195,47 @@ def test_publish_enabled_requires_supabase_env_without_injected_publisher(tmp_pa
         assert "SUPABASE_URL" in message or "SUPABASE_SERVICE_ROLE_KEY" in message
     else:  # pragma: no cover - defensive
         raise AssertionError("Expected missing Supabase env validation error.")
+
+
+def test_market_coverage_merge_preserves_existing_fundamentals_and_earnings(tmp_path) -> None:
+    publisher = RecordingPublisher()
+    existing_rows = [
+        {
+            "ticker": "SPY",
+            "fundamentals_available": True,
+            "fundamentals_last_date": "2026-04-10",
+            "earnings_available": True,
+            "next_earnings_date": "2026-05-01",
+            "signal_available": False,
+        },
+        {
+            "ticker": "QQQ",
+            "fundamentals_available": True,
+            "fundamentals_last_date": "2026-04-10",
+            "earnings_available": True,
+            "next_earnings_date": "2026-05-01",
+            "signal_available": False,
+        },
+    ]
+
+    summary = run_dataops_market_daily(
+        symbols=["SPY", "QQQ"],
+        start="2026-04-10",
+        end="2026-04-11",
+        cache_root=str(tmp_path),
+        publish_enabled=True,
+        provider=FakeMarketProvider(),
+        publisher=publisher,
+        existing_symbol_coverage_rows=existing_rows,
+        raise_on_failed_hard=True,
+    )
+
+    assert summary["publish_failures"] == []
+    status_upsert = next(call for call in publisher.upserts if call["table"] == "symbol_data_coverage")
+    rows_by_ticker = {row["ticker"]: row for row in status_upsert["rows"]}
+    assert rows_by_ticker["SPY"]["market_data_available"] is True
+    assert rows_by_ticker["SPY"]["fundamentals_available"] is True
+    assert rows_by_ticker["SPY"]["earnings_available"] is True
+    assert rows_by_ticker["SPY"]["coverage_status"] == "fresh"
+    assert rows_by_ticker["SPY"]["reason"] == "market_fundamentals_earnings_available"
+    assert rows_by_ticker["SPY"]["next_earnings_date"] == "2026-05-01"

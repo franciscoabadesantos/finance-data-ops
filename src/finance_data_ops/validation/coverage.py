@@ -124,42 +124,55 @@ def merge_symbol_coverage_rows_for_fundamentals(
     existing_rows: list[dict[str, object]] | None,
 ) -> list[dict[str, object]]:
     """Merge fundamentals-domain updates onto existing rows without resetting other domains."""
+    return _merge_symbol_coverage_rows(
+        computed_rows=computed_rows,
+        existing_rows=existing_rows,
+        preserve_fields=[
+            "market_data_available",
+            "market_data_last_date",
+            "earnings_available",
+            "next_earnings_date",
+            "signal_available",
+        ],
+    )
 
-    if not computed_rows:
-        return []
-    if not existing_rows:
-        return computed_rows
 
-    existing_by_symbol: dict[str, dict[str, object]] = {}
-    for raw_row in existing_rows:
-        symbol = str(raw_row.get("ticker", "")).strip().upper()
-        if symbol:
-            existing_by_symbol[symbol] = raw_row
+def merge_symbol_coverage_rows_for_market(
+    *,
+    computed_rows: list[dict[str, object]],
+    existing_rows: list[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Merge market-domain updates onto existing rows without resetting other domains."""
+    return _merge_symbol_coverage_rows(
+        computed_rows=computed_rows,
+        existing_rows=existing_rows,
+        preserve_fields=[
+            "fundamentals_available",
+            "fundamentals_last_date",
+            "earnings_available",
+            "next_earnings_date",
+            "signal_available",
+        ],
+    )
 
-    merged_rows: list[dict[str, object]] = []
-    for row in computed_rows:
-        symbol = str(row.get("ticker", "")).strip().upper()
-        existing = existing_by_symbol.get(symbol)
-        if existing is None:
-            merged_rows.append(row)
-            continue
 
-        merged = dict(row)
-        merged["market_data_available"] = bool(existing.get("market_data_available"))
-        merged["market_data_last_date"] = existing.get("market_data_last_date")
-        merged["earnings_available"] = bool(existing.get("earnings_available"))
-        merged["next_earnings_date"] = existing.get("next_earnings_date")
-        merged["signal_available"] = bool(existing.get("signal_available"))
-        status, reason = _multi_domain_coverage_status_reason(
-            has_market_data=bool(merged.get("market_data_available")),
-            has_fundamentals=bool(merged.get("fundamentals_available")),
-            has_earnings=bool(merged.get("earnings_available")),
-        )
-        merged["coverage_status"] = status
-        merged["reason"] = reason
-        merged_rows.append(merged)
-
-    return merged_rows
+def merge_symbol_coverage_rows_for_earnings(
+    *,
+    computed_rows: list[dict[str, object]],
+    existing_rows: list[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Merge earnings-domain updates onto existing rows without resetting other domains."""
+    return _merge_symbol_coverage_rows(
+        computed_rows=computed_rows,
+        existing_rows=existing_rows,
+        preserve_fields=[
+            "market_data_available",
+            "market_data_last_date",
+            "fundamentals_available",
+            "fundamentals_last_date",
+            "signal_available",
+        ],
+    )
 
 
 def _latest_date_by_symbol(frame: pd.DataFrame | None, *, date_col: str) -> dict[str, str | None]:
@@ -234,6 +247,48 @@ def _max_date(*values: str | None) -> str | None:
     if not valid:
         return None
     return pd.Timestamp(max(valid)).date().isoformat()
+
+
+def _merge_symbol_coverage_rows(
+    *,
+    computed_rows: list[dict[str, object]],
+    existing_rows: list[dict[str, object]] | None,
+    preserve_fields: list[str],
+) -> list[dict[str, object]]:
+    if not computed_rows:
+        return []
+    if not existing_rows:
+        return computed_rows
+
+    existing_by_symbol: dict[str, dict[str, object]] = {}
+    for raw_row in existing_rows:
+        symbol = str(raw_row.get("ticker", "")).strip().upper()
+        if symbol:
+            existing_by_symbol[symbol] = raw_row
+
+    merged_rows: list[dict[str, object]] = []
+    bool_fields = {"market_data_available", "fundamentals_available", "earnings_available", "signal_available"}
+    for row in computed_rows:
+        symbol = str(row.get("ticker", "")).strip().upper()
+        existing = existing_by_symbol.get(symbol)
+        if existing is None:
+            merged_rows.append(row)
+            continue
+
+        merged = dict(row)
+        for field in preserve_fields:
+            value = existing.get(field)
+            merged[field] = bool(value) if field in bool_fields else value
+        status, reason = _multi_domain_coverage_status_reason(
+            has_market_data=bool(merged.get("market_data_available")),
+            has_fundamentals=bool(merged.get("fundamentals_available")),
+            has_earnings=bool(merged.get("earnings_available")),
+        )
+        merged["coverage_status"] = status
+        merged["reason"] = reason
+        merged_rows.append(merged)
+
+    return merged_rows
 
 
 def _multi_domain_coverage_status_reason(

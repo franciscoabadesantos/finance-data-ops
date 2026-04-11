@@ -112,3 +112,45 @@ def test_build_asset_status_rows_handles_empty_frames() -> None:
     assert len(rows) == 3
     assert rows[0]["asset_key"] == "market_earnings_events"
     assert rows[0]["freshness_status"] == "failed_hard"
+
+
+def test_earnings_coverage_merge_preserves_existing_market_and_fundamentals(tmp_path) -> None:
+    publisher = RecordingPublisher()
+    existing_rows = [
+        {
+            "ticker": "SPY",
+            "market_data_available": True,
+            "market_data_last_date": "2026-04-11",
+            "fundamentals_available": True,
+            "fundamentals_last_date": "2026-04-10",
+            "signal_available": False,
+        },
+        {
+            "ticker": "QQQ",
+            "market_data_available": True,
+            "market_data_last_date": "2026-04-11",
+            "fundamentals_available": True,
+            "fundamentals_last_date": "2026-04-10",
+            "signal_available": False,
+        },
+    ]
+
+    summary = run_dataops_earnings_daily(
+        symbols=["SPY", "QQQ"],
+        cache_root=str(tmp_path),
+        publish_enabled=True,
+        provider=FakeEarningsProvider(),
+        publisher=publisher,
+        existing_symbol_coverage_rows=existing_rows,
+        raise_on_failed_hard=True,
+    )
+
+    assert summary["publish_failures"] == []
+    status_upsert = next(call for call in publisher.upserts if call["table"] == "symbol_data_coverage")
+    rows_by_ticker = {row["ticker"]: row for row in status_upsert["rows"]}
+    assert rows_by_ticker["SPY"]["market_data_available"] is True
+    assert rows_by_ticker["SPY"]["fundamentals_available"] is True
+    assert rows_by_ticker["SPY"]["earnings_available"] is True
+    assert rows_by_ticker["SPY"]["coverage_status"] == "fresh"
+    assert rows_by_ticker["SPY"]["reason"] == "market_fundamentals_earnings_available"
+    assert rows_by_ticker["SPY"]["next_earnings_date"] == "2026-05-01"
