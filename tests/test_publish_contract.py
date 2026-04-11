@@ -110,6 +110,7 @@ def test_publish_contract_writes_expected_tables() -> None:
     ]
     conflict_by_table = {call["table"]: call["on_conflict"] for call in publisher.upserts}
     assert conflict_by_table["market_price_daily"] == "ticker,date"
+    assert conflict_by_table["market_quotes"] == "ticker"
     assert conflict_by_table["data_source_runs"] == "run_id"
     assert conflict_by_table["data_asset_status"] == "asset_key"
     assert conflict_by_table["symbol_data_coverage"] == "ticker"
@@ -119,6 +120,25 @@ def test_publish_contract_writes_expected_tables() -> None:
     assert set(price_row.keys()) == {"ticker", "date", "close", "source", "fetched_at", "created_at"}
     assert price_row["ticker"] == "SPY"
     assert price_row["source"] == "yahoo_finance"
+    quotes_call = next(call for call in publisher.upserts if call["table"] == "market_quotes")
+    quote_row = quotes_call["rows"][0]
+    assert set(quote_row.keys()) == {
+        "ticker",
+        "name",
+        "price",
+        "change",
+        "change_percent",
+        "market_cap_text",
+        "source",
+        "fetched_at",
+        "created_at",
+        "updated_at",
+    }
+    assert quote_row["ticker"] == "SPY"
+    assert quote_row["source"] == "yahoo_finance"
+    assert quote_row["name"] == "SPY"
+    assert isinstance(quote_row["change"], float)
+    assert isinstance(quote_row["change_percent"], float)
     metrics_call = next(call for call in publisher.upserts if call["table"] == "ticker_market_stats_snapshot")
     metric_row = metrics_call["rows"][0]
     assert metric_row["ticker"] == "SPY"
@@ -162,6 +182,50 @@ def test_publish_rows_are_json_safe_before_upsert() -> None:
     assert isinstance(row["fetched_at"], str)
     assert isinstance(row["created_at"], str)
     assert isinstance(row["close"], float)
+
+
+def test_quote_rows_are_json_safe_before_upsert() -> None:
+    publisher = RecordingPublisher()
+    quotes = pd.DataFrame(
+        [
+            {
+                "symbol": "SPY",
+                "quote_ts": pd.Timestamp("2026-04-10T21:00:00+00:00"),
+                "price": np.float64(505.0),
+                "previous_close": np.float64(500.0),
+                "provider": "yahoo_finance",
+                "ingested_at": pd.Timestamp("2026-04-10T21:00:00+00:00"),
+            }
+        ]
+    )
+
+    publish_prices_surfaces(
+        publisher=publisher,
+        market_price_daily=pd.DataFrame(),
+        market_quotes=quotes,
+        refresh_materialized_view=False,
+    )
+
+    quote_call = next(call for call in publisher.upserts if call["table"] == "market_quotes")
+    row = quote_call["rows"][0]
+    assert set(row.keys()) == {
+        "ticker",
+        "name",
+        "price",
+        "change",
+        "change_percent",
+        "market_cap_text",
+        "source",
+        "fetched_at",
+        "created_at",
+        "updated_at",
+    }
+    assert row["ticker"] == "SPY"
+    assert isinstance(row["fetched_at"], str)
+    assert isinstance(row["created_at"], str)
+    assert isinstance(row["updated_at"], str)
+    assert isinstance(row["change"], float)
+    assert isinstance(row["change_percent"], float)
 
 
 def test_to_json_safe_converts_supported_scalars() -> None:

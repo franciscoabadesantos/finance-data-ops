@@ -22,6 +22,23 @@ Write contract:
 
 - upsert key: `ticker,date`
 
+`market_quotes` (production-authoritative latest quote cache):
+
+- `ticker`
+- `name`
+- `price`
+- `change`
+- `change_percent`
+- `market_cap_text`
+- `source`
+- `fetched_at`
+- `created_at`
+- `updated_at`
+
+Write contract:
+
+- upsert key: `ticker`
+
 ## New v1 surfaces (created by SQL in this repo if missing)
 
 - `ticker_market_stats_snapshot`

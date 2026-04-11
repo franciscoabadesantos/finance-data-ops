@@ -12,7 +12,7 @@ Data Ops Service v1 for the Finance platform. This repository is a standalone op
 - Freshness, coverage, and operational status publication
 - Supabase publication for these surfaces:
   - `market_price_daily` (production shape: `ticker,date,close,source,fetched_at,created_at`)
-  - `market_quotes`
+  - `market_quotes` (production shape: `ticker,name,price,change,change_percent,market_cap_text,source,fetched_at,created_at,updated_at`)
   - `market_quotes_history`
   - `mv_latest_prices` (refresh)
   - `ticker_market_stats_snapshot`

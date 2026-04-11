@@ -99,6 +99,23 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     assert coverage_row["market_data_last_date"] is not None
     assert coverage_row["reason"] == "market_price_and_quote_available"
 
+    quotes_upsert = next(call for call in publisher.upserts if call["table"] == "market_quotes")
+    assert quotes_upsert["on_conflict"] == "ticker"
+    quote_row = quotes_upsert["rows"][0]
+    assert set(quote_row.keys()) == {
+        "ticker",
+        "name",
+        "price",
+        "change",
+        "change_percent",
+        "market_cap_text",
+        "source",
+        "fetched_at",
+        "created_at",
+        "updated_at",
+    }
+    assert "high" not in quote_row
+
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     assert runs_upsert["rows"]
     for row in runs_upsert["rows"]:
