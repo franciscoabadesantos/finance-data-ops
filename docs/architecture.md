@@ -37,7 +37,7 @@ Those remain in the `Finance` repository.
 
 Existing:
 
-- `market_price_daily`
+- `market_price_daily` (minimal daily close publish surface)
 - `market_quotes`
 - `market_quotes_history`
 - `mv_latest_prices` refresh RPC

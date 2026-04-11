@@ -109,10 +109,16 @@ def test_publish_contract_writes_expected_tables() -> None:
         "symbol_data_coverage",
     ]
     conflict_by_table = {call["table"]: call["on_conflict"] for call in publisher.upserts}
+    assert conflict_by_table["market_price_daily"] == "ticker,date"
     assert conflict_by_table["data_source_runs"] == "run_id"
     assert conflict_by_table["data_asset_status"] == "asset_key"
     assert conflict_by_table["symbol_data_coverage"] == "ticker"
     assert conflict_by_table["ticker_market_stats_snapshot"] == "ticker"
+    prices_call = next(call for call in publisher.upserts if call["table"] == "market_price_daily")
+    price_row = prices_call["rows"][0]
+    assert set(price_row.keys()) == {"ticker", "date", "close", "source", "fetched_at", "created_at"}
+    assert price_row["ticker"] == "SPY"
+    assert price_row["source"] == "yahoo_finance"
     metrics_call = next(call for call in publisher.upserts if call["table"] == "ticker_market_stats_snapshot")
     metric_row = metrics_call["rows"][0]
     assert metric_row["ticker"] == "SPY"
@@ -150,9 +156,12 @@ def test_publish_rows_are_json_safe_before_upsert() -> None:
 
     price_call = next(call for call in publisher.upserts if call["table"] == "market_price_daily")
     row = price_call["rows"][0]
+    assert set(row.keys()) == {"ticker", "date", "close", "source", "fetched_at", "created_at"}
+    assert row["ticker"] == "SPY"
     assert isinstance(row["date"], str)
-    assert isinstance(row["ingested_at"], str)
-    assert isinstance(row["volume"], int)
+    assert isinstance(row["fetched_at"], str)
+    assert isinstance(row["created_at"], str)
+    assert isinstance(row["close"], float)
 
 
 def test_to_json_safe_converts_supported_scalars() -> None:

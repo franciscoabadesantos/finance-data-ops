@@ -13,20 +13,44 @@ def build_market_price_daily_payload(prices_frame: pd.DataFrame) -> list[dict[st
     if prices_frame.empty:
         return []
     frame = prices_frame.copy()
-    frame["symbol"] = frame["symbol"].astype(str).str.upper()
-    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.date
-    return frame[
+
+    ticker = frame["ticker"] if "ticker" in frame.columns else frame.get("symbol", pd.Series(index=frame.index, dtype=object))
+    source = frame["source"] if "source" in frame.columns else frame.get(
+        "provider",
+        pd.Series(index=frame.index, dtype=object),
+    )
+    fetched_at = frame["fetched_at"] if "fetched_at" in frame.columns else frame.get(
+        "ingested_at",
+        pd.Series(index=frame.index, dtype=object),
+    )
+    created_at = frame["created_at"] if "created_at" in frame.columns else fetched_at
+
+    date_series = frame["date"] if "date" in frame.columns else pd.Series(index=frame.index, dtype=object)
+
+    payload = pd.DataFrame(
+        {
+            "ticker": ticker.astype(str).str.upper(),
+            "date": pd.to_datetime(date_series, errors="coerce").dt.date,
+            "close": pd.to_numeric(frame.get("close"), errors="coerce"),
+            "source": source,
+            "fetched_at": pd.to_datetime(fetched_at, utc=True, errors="coerce"),
+            "created_at": pd.to_datetime(created_at, utc=True, errors="coerce"),
+        },
+        index=frame.index,
+    )
+    now_utc = pd.Timestamp.now(tz="UTC")
+    payload["fetched_at"] = payload["fetched_at"].fillna(now_utc)
+    payload["created_at"] = payload["created_at"].fillna(payload["fetched_at"])
+    payload["ticker"] = payload["ticker"].replace({"": None, "NAN": None, "NONE": None})
+    payload = payload.dropna(subset=["ticker", "date", "close"])
+    return payload[
         [
-            "symbol",
+            "ticker",
             "date",
-            "open",
-            "high",
-            "low",
             "close",
-            "adj_close",
-            "volume",
-            "provider",
-            "ingested_at",
+            "source",
+            "fetched_at",
+            "created_at",
         ]
     ].to_dict(orient="records")
 
@@ -66,7 +90,7 @@ def publish_prices_surfaces(
     daily_result = publisher.upsert(
         "market_price_daily",
         daily_rows,
-        on_conflict="symbol,date",
+        on_conflict="ticker,date",
     )
     quote_result = publisher.upsert(
         "market_quotes",

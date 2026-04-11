@@ -9,6 +9,19 @@ Data Ops v1 writes these surfaces.
 - `market_quotes_history`
 - `mv_latest_prices` (RPC refresh path: `refresh_mv_latest_prices`)
 
+`market_price_daily` (production-authoritative minimal close table):
+
+- `ticker`
+- `date`
+- `close`
+- `source`
+- `fetched_at`
+- `created_at`
+
+Write contract:
+
+- upsert key: `ticker,date`
+
 ## New v1 surfaces (created by SQL in this repo if missing)
 
 - `ticker_market_stats_snapshot`
