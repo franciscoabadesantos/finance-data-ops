@@ -1,36 +1,48 @@
 # finance-data-ops
 
-Data Ops Service v1 for the Finance platform. This repository is a standalone operational service.
+Data Ops service for Finance product-data domains.
 
 ## Ownership boundary
 
 `finance-data-ops` owns:
 
-- External market data fetching
-- Daily market prices and latest quotes refresh
-- Price-derived product metrics
-- Freshness, coverage, and operational status publication
-- Supabase publication for these surfaces:
-  - `market_price_daily` (production shape: `ticker,date,close,source,fetched_at,created_at`)
-  - `market_quotes` (production shape: `ticker,name,price,change,change_percent,market_cap_text,source,fetched_at,created_at,updated_at`)
-  - `market_quotes_history` (production shape: `ticker,fetched_at,price,change,change_percent,market_cap,source`)
-  - `mv_latest_prices` (refresh)
+- External provider fetching
+- Canonical refresh + normalization pipelines for:
+  - market data
+  - fundamentals
+  - earnings
+- Frontend-serving summary surfaces derived from those datasets
+- Freshness, coverage, and operational run-status publication
+- Supabase publication for owned surfaces
+
+Owned Supabase surfaces:
+
+- Market:
+  - `market_price_daily`
+  - `market_quotes`
+  - `market_quotes_history`
+  - `mv_latest_prices` (refresh RPC)
   - `ticker_market_stats_snapshot`
+- Fundamentals:
+  - `market_fundamentals_v2`
+  - `mv_latest_fundamentals`
+  - `ticker_fundamental_summary`
+- Earnings:
+  - `market_earnings_events`
+  - `market_earnings_history`
+  - `mv_next_earnings`
+- Operational:
   - `data_source_runs`
   - `data_asset_status`
   - `symbol_data_coverage`
 
-`ticker_market_stats_snapshot` is published as a latest snapshot table keyed by `ticker`
-(`as_of_date` is informational).
+`Finance` (research/signals repo) owns:
 
-`Finance` (research/signals repo) continues to own:
-
-- Research
-- Training
-- Backtests
-- Promotion
-- Live inference
-- Signal writes to `market_signals`
+- research
+- training
+- backtests
+- live inference
+- signal publication
 
 ## Environment contract
 
@@ -52,37 +64,34 @@ See [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example).
 
 ## Manual runs
 
-Local dry run (no Supabase writes):
+Market:
 
 ```bash
-python scripts/run_market_daily.py \
-  --symbols SPY,QQQ,IWM \
-  --start 2025-01-01 \
-  --end 2026-04-10 \
-  --no-publish
+python scripts/run_market_daily.py --no-publish
 ```
 
-Publish run (requires env vars):
+Fundamentals:
 
 ```bash
-python scripts/run_market_daily.py
+python scripts/run_fundamentals_daily.py --no-publish
 ```
 
-The default run uses `DATA_OPS_SYMBOLS`, `DATA_OPS_LOOKBACK_DAYS`, and current UTC date.
+Earnings:
 
-## Daily scheduler
+```bash
+python scripts/run_earnings_daily.py --no-publish
+```
 
-- Workflow: `.github/workflows/daily_market_refresh.yml`
-- Trigger: weekdays via cron + manual dispatch
-- Action: refresh prices/quotes, compute metrics, publish owned surfaces, publish status rows
-
-## Validate status
+Status check:
 
 ```bash
 python scripts/validate_market_status.py
 ```
 
-Exit code is non-zero when core assets are unhealthy.
+## SQL migrations
+
+- v1: [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
+- v2: [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
 
 ## Additional docs
 

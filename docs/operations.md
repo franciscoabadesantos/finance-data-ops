@@ -1,21 +1,26 @@
-# Operations runbook (Data Ops v1)
+# Operations runbook (Data Ops v2)
 
-## What runs daily
+## Daily jobs
 
-Scheduler runs:
+Market:
 
 ```bash
 python scripts/run_market_daily.py
 ```
 
-This performs:
+Fundamentals:
 
-1. daily market price refresh
-2. latest quote refresh
-3. freshness/coverage evaluation
-4. product metrics computation
-5. Supabase publication for owned surfaces
-6. status publication to `data_source_runs`, `data_asset_status`, `symbol_data_coverage`
+```bash
+python scripts/run_fundamentals_daily.py
+```
+
+Earnings:
+
+```bash
+python scripts/run_earnings_daily.py
+```
+
+Each flow performs refresh, derived summary generation, Supabase publish, and status/coverage updates.
 
 ## Required environment
 
@@ -33,19 +38,19 @@ Optional:
 
 ## Manual operations
 
-Dry run:
+Fundamentals dry run:
 
 ```bash
-python scripts/run_market_daily.py --symbols SPY,QQQ --no-publish
+python scripts/run_fundamentals_daily.py --symbols SPY,QQQ --no-publish
 ```
 
-Backfill window:
+Earnings dry run:
 
 ```bash
-python scripts/run_market_daily.py --symbols SPY,QQQ --start 2025-01-01 --end 2026-04-10
+python scripts/run_earnings_daily.py --symbols SPY,QQQ --no-publish
 ```
 
-Status check:
+Market status check:
 
 ```bash
 python scripts/validate_market_status.py
@@ -56,14 +61,23 @@ python scripts/validate_market_status.py
 Look for:
 
 - flow exit code `0`
-- `data_source_runs` rows for `market_price_daily`, `market_quotes`, and `dataops_market_daily`
-- `data_asset_status` rows showing `fresh` or acceptable tolerance
-- `symbol_data_coverage` rows with expected symbols and non-empty reasons
-- `ticker_market_stats_snapshot` rows keyed by `ticker` with recent `as_of_date`
+- `data_source_runs` rows for refresh + orchestration jobs
+- `data_asset_status` rows for:
+  - `market_fundamentals_v2`
+  - `ticker_fundamental_summary`
+  - `market_earnings_events`
+  - `market_earnings_history`
+  - `mv_next_earnings`
+- `symbol_data_coverage` rows with populated:
+  - `fundamentals_available`
+  - `fundamentals_last_date`
+  - `earnings_available`
+  - `next_earnings_date`
 
 ## Failure triage
 
-1. Check workflow logs (`daily_market_refresh.yml`) for publish/refresh step failure.
+1. Check workflow/script logs for refresh or publish step failures.
 2. Inspect `data_source_runs.error_messages` and `failure_classification`.
-3. Inspect `data_asset_status.reason` and `symbol_data_coverage.reason`.
-4. If configured, verify webhook alert delivery for the failure run.
+3. Inspect `data_asset_status.reason`, `freshness_status`, and `coverage_status`.
+4. Inspect `symbol_data_coverage.reason` for missing domain components.
+5. If configured, verify alert webhook delivery for unhealthy runs.

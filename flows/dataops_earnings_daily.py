@@ -1,11 +1,11 @@
-"""Main Data Ops v1 market daily orchestration flow."""
+"""Main Data Ops v2 earnings daily orchestration flow."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -17,106 +17,95 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from finance_data_ops.derived.market_stats import compute_ticker_market_stats
+from finance_data_ops.derived.earnings_summary import compute_next_earnings
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.ops.incidents import classify_failure
-from finance_data_ops.providers.market import MarketDataProvider
+from finance_data_ops.providers.earnings import EarningsDataProvider
 from finance_data_ops.publish.client import Publisher, RecordingPublisher, SupabaseRestPublisher
-from finance_data_ops.publish.prices import publish_prices_surfaces
-from finance_data_ops.publish.product_metrics import publish_product_metrics
+from finance_data_ops.publish.earnings import publish_earnings_surfaces
 from finance_data_ops.publish.status import publish_status_surfaces
-from finance_data_ops.refresh.market_daily import RefreshRunResult, refresh_market_daily
-from finance_data_ops.refresh.quotes_latest import refresh_latest_quotes
+from finance_data_ops.refresh.earnings_daily import refresh_earnings_daily
+from finance_data_ops.refresh.market_daily import RefreshRunResult
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
-from finance_data_ops.settings import DataOpsSettings, load_settings
+from finance_data_ops.settings import load_settings
 from finance_data_ops.validation.coverage import assess_symbol_coverage, build_symbol_coverage_rows
 from finance_data_ops.validation.freshness import FreshnessState, classify_freshness
 
 
-def run_dataops_market_daily(
+def run_dataops_earnings_daily(
     *,
     symbols: list[str],
-    start: str,
-    end: str,
     cache_root: str | None = None,
     publish_enabled: bool = True,
-    provider: MarketDataProvider | None = None,
+    provider: EarningsDataProvider | None = None,
     publisher: Publisher | None = None,
     max_attempts: int = 3,
+    history_limit: int = 12,
     raise_on_failed_hard: bool = True,
-    symbol_batch_size: int | None = None,
 ) -> dict[str, Any]:
     flow_started_at = datetime.now(UTC)
-    flow_run_id = f"run_dataops_market_daily_{uuid4().hex[:12]}"
+    flow_run_id = f"run_dataops_earnings_daily_{uuid4().hex[:12]}"
     settings = load_settings(cache_root=cache_root)
 
     normalized_symbols = [str(v).strip().upper() for v in symbols if str(v).strip()]
     if not normalized_symbols:
         raise ValueError("symbols must contain at least one ticker.")
 
-    provider_impl = provider or MarketDataProvider()
-    batch_size = int(symbol_batch_size if symbol_batch_size is not None else settings.symbol_batch_size)
-
-    prices_frame, prices_run = refresh_market_daily(
+    provider_impl = provider or EarningsDataProvider()
+    _, _, earnings_run = refresh_earnings_daily(
         symbols=normalized_symbols,
-        start=start,
-        end=end,
         provider=provider_impl,
         cache_root=str(settings.cache_root),
         max_attempts=max_attempts,
-    )
-    quotes_frame, quotes_run = refresh_latest_quotes(
-        symbols=normalized_symbols,
-        provider=provider_impl,
-        cache_root=str(settings.cache_root),
-        symbol_batch_size=batch_size,
+        history_limit=history_limit,
     )
 
-    cached_prices = read_parquet_table("market_price_daily", cache_root=settings.cache_root, required=False)
-    cached_quotes = read_parquet_table("market_quotes", cache_root=settings.cache_root, required=False)
-    cached_fundamentals = read_parquet_table(
-        "market_fundamentals_v2",
-        cache_root=settings.cache_root,
-        required=False,
-    )
     cached_earnings_events = read_parquet_table(
         "market_earnings_events",
         cache_root=settings.cache_root,
         required=False,
     )
-
-    coverage_rows = build_symbol_coverage_rows(
-        required_symbols=normalized_symbols,
-        prices_frame=cached_prices,
-        quotes_frame=cached_quotes,
-        fundamentals_frame=(cached_fundamentals if not cached_fundamentals.empty else None),
-        earnings_events_frame=(cached_earnings_events if not cached_earnings_events.empty else None),
-    )
-    coverage_summary = assess_symbol_coverage(
-        required_symbols=normalized_symbols,
-        observed_symbols=list(cached_prices.get("symbol", pd.Series(dtype=str)).astype(str).tolist()),
+    cached_earnings_history = read_parquet_table(
+        "market_earnings_history",
+        cache_root=settings.cache_root,
+        required=False,
     )
 
-    market_stats = compute_ticker_market_stats(cached_prices, as_of_date=end)
+    next_earnings = compute_next_earnings(cached_earnings_events)
     write_parquet_table(
-        "ticker_market_stats_snapshot",
-        market_stats,
+        "mv_next_earnings",
+        next_earnings,
         cache_root=settings.cache_root,
         mode="replace",
         dedupe_subset=["ticker"],
     )
 
-    status_rows = _build_asset_status_rows(
+    cached_prices = read_parquet_table("market_price_daily", cache_root=settings.cache_root, required=False)
+    cached_quotes = read_parquet_table("market_quotes", cache_root=settings.cache_root, required=False)
+    cached_fundamentals = read_parquet_table("market_fundamentals_v2", cache_root=settings.cache_root, required=False)
+
+    coverage_rows = build_symbol_coverage_rows(
+        required_symbols=normalized_symbols,
         prices_frame=cached_prices,
         quotes_frame=cached_quotes,
-        market_stats_frame=market_stats,
-        prices_run=prices_run,
-        quotes_run=quotes_run,
+        fundamentals_frame=cached_fundamentals,
+        earnings_events_frame=next_earnings,
     )
-    run_rows = [
-        _refresh_run_to_row(prices_run),
-        _refresh_run_to_row(quotes_run),
-    ]
+
+    observed_symbols = set(_symbol_values(cached_earnings_events)).union(_symbol_values(cached_earnings_history))
+    coverage_summary = assess_symbol_coverage(
+        required_symbols=normalized_symbols,
+        observed_symbols=list(observed_symbols),
+    )
+
+    status_rows = _build_asset_status_rows(
+        earnings_events=cached_earnings_events,
+        earnings_history=cached_earnings_history,
+        next_earnings=next_earnings,
+        refresh_run=earnings_run,
+        flow_run_id=flow_run_id,
+    )
+    run_rows = [_refresh_run_to_row(earnings_run)]
 
     publisher_impl: Publisher
     if publish_enabled:
@@ -134,34 +123,23 @@ def run_dataops_market_daily(
     publish_failures: list[dict[str, Any]] = []
     publish_results: dict[str, Any] = {}
     if publish_enabled or isinstance(publisher_impl, RecordingPublisher):
-        prices_result = _execute_publish_step(
-            "prices",
-            lambda: publish_prices_surfaces(
+        publish_results["earnings"] = _execute_publish_step(
+            "earnings",
+            lambda: publish_earnings_surfaces(
                 publisher=publisher_impl,
-                market_price_daily=cached_prices,
-                market_quotes=cached_quotes,
+                earnings_events=cached_earnings_events,
+                earnings_history=cached_earnings_history,
                 refresh_materialized_view=bool(publish_enabled),
             ),
             failures=publish_failures,
         )
-        publish_results["prices"] = prices_result
-
-        product_result = _execute_publish_step(
-            "product_metrics",
-            lambda: publish_product_metrics(
-                publisher=publisher_impl,
-                market_stats_snapshot=market_stats,
-            ),
-            failures=publish_failures,
-        )
-        publish_results["product_metrics"] = product_result
 
     if publish_failures:
         for failure in publish_failures:
             run_rows.append(
                 _flow_run_row(
                     run_id=f"{flow_run_id}_publish_{failure['step']}",
-                    job_name=f"dataops_market_daily_publish_{failure['step']}",
+                    job_name=f"dataops_earnings_daily_publish_{failure['step']}",
                     source_type="publish",
                     scope=str(failure["step"]),
                     flow_started_at=flow_started_at,
@@ -173,11 +151,13 @@ def run_dataops_market_daily(
                     },
                 )
             )
+
     status_rows.append(
         _build_publish_pipeline_status_row(
             run_id=flow_run_id,
-            as_of_date=end,
             has_publish_failures=bool(publish_failures),
+            asset_key="data_ops_publish_pipeline_earnings",
+            reference_date=_latest_earnings_date(cached_earnings_events),
         )
     )
 
@@ -185,7 +165,7 @@ def run_dataops_market_daily(
         {
             str(row.get("ticker", "")).strip().upper()
             for row in coverage_rows
-            if bool(row.get("market_data_available"))
+            if bool(row.get("earnings_available"))
         }
     )
     symbols_failed = [symbol for symbol in normalized_symbols if symbol not in set(symbols_succeeded)]
@@ -198,22 +178,20 @@ def run_dataops_market_daily(
     run_rows.append(
         _flow_run_row(
             run_id=flow_run_id,
-            job_name="dataops_market_daily",
+            job_name="dataops_earnings_daily",
             source_type="orchestration",
-            scope=f"{start}:{end}",
+            scope="symbol_universe",
             flow_started_at=flow_started_at,
             status=orchestration_status,
             context={
                 "symbols": normalized_symbols,
                 "symbols_succeeded": symbols_succeeded,
                 "symbols_failed": symbols_failed,
-                "start": start,
-                "end": end,
             },
         )
     )
 
-    status_result = _execute_publish_step(
+    publish_results["status"] = _execute_publish_step(
         "status",
         lambda: publish_status_surfaces(
             publisher=publisher_impl,
@@ -223,7 +201,6 @@ def run_dataops_market_daily(
         ),
         failures=publish_failures,
     )
-    publish_results["status"] = status_result
 
     hard_failure = bool(publish_failures) or overall_state in {
         FreshnessState.FAILED_HARD,
@@ -232,7 +209,7 @@ def run_dataops_market_daily(
     if raise_on_failed_hard and hard_failure:
         payload = build_alert_payload(
             severity="error",
-            message="Data Ops market daily flow ended unhealthy.",
+            message="Data Ops earnings daily flow ended unhealthy.",
             run_id=flow_run_id,
             context={
                 "overall_state": overall_state,
@@ -247,27 +224,124 @@ def run_dataops_market_daily(
             {"overall_state": overall_state, "publish_failures": publish_failures},
             default=str,
         )
-        raise RuntimeError(f"Data Ops market daily unhealthy status: {failure_json}")
+        raise RuntimeError(f"Data Ops earnings daily unhealthy status: {failure_json}")
 
     return {
         "run_id": flow_run_id,
-        "run_date": date.today().isoformat(),
         "cache_root": str(settings.cache_root),
         "symbols": normalized_symbols,
         "refresh": {
-            "market_daily": prices_run.as_dict(),
-            "quotes_latest": quotes_run.as_dict(),
+            "earnings_daily": earnings_run.as_dict(),
         },
         "coverage": coverage_summary,
         "asset_status": status_rows,
         "published": publish_results,
         "publish_failures": publish_failures,
         "rows": {
-            "market_price_daily": int(len(cached_prices.index)),
-            "market_quotes": int(len(cached_quotes.index)),
-            "ticker_market_stats_snapshot": int(len(market_stats.index)),
+            "market_earnings_events": int(len(cached_earnings_events.index)),
+            "market_earnings_history": int(len(cached_earnings_history.index)),
+            "mv_next_earnings": int(len(next_earnings.index)),
         },
     }
+
+
+def _build_asset_status_rows(
+    *,
+    earnings_events: pd.DataFrame,
+    earnings_history: pd.DataFrame,
+    next_earnings: pd.DataFrame,
+    refresh_run: RefreshRunResult,
+    flow_run_id: str,
+) -> list[dict[str, Any]]:
+    now = datetime.now(UTC)
+    events_last = pd.to_datetime(
+        earnings_events.get("fetched_at", earnings_events.get("ingested_at")),
+        utc=True,
+        errors="coerce",
+    ).max()
+    history_last = pd.to_datetime(
+        earnings_history.get("earnings_date"),
+        errors="coerce",
+    ).max()
+    next_last = pd.to_datetime(
+        next_earnings.get("updated_at"),
+        utc=True,
+        errors="coerce",
+    ).max()
+
+    events_state = classify_freshness(
+        last_observed_at=events_last,
+        now=now,
+        fresh_within=timedelta(hours=30),
+        tolerance=timedelta(hours=24),
+        partial=str(refresh_run.status) == FreshnessState.PARTIAL,
+        failure_state=refresh_run.status,
+    )
+    history_state = classify_freshness(
+        last_observed_at=history_last,
+        now=now,
+        fresh_within=timedelta(days=180),
+        tolerance=timedelta(days=120),
+        failure_state="failed_hard" if earnings_history.empty else None,
+    )
+    next_state = classify_freshness(
+        last_observed_at=next_last,
+        now=now,
+        fresh_within=timedelta(hours=30),
+        tolerance=timedelta(hours=24),
+        failure_state="failed_hard" if next_earnings.empty else None,
+    )
+
+    provider = _provider_from_frame(earnings_events, fallback="unknown")
+    now_iso = now.isoformat()
+
+    return [
+        {
+            "asset_key": "market_earnings_events",
+            "asset_type": "earnings",
+            "provider": provider,
+            "last_success_at": _last_success_timestamp(events_last, events_state),
+            "last_available_date": _date_or_none(_latest_earnings_date(earnings_events)),
+            "freshness_status": str(events_state),
+            "coverage_status": str(refresh_run.status),
+            "reason": _asset_reason(
+                rows_written=int(len(earnings_events.index)),
+                run_id=refresh_run.run_id,
+                errors=refresh_run.error_messages,
+            ),
+            "updated_at": now_iso,
+        },
+        {
+            "asset_key": "market_earnings_history",
+            "asset_type": "earnings",
+            "provider": _provider_from_frame(earnings_history, fallback=provider),
+            "last_success_at": _last_success_timestamp(history_last, history_state),
+            "last_available_date": _date_or_none(history_last),
+            "freshness_status": str(history_state),
+            "coverage_status": "fresh" if not earnings_history.empty else "failed_hard",
+            "reason": _asset_reason(
+                rows_written=int(len(earnings_history.index)),
+                run_id="market_earnings_history_build",
+                errors=["no_rows_found"] if earnings_history.empty else [],
+            ),
+            "updated_at": now_iso,
+        },
+        {
+            "asset_key": "mv_next_earnings",
+            "asset_type": "derived",
+            "provider": "data_ops",
+            "last_success_at": _last_success_timestamp(next_last, next_state),
+            "last_available_date": _date_or_none(_latest_earnings_date(next_earnings)),
+            "freshness_status": str(next_state),
+            "coverage_status": "fresh" if not next_earnings.empty else "failed_hard",
+            "reason": _asset_reason(
+                rows_written=int(len(next_earnings.index)),
+                run_id=f"{flow_run_id}_mv_next_earnings",
+                errors=["no_rows_to_materialize"] if next_earnings.empty else [],
+            ),
+            "updated_at": now_iso,
+        },
+    ]
 
 
 def _execute_publish_step(
@@ -362,147 +436,12 @@ def _flow_run_row(
     }
 
 
-def _build_asset_status_rows(
-    *,
-    prices_frame: pd.DataFrame,
-    quotes_frame: pd.DataFrame,
-    market_stats_frame: pd.DataFrame,
-    prices_run: RefreshRunResult,
-    quotes_run: RefreshRunResult,
-) -> list[dict[str, Any]]:
-    now = datetime.now(UTC)
-    date_series = None
-    if isinstance(prices_frame, pd.DataFrame) and "date" in prices_frame.columns:
-        date_series = prices_frame["date"]
-
-    if date_series is None or len(date_series) == 0:
-        prices_last = None
-    else:
-        prices_last = pd.to_datetime(date_series, errors="coerce").max()
-
-    if prices_last is None:
-        # Optional signal hook for empty/malformed `prices_frame["date"]`.
-        pass
-
-    quotes_last = pd.to_datetime(quotes_frame.get("quote_ts"), utc=True, errors="coerce").max()
-    stats_last = pd.to_datetime(market_stats_frame.get("updated_at"), utc=True, errors="coerce").max()
-
-    price_state = classify_freshness(
-        last_observed_at=prices_last,
-        now=now,
-        fresh_within=timedelta(days=2),
-        tolerance=timedelta(days=2),
-        partial=str(prices_run.status) == FreshnessState.PARTIAL,
-        failure_state=prices_run.status,
-    )
-    quote_state = classify_freshness(
-        last_observed_at=quotes_last,
-        now=now,
-        fresh_within=timedelta(hours=26),
-        tolerance=timedelta(hours=24),
-        partial=str(quotes_run.status) == FreshnessState.PARTIAL,
-        failure_state=quotes_run.status,
-    )
-    stats_state = classify_freshness(
-        last_observed_at=stats_last,
-        now=now,
-        fresh_within=timedelta(hours=6),
-        tolerance=timedelta(hours=12),
-        failure_state="failed_hard" if market_stats_frame.empty else None,
-    )
-
-    prices_provider = _provider_from_frame(prices_frame, fallback="unknown")
-    quotes_provider = _provider_from_frame(quotes_frame, fallback="unknown")
-    now_iso = now.isoformat()
-    return [
-        {
-            "asset_key": "market_price_daily",
-            "asset_type": "market_data",
-            "provider": prices_provider,
-            "last_success_at": _last_success_timestamp(prices_last, price_state),
-            "last_available_date": _date_or_none(prices_last),
-            "freshness_status": str(price_state),
-            "coverage_status": str(prices_run.status),
-            "reason": _asset_reason(
-                rows_written=int(len(prices_frame.index)),
-                run_id=prices_run.run_id,
-                errors=prices_run.error_messages,
-            ),
-            "updated_at": now_iso,
-        },
-        {
-            "asset_key": "market_quotes",
-            "asset_type": "market_data",
-            "provider": quotes_provider,
-            "last_success_at": _last_success_timestamp(quotes_last, quote_state),
-            "last_available_date": _date_or_none(quotes_last),
-            "freshness_status": str(quote_state),
-            "coverage_status": str(quotes_run.status),
-            "reason": _asset_reason(
-                rows_written=int(len(quotes_frame.index)),
-                run_id=quotes_run.run_id,
-                errors=quotes_run.error_messages,
-            ),
-            "updated_at": now_iso,
-        },
-        {
-            "asset_key": "ticker_market_stats_snapshot",
-            "asset_type": "derived",
-            "provider": "data_ops",
-            "last_success_at": _last_success_timestamp(stats_last, stats_state),
-            "last_available_date": _date_or_none(stats_last),
-            "freshness_status": str(stats_state),
-            "coverage_status": "fresh" if not market_stats_frame.empty else "failed_hard",
-            "reason": _asset_reason(
-                rows_written=int(len(market_stats_frame.index)),
-                run_id="ticker_market_stats_snapshot_build",
-                errors=["no_rows_computed"] if market_stats_frame.empty else [],
-            ),
-            "updated_at": now_iso,
-        },
-    ]
-
-
-def _provider_from_frame(frame: pd.DataFrame, *, fallback: str) -> str:
-    if "provider" not in frame.columns:
-        return fallback
-    providers = [str(value).strip() for value in frame["provider"].dropna().tolist() if str(value).strip()]
-    return providers[0] if providers else fallback
-
-
-def _date_or_none(value: Any) -> str | None:
-    if value is None or pd.isna(value):
-        return None
-    return pd.Timestamp(value).date().isoformat()
-
-
-def _last_success_timestamp(value: Any, freshness_state: str) -> str | None:
-    if str(freshness_state).strip().lower() in {"failed_hard", "failed_retrying"}:
-        return None
-    if value is None or pd.isna(value):
-        return None
-    return pd.Timestamp(value).isoformat()
-
-
-def _asset_reason(*, rows_written: int, run_id: str, errors: list[str]) -> str:
-    if errors:
-        return f"rows={rows_written}; run_id={run_id}; errors={'; '.join(errors)}"
-    return f"rows={rows_written}; run_id={run_id}"
-
-
-def _orchestration_run_status(*, overall_state: str, has_publish_failures: bool) -> str:
-    if has_publish_failures:
-        return "failed"
-    if str(overall_state).strip().lower() in {FreshnessState.FAILED_HARD, FreshnessState.FAILED_RETRYING}:
-        return "failed"
-    return "success"
-
-
 def _build_publish_pipeline_status_row(
     *,
     run_id: str,
-    as_of_date: str,
     has_publish_failures: bool,
+    asset_key: str,
+    reference_date: str | None,
 ) -> dict[str, Any]:
     now = datetime.now(UTC)
     if has_publish_failures:
@@ -517,11 +456,11 @@ def _build_publish_pipeline_status_row(
         last_success_at = now.isoformat()
 
     return {
-        "asset_key": "data_ops_publish_pipeline",
+        "asset_key": asset_key,
         "asset_type": "pipeline",
         "provider": "data_ops",
         "last_success_at": last_success_at,
-        "last_available_date": pd.Timestamp(as_of_date).date().isoformat(),
+        "last_available_date": reference_date,
         "freshness_status": freshness_status,
         "coverage_status": coverage_status,
         "reason": reason,
@@ -546,23 +485,70 @@ def _overall_status(status_rows: list[dict[str, Any]]) -> str:
     return FreshnessState.FRESH
 
 
+def _orchestration_run_status(*, overall_state: str, has_publish_failures: bool) -> str:
+    if has_publish_failures:
+        return "failed"
+    if str(overall_state).strip().lower() in {FreshnessState.FAILED_HARD, FreshnessState.FAILED_RETRYING}:
+        return "failed"
+    return "success"
+
+
+def _provider_from_frame(frame: pd.DataFrame, *, fallback: str) -> str:
+    column = "source" if "source" in frame.columns else ("provider" if "provider" in frame.columns else None)
+    if column is None:
+        return fallback
+    providers = [str(value).strip() for value in frame[column].dropna().tolist() if str(value).strip()]
+    return providers[0] if providers else fallback
+
+
+def _date_or_none(value: Any) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value).date().isoformat()
+
+
+def _last_success_timestamp(value: Any, freshness_state: str) -> str | None:
+    if str(freshness_state).strip().lower() in {"failed_hard", "failed_retrying"}:
+        return None
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value).isoformat()
+
+
+def _asset_reason(*, rows_written: int, run_id: str, errors: list[str]) -> str:
+    if errors:
+        return f"rows={rows_written}; run_id={run_id}; errors={'; '.join(errors)}"
+    return f"rows={rows_written}; run_id={run_id}"
+
+
+def _latest_earnings_date(frame: pd.DataFrame) -> str | None:
+    if frame.empty or "earnings_date" not in frame.columns:
+        return None
+    value = pd.to_datetime(frame["earnings_date"], errors="coerce").max()
+    if pd.isna(value):
+        return None
+    return pd.Timestamp(value).date().isoformat()
+
+
+def _symbol_values(frame: pd.DataFrame) -> list[str]:
+    if frame.empty:
+        return []
+    symbol_col = "ticker" if "ticker" in frame.columns else ("symbol" if "symbol" in frame.columns else None)
+    if symbol_col is None:
+        return []
+    return [str(v).strip().upper() for v in frame[symbol_col].dropna().tolist() if str(v).strip()]
+
+
 def _parse_symbols(raw: str) -> list[str]:
     return [str(v).strip().upper() for v in str(raw).split(",") if str(v).strip()]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run Data Ops market daily flow.")
+    parser = argparse.ArgumentParser(description="Run Data Ops earnings daily flow.")
     parser.add_argument("--symbols", type=str, default=None, help="Comma-separated symbol universe.")
-    parser.add_argument("--start", type=str, default=None, help="Start date YYYY-MM-DD.")
-    parser.add_argument("--end", type=str, default=None, help="End date YYYY-MM-DD.")
     parser.add_argument("--cache-root", type=str, default=None, help="Override canonical local cache root.")
     parser.add_argument("--max-attempts", type=int, default=None, help="Retry attempts for retryable failures.")
-    parser.add_argument(
-        "--symbol-batch-size",
-        type=int,
-        default=None,
-        help="Symbol batch size used by quote refresh calls.",
-    )
+    parser.add_argument("--history-limit", type=int, default=12, help="Rows to request from provider earnings history.")
     parser.add_argument("--no-publish", action="store_true", help="Skip Supabase publishing (local dry-run).")
     parser.add_argument(
         "--allow-unhealthy",
@@ -575,26 +561,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     settings = load_settings(cache_root=args.cache_root)
-
     symbols = _parse_symbols(args.symbols) if args.symbols else list(settings.default_symbols)
     if not symbols:
         raise ValueError("No symbols configured. Set --symbols or DATA_OPS_SYMBOLS.")
 
-    end_ts = pd.Timestamp(args.end).date() if args.end else datetime.now(UTC).date()
-    if args.start:
-        start_ts = pd.Timestamp(args.start).date()
-    else:
-        start_ts = end_ts - timedelta(days=int(settings.default_lookback_days))
-
-    summary = run_dataops_market_daily(
+    summary = run_dataops_earnings_daily(
         symbols=symbols,
-        start=start_ts.isoformat(),
-        end=end_ts.isoformat(),
         cache_root=args.cache_root,
         publish_enabled=not bool(args.no_publish),
         max_attempts=int(args.max_attempts or settings.default_max_attempts),
+        history_limit=int(args.history_limit),
         raise_on_failed_hard=not bool(args.allow_unhealthy),
-        symbol_batch_size=args.symbol_batch_size,
     )
     print(json.dumps(summary, indent=2, default=str))
 

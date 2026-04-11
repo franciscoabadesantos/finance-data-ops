@@ -1,96 +1,94 @@
-# Supabase schema contract (Data Ops v1)
+# Supabase schema contract (Data Ops v2)
 
-Data Ops v1 writes these surfaces.
+Data Ops now writes three product-data domains: market, fundamentals, earnings.
 
-## Existing surfaces (must already exist)
+## Existing market surfaces (v1)
 
 - `market_price_daily`
 - `market_quotes`
 - `market_quotes_history`
 - `mv_latest_prices` (RPC refresh path: `refresh_mv_latest_prices`)
-
-`market_price_daily` (production-authoritative minimal close table):
-
-- `ticker`
-- `date`
-- `close`
-- `source`
-- `fetched_at`
-- `created_at`
-
-Write contract:
-
-- upsert key: `ticker,date`
-
-`market_quotes` (production-authoritative latest quote cache):
-
-- `ticker`
-- `name`
-- `price`
-- `change`
-- `change_percent`
-- `market_cap_text`
-- `source`
-- `fetched_at`
-- `created_at`
-- `updated_at`
-
-Write contract:
-
-- upsert key: `ticker`
-
-`market_quotes_history` (production-authoritative quote-history cache):
-
-- `ticker`
-- `fetched_at`
-- `price`
-- `change`
-- `change_percent`
-- `market_cap`
-- `source`
-
-Write contract:
-
-- upsert key: `ticker,fetched_at`
-
-## New v1 surfaces (created by SQL in this repo if missing)
-
 - `ticker_market_stats_snapshot`
-- `data_source_runs`
-- `data_asset_status`
-- `symbol_data_coverage`
 
-SQL file: [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
+## Fundamentals surfaces (v2)
 
-## Key payload requirements
+- `market_fundamentals_v2` (canonical normalized history)
+- `mv_latest_fundamentals` (latest per `(ticker, metric)`)
+- `ticker_fundamental_summary` (frontend snapshot)
 
-`data_source_runs`:
+`market_fundamentals_v2` write contract:
 
-- `job_name`
-- `source_type`
-- `scope`
-- `status`
-- `started_at`, `finished_at`
-- `rows_written`
-- `error_class`, `error_message`
-- `failure_classification` (when failed)
-- `symbols_requested`, `symbols_succeeded`, `symbols_failed`
-- `error_messages`
+- `ticker`
+- `metric`
+- `value`
+- `period_end`
+- `period_type`
+- `fiscal_year`
+- `fiscal_quarter`
+- `currency`
+- `source`
+- `fetched_at`
 - `created_at`
+- `updated_at`
+- upsert key: `ticker,metric,period_end,period_type`
 
-`data_asset_status`:
+`ticker_fundamental_summary` write contract:
 
-- `asset_key`
-- `asset_type`
-- `provider`
-- `last_success_at`
-- `last_available_date`
-- `freshness_status`
-- `coverage_status`
-- `reason`
+- `ticker` (upsert key)
+- `latest_revenue`
+- `latest_eps`
+- `trailing_pe`
+- `market_cap`
+- `revenue_growth_yoy`
+- `earnings_growth_yoy`
+- `latest_period_end`
+- `source`
 - `updated_at`
 
-`symbol_data_coverage`:
+## Earnings surfaces (v2)
+
+- `market_earnings_events` (upcoming/scheduled)
+- `market_earnings_history` (historical results)
+- `mv_next_earnings` (next event per ticker)
+
+`market_earnings_events` write contract:
+
+- `ticker`
+- `earnings_date`
+- `earnings_time`
+- `fiscal_period`
+- `estimate_eps`
+- `estimate_revenue`
+- `source`
+- `fetched_at`
+- `created_at`
+- `updated_at`
+- upsert key: `ticker,earnings_date`
+
+`market_earnings_history` write contract:
+
+- `ticker`
+- `earnings_date`
+- `fiscal_period`
+- `actual_eps`
+- `estimate_eps`
+- `surprise_eps`
+- `actual_revenue`
+- `estimate_revenue`
+- `surprise_revenue`
+- `source`
+- `fetched_at`
+- `created_at`
+- `updated_at`
+- upsert key: `ticker,earnings_date,fiscal_period`
+
+## Operational surfaces
+
+- `data_source_runs` (run trail for market/fundamentals/earnings refresh + publish)
+- `data_asset_status` (freshness/coverage per owned asset)
+- `symbol_data_coverage` (ticker coverage state)
+
+`symbol_data_coverage` required fields:
 
 - `ticker`
 - `market_data_available`
@@ -104,14 +102,4 @@ SQL file: [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-dat
 - `reason`
 - `updated_at`
 
-`ticker_market_stats_snapshot`:
-
-- `ticker` (upsert key; latest snapshot row per ticker)
-- `last_price`
-- `as_of_date` (informational, not part of upsert key)
-- `return_1d_pct`, `return_1m_pct`, `return_3m_pct`, `return_1y_pct`
-- `vol_30d_pct`
-- `drawdown_1y_pct`
-- `dist_from_52w_high_pct`
-- `dist_from_52w_low_pct`
-- `updated_at`
+Migration file for v2 surfaces: [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)

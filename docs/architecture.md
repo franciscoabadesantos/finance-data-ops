@@ -1,60 +1,67 @@
-# Data Ops v1 Architecture
+# Data Ops v2 Architecture
 
 ## System position
 
-`finance-data-ops` is the operational market-data backend.
+`finance-data-ops` is the operational product-data backend.
 
-Flow:
+Flow per domain:
 
-1. Fetch from external market providers (`providers/`)
-2. Normalize and persist canonical cache tables (`refresh/`)
-3. Validate freshness and coverage (`validation/`)
-4. Compute price-derived product metrics (`derived/`)
-5. Publish owned Supabase surfaces (`publish/`)
-6. Publish operational status trail (`data_source_runs`, `data_asset_status`, `symbol_data_coverage`)
+1. Fetch from external providers (`providers/`)
+2. Normalize + persist canonical cache tables (`refresh/`)
+3. Compute frontend-serving summaries (`derived/`)
+4. Publish owned Supabase surfaces (`publish/`)
+5. Publish operational status + coverage (`data_source_runs`, `data_asset_status`, `symbol_data_coverage`)
 
 ## Production boundary
 
-Only this repo performs market-data fetching.
+Only this repo performs provider fetching for owned product-data domains.
 
 This repo owns:
 
-- Fetch + retry + transient failure classification
-- Price and quote publication
-- Product metrics from prices
-- Freshness and coverage publication
+- Market data refresh + publish (v1)
+- Fundamentals refresh + publish (v2)
+- Earnings refresh + publish (v2)
+- Frontend-serving product summaries derived from those domains
+- Freshness, coverage, and run-status publication for all three domains
 
 This repo does not own:
 
 - Research/training/backtests
-- Promotion/versioning
-- Live inference
-- `market_signals`
+- Live inference/signal generation
+- Signal publication workflows
 
 Those remain in the `Finance` repository.
 
 ## Owned Supabase surfaces
 
-Existing:
+### Market
 
-- `market_price_daily` (minimal daily close publish surface)
-- `market_quotes` (latest-only quote cache publish surface)
-- `market_quotes_history` (quote-history cache publish surface)
+- `market_price_daily`
+- `market_quotes`
+- `market_quotes_history`
 - `mv_latest_prices` refresh RPC
-
-New v1 surfaces:
-
 - `ticker_market_stats_snapshot`
+
+### Fundamentals
+
+- `market_fundamentals_v2` (canonical normalized history)
+- `mv_latest_fundamentals` (latest per `(ticker, metric)`)
+- `ticker_fundamental_summary` (frontend-serving denormalized snapshot)
+
+### Earnings
+
+- `market_earnings_events` (upcoming/scheduled events)
+- `market_earnings_history` (historical results)
+- `mv_next_earnings` (next event per ticker)
+
+### Operational
+
 - `data_source_runs`
 - `data_asset_status`
 - `symbol_data_coverage`
 
-`ticker_market_stats_snapshot` is a latest-only serving table keyed by `ticker`.
-`as_of_date` is informational and not part of the write key.
+## Operational entrypoints
 
-## Operational shape
-
-- CI workflow: `.github/workflows/ci.yml`
-- Scheduler workflow: `.github/workflows/daily_market_refresh.yml`
-- Main flow entrypoint: `flows/dataops_market_daily.py`
-- Manual entrypoint: `scripts/run_market_daily.py`
+- Market: `flows/dataops_market_daily.py` / `scripts/run_market_daily.py`
+- Fundamentals: `flows/dataops_fundamentals_daily.py` / `scripts/run_fundamentals_daily.py`
+- Earnings: `flows/dataops_earnings_daily.py` / `scripts/run_earnings_daily.py`

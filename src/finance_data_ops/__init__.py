@@ -1,4 +1,4 @@
-"""Finance Data Ops Service v1."""
+"""Finance Data Ops service package."""
 
 from finance_data_ops.settings import DataOpsSettings, load_settings
 
