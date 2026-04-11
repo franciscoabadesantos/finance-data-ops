@@ -76,7 +76,7 @@ Data Ops now writes three product-data domains: market, fundamentals, earnings.
 - `fetched_at`
 - `created_at`
 - `updated_at`
-- upsert key: `ticker,earnings_date,fiscal_period`
+- upsert key: `ticker,earnings_date`
 
 ## Operational surfaces
 

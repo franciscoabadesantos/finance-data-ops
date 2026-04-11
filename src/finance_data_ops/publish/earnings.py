@@ -109,11 +109,8 @@ def build_market_earnings_history_payload(history_frame: pd.DataFrame) -> list[d
     payload["ticker"] = payload["ticker"].replace({"": None, "NAN": None, "NONE": None})
     payload = payload.dropna(subset=["ticker", "earnings_date"])
 
-    payload = payload.sort_values(["ticker", "earnings_date", "fiscal_period", "fetched_at"])
-    payload = payload.drop_duplicates(
-        subset=["ticker", "earnings_date", "fiscal_period"],
-        keep="last",
-    )
+    payload = payload.sort_values(["ticker", "earnings_date", "fetched_at", "fiscal_period"])
+    payload = payload.drop_duplicates(subset=["ticker", "earnings_date"], keep="last")
 
     return payload[
         [
@@ -152,7 +149,7 @@ def publish_earnings_surfaces(
     history_result = publisher.upsert(
         "market_earnings_history",
         history_rows,
-        on_conflict="ticker,earnings_date,fiscal_period",
+        on_conflict="ticker,earnings_date",
     )
 
     rpc_result: dict[str, Any] | None = None

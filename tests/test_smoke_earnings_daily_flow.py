@@ -5,8 +5,9 @@ from datetime import UTC, datetime
 import pandas as pd
 
 from finance_data_ops.publish.client import RecordingPublisher
+from finance_data_ops.refresh.market_daily import RefreshRunResult
 from finance_data_ops.refresh.storage import table_path
-from flows.dataops_earnings_daily import run_dataops_earnings_daily
+from flows.dataops_earnings_daily import _build_asset_status_rows, run_dataops_earnings_daily
 
 
 class FakeEarningsProvider:
@@ -67,6 +68,8 @@ def test_smoke_earnings_refresh_publish_status(tmp_path) -> None:
     assert summary["refresh"]["earnings_daily"]["status"] == "fresh"
     assert summary["coverage"]["status"] == "fresh"
     assert summary["publish_failures"] == []
+    earnings_history_upsert = next(call for call in publisher.upserts if call["table"] == "market_earnings_history")
+    assert earnings_history_upsert["on_conflict"] == "ticker,earnings_date"
 
     status_upsert = next(call for call in publisher.upserts if call["table"] == "symbol_data_coverage")
     coverage_row = status_upsert["rows"][0]
@@ -81,3 +84,31 @@ def test_smoke_earnings_refresh_publish_status(tmp_path) -> None:
     orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_earnings_daily")
     assert orchestration_row["status"] == "success"
     assert sorted(orchestration_row["symbols_succeeded"]) == ["QQQ", "SPY"]
+
+
+def test_build_asset_status_rows_handles_empty_frames() -> None:
+    refresh_run = RefreshRunResult(
+        run_id="run_earnings_daily_test",
+        asset_name="market_earnings_events",
+        status="failed_hard",
+        started_at="2026-04-11T00:00:00+00:00",
+        ended_at="2026-04-11T00:01:00+00:00",
+        symbols_requested=["AAPL"],
+        symbols_succeeded=[],
+        symbols_failed=["AAPL"],
+        retry_exhausted_symbols=[],
+        rows_written=0,
+        error_messages=["provider returned zero earnings rows"],
+    )
+
+    rows = _build_asset_status_rows(
+        earnings_events=pd.DataFrame(),
+        earnings_history=pd.DataFrame(),
+        next_earnings=pd.DataFrame(),
+        refresh_run=refresh_run,
+        flow_run_id="run_dataops_earnings_daily_test",
+    )
+
+    assert len(rows) == 3
+    assert rows[0]["asset_key"] == "market_earnings_events"
+    assert rows[0]["freshness_status"] == "failed_hard"

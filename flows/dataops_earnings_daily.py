@@ -254,20 +254,10 @@ def _build_asset_status_rows(
     flow_run_id: str,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
-    events_last = pd.to_datetime(
-        earnings_events.get("fetched_at", earnings_events.get("ingested_at")),
-        utc=True,
-        errors="coerce",
-    ).max()
-    history_last = pd.to_datetime(
-        earnings_history.get("earnings_date"),
-        errors="coerce",
-    ).max()
-    next_last = pd.to_datetime(
-        next_earnings.get("updated_at"),
-        utc=True,
-        errors="coerce",
-    ).max()
+    events_col = "fetched_at" if "fetched_at" in earnings_events.columns else "ingested_at"
+    events_last = _frame_datetime_max(earnings_events, events_col, utc=True)
+    history_last = _frame_datetime_max(earnings_history, "earnings_date")
+    next_last = _frame_datetime_max(next_earnings, "updated_at", utc=True)
 
     events_state = classify_freshness(
         last_observed_at=events_last,
@@ -528,6 +518,16 @@ def _latest_earnings_date(frame: pd.DataFrame) -> str | None:
     if pd.isna(value):
         return None
     return pd.Timestamp(value).date().isoformat()
+
+
+def _frame_datetime_max(frame: pd.DataFrame, column: str, *, utc: bool = False) -> pd.Timestamp | None:
+    if frame.empty or column not in frame.columns:
+        return None
+    values = pd.to_datetime(frame[column], utc=utc, errors="coerce")
+    value = values.max() if hasattr(values, "max") else values
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value)
 
 
 def _symbol_values(frame: pd.DataFrame) -> list[str]:

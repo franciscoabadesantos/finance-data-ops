@@ -12,6 +12,10 @@ htmlcov/
 .venv/
 venv/
 
+# Local runtime/build artifacts
+data_cache/
+*.egg-info/
+
 # OS/editor
 .DS_Store
 .vscode/
