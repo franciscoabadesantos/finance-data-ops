@@ -90,7 +90,7 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     assert summary["refresh"]["market_daily"]["status"] == "fresh"
     assert summary["refresh"]["quotes_latest"]["status"] == "fresh"
     assert summary["coverage"]["status"] == "fresh"
-    assert len(summary["asset_status"]) == 3
+    assert len(summary["asset_status"]) == 4
     assert summary["publish_failures"] == []
 
     status_upsert = next(call for call in publisher.upserts if call["table"] == "symbol_data_coverage")
@@ -130,10 +130,22 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     }
     assert "high" not in history_row
 
+    asset_status_upsert = next(call for call in publisher.upserts if call["table"] == "data_asset_status")
+    pipeline_row = next(row for row in asset_status_upsert["rows"] if row["asset_key"] == "data_ops_publish_pipeline")
+    assert pipeline_row["freshness_status"] == "fresh"
+    assert pipeline_row["coverage_status"] == "fresh"
+    assert pipeline_row["last_success_at"] is not None
+    assert "success" in str(pipeline_row["reason"])
+
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     assert runs_upsert["rows"]
     for row in runs_upsert["rows"]:
         assert row["run_id"]
+    orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_market_daily")
+    assert orchestration_row["status"] == "success"
+    assert orchestration_row["symbols_requested"] == ["SPY", "QQQ"]
+    assert sorted(orchestration_row["symbols_succeeded"]) == ["QQQ", "SPY"]
+    assert orchestration_row["symbols_failed"] == []
 
 
 def test_smoke_publish_failure_still_attempts_status(tmp_path) -> None:
@@ -156,6 +168,11 @@ def test_smoke_publish_failure_still_attempts_status(tmp_path) -> None:
     assert "data_source_runs" in written_tables
     assert "data_asset_status" in written_tables
     assert "symbol_data_coverage" in written_tables
+
+    asset_status_upsert = next(call for call in publisher.upserts if call["table"] == "data_asset_status")
+    pipeline_row = next(row for row in asset_status_upsert["rows"] if row["asset_key"] == "data_ops_publish_pipeline")
+    assert pipeline_row["freshness_status"] == "failed_hard"
+    assert pipeline_row["coverage_status"] == "failed_hard"
 
 
 def test_publish_enabled_requires_supabase_env_without_injected_publisher(tmp_path, monkeypatch) -> None:

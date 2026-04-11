@@ -104,19 +104,6 @@ def run_dataops_market_daily(
     run_rows = [
         _refresh_run_to_row(prices_run),
         _refresh_run_to_row(quotes_run),
-        _flow_run_row(
-            run_id=flow_run_id,
-            job_name="dataops_market_daily",
-            source_type="orchestration",
-            scope=f"{start}:{end}",
-            flow_started_at=flow_started_at,
-            status=str(_overall_status(status_rows)),
-            context={
-                "symbols": normalized_symbols,
-                "start": start,
-                "end": end,
-            },
-        ),
     ]
 
     publisher_impl: Publisher
@@ -174,19 +161,45 @@ def run_dataops_market_daily(
                     },
                 )
             )
-        status_rows.append(
-            {
-                "asset_key": "data_ops_publish_pipeline",
-                "asset_type": "pipeline",
-                "provider": "data_ops",
-                "last_success_at": None,
-                "last_available_date": pd.Timestamp(end).date().isoformat(),
-                "freshness_status": FreshnessState.FAILED_HARD,
-                "coverage_status": FreshnessState.FAILED_HARD,
-                "reason": "publish_failure",
-                "updated_at": datetime.now(UTC).isoformat(),
-            }
+    status_rows.append(
+        _build_publish_pipeline_status_row(
+            run_id=flow_run_id,
+            as_of_date=end,
+            has_publish_failures=bool(publish_failures),
         )
+    )
+
+    symbols_succeeded = sorted(
+        {
+            str(row.get("ticker", "")).strip().upper()
+            for row in coverage_rows
+            if bool(row.get("market_data_available"))
+        }
+    )
+    symbols_failed = [symbol for symbol in normalized_symbols if symbol not in set(symbols_succeeded)]
+
+    overall_state = _overall_status(status_rows)
+    orchestration_status = _orchestration_run_status(
+        overall_state=overall_state,
+        has_publish_failures=bool(publish_failures),
+    )
+    run_rows.append(
+        _flow_run_row(
+            run_id=flow_run_id,
+            job_name="dataops_market_daily",
+            source_type="orchestration",
+            scope=f"{start}:{end}",
+            flow_started_at=flow_started_at,
+            status=orchestration_status,
+            context={
+                "symbols": normalized_symbols,
+                "symbols_succeeded": symbols_succeeded,
+                "symbols_failed": symbols_failed,
+                "start": start,
+                "end": end,
+            },
+        )
+    )
 
     status_result = _execute_publish_step(
         "status",
@@ -200,7 +213,6 @@ def run_dataops_market_daily(
     )
     publish_results["status"] = status_result
 
-    overall_state = _overall_status(status_rows)
     hard_failure = bool(publish_failures) or overall_state in {
         FreshnessState.FAILED_HARD,
         FreshnessState.FAILED_RETRYING,
@@ -314,7 +326,9 @@ def _flow_run_row(
     context: dict[str, Any],
 ) -> dict[str, Any]:
     normalized_status = str(status).strip().lower()
-    failure_classification = normalized_status if normalized_status in {"failed_hard", "failed_retrying"} else None
+    failure_classification = (
+        normalized_status if normalized_status in {"failed_hard", "failed_retrying", "failed"} else None
+    )
     details = json.dumps(context, default=str)
     return {
         "run_id": str(run_id),
@@ -329,8 +343,8 @@ def _flow_run_row(
         "error_message": details if failure_classification else None,
         "failure_classification": failure_classification,
         "symbols_requested": context.get("symbols", []),
-        "symbols_succeeded": [],
-        "symbols_failed": [],
+        "symbols_succeeded": context.get("symbols_succeeded", []),
+        "symbols_failed": context.get("symbols_failed", []),
         "error_messages": [details],
         "created_at": datetime.now(UTC).isoformat(),
     }
@@ -462,6 +476,45 @@ def _asset_reason(*, rows_written: int, run_id: str, errors: list[str]) -> str:
     if errors:
         return f"rows={rows_written}; run_id={run_id}; errors={'; '.join(errors)}"
     return f"rows={rows_written}; run_id={run_id}"
+
+
+def _orchestration_run_status(*, overall_state: str, has_publish_failures: bool) -> str:
+    if has_publish_failures:
+        return "failed"
+    if str(overall_state).strip().lower() in {FreshnessState.FAILED_HARD, FreshnessState.FAILED_RETRYING}:
+        return "failed"
+    return "success"
+
+
+def _build_publish_pipeline_status_row(
+    *,
+    run_id: str,
+    as_of_date: str,
+    has_publish_failures: bool,
+) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    if has_publish_failures:
+        freshness_status = FreshnessState.FAILED_HARD
+        coverage_status = FreshnessState.FAILED_HARD
+        reason = f"publish_failure; run_id={run_id}"
+        last_success_at = None
+    else:
+        freshness_status = FreshnessState.FRESH
+        coverage_status = FreshnessState.FRESH
+        reason = f"success; run_id={run_id}"
+        last_success_at = now.isoformat()
+
+    return {
+        "asset_key": "data_ops_publish_pipeline",
+        "asset_type": "pipeline",
+        "provider": "data_ops",
+        "last_success_at": last_success_at,
+        "last_available_date": pd.Timestamp(as_of_date).date().isoformat(),
+        "freshness_status": freshness_status,
+        "coverage_status": coverage_status,
+        "reason": reason,
+        "updated_at": now.isoformat(),
+    }
 
 
 def _overall_status(status_rows: list[dict[str, Any]]) -> str:
