@@ -94,24 +94,11 @@ def build_symbol_coverage_rows(
                 status = "failed_hard"
                 reason = "missing_market_price_and_quote"
         else:
-            if has_market_data and has_fundamentals and has_earnings:
-                status = "fresh"
-                reason = "market_fundamentals_earnings_available"
-            else:
-                missing_components: list[str] = []
-                if not has_market_data:
-                    missing_components.append("market_data")
-                if not has_fundamentals:
-                    missing_components.append("fundamentals")
-                if not has_earnings:
-                    missing_components.append("earnings")
-
-                if len(missing_components) == 3:
-                    status = "failed_hard"
-                    reason = "missing_market_data_fundamentals_earnings"
-                else:
-                    status = "partial"
-                    reason = f"missing_{'_'.join(missing_components)}"
+            status, reason = _multi_domain_coverage_status_reason(
+                has_market_data=has_market_data,
+                has_fundamentals=has_fundamentals,
+                has_earnings=has_earnings,
+            )
 
         rows.append(
             {
@@ -129,6 +116,50 @@ def build_symbol_coverage_rows(
             }
         )
     return rows
+
+
+def merge_symbol_coverage_rows_for_fundamentals(
+    *,
+    computed_rows: list[dict[str, object]],
+    existing_rows: list[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Merge fundamentals-domain updates onto existing rows without resetting other domains."""
+
+    if not computed_rows:
+        return []
+    if not existing_rows:
+        return computed_rows
+
+    existing_by_symbol: dict[str, dict[str, object]] = {}
+    for raw_row in existing_rows:
+        symbol = str(raw_row.get("ticker", "")).strip().upper()
+        if symbol:
+            existing_by_symbol[symbol] = raw_row
+
+    merged_rows: list[dict[str, object]] = []
+    for row in computed_rows:
+        symbol = str(row.get("ticker", "")).strip().upper()
+        existing = existing_by_symbol.get(symbol)
+        if existing is None:
+            merged_rows.append(row)
+            continue
+
+        merged = dict(row)
+        merged["market_data_available"] = bool(existing.get("market_data_available"))
+        merged["market_data_last_date"] = existing.get("market_data_last_date")
+        merged["earnings_available"] = bool(existing.get("earnings_available"))
+        merged["next_earnings_date"] = existing.get("next_earnings_date")
+        merged["signal_available"] = bool(existing.get("signal_available"))
+        status, reason = _multi_domain_coverage_status_reason(
+            has_market_data=bool(merged.get("market_data_available")),
+            has_fundamentals=bool(merged.get("fundamentals_available")),
+            has_earnings=bool(merged.get("earnings_available")),
+        )
+        merged["coverage_status"] = status
+        merged["reason"] = reason
+        merged_rows.append(merged)
+
+    return merged_rows
 
 
 def _latest_date_by_symbol(frame: pd.DataFrame | None, *, date_col: str) -> dict[str, str | None]:
@@ -203,3 +234,25 @@ def _max_date(*values: str | None) -> str | None:
     if not valid:
         return None
     return pd.Timestamp(max(valid)).date().isoformat()
+
+
+def _multi_domain_coverage_status_reason(
+    *,
+    has_market_data: bool,
+    has_fundamentals: bool,
+    has_earnings: bool,
+) -> tuple[str, str]:
+    if has_market_data and has_fundamentals and has_earnings:
+        return "fresh", "market_fundamentals_earnings_available"
+
+    missing_components: list[str] = []
+    if not has_market_data:
+        missing_components.append("market_data")
+    if not has_fundamentals:
+        missing_components.append("fundamentals")
+    if not has_earnings:
+        missing_components.append("earnings")
+
+    if len(missing_components) == 3:
+        return "failed_hard", "missing_market_data_fundamentals_earnings"
+    return "partial", f"missing_{'_'.join(missing_components)}"

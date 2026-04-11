@@ -117,3 +117,44 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_fundamentals_daily")
     assert orchestration_row["status"] == "success"
     assert sorted(orchestration_row["symbols_succeeded"]) == ["QQQ", "SPY"]
+
+
+def test_fundamentals_coverage_merge_preserves_existing_market_flags(tmp_path) -> None:
+    publisher = RecordingPublisher()
+    existing_rows = [
+        {
+            "ticker": "SPY",
+            "market_data_available": True,
+            "market_data_last_date": "2026-04-10",
+            "earnings_available": False,
+            "next_earnings_date": None,
+            "signal_available": False,
+        },
+        {
+            "ticker": "QQQ",
+            "market_data_available": True,
+            "market_data_last_date": "2026-04-10",
+            "earnings_available": False,
+            "next_earnings_date": None,
+            "signal_available": False,
+        },
+    ]
+
+    run_dataops_fundamentals_daily(
+        symbols=["SPY", "QQQ"],
+        cache_root=str(tmp_path),
+        publish_enabled=True,
+        provider=FakeFundamentalsProvider(),
+        publisher=publisher,
+        existing_symbol_coverage_rows=existing_rows,
+        raise_on_failed_hard=True,
+    )
+
+    status_upsert = next(call for call in publisher.upserts if call["table"] == "symbol_data_coverage")
+    rows_by_ticker = {row["ticker"]: row for row in status_upsert["rows"]}
+    assert rows_by_ticker["SPY"]["market_data_available"] is True
+    assert rows_by_ticker["SPY"]["fundamentals_available"] is True
+    assert rows_by_ticker["SPY"]["coverage_status"] == "partial"
+    assert rows_by_ticker["SPY"]["reason"] == "missing_earnings"
+    assert rows_by_ticker["QQQ"]["market_data_available"] is True
+    assert rows_by_ticker["QQQ"]["fundamentals_available"] is True

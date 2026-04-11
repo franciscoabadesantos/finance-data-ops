@@ -23,12 +23,16 @@ from finance_data_ops.ops.incidents import classify_failure
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
 from finance_data_ops.publish.client import Publisher, RecordingPublisher, SupabaseRestPublisher
 from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
-from finance_data_ops.publish.status import publish_status_surfaces
+from finance_data_ops.publish.status import fetch_symbol_data_coverage_rows, publish_status_surfaces
 from finance_data_ops.refresh.fundamentals_daily import refresh_fundamentals_daily
 from finance_data_ops.refresh.market_daily import RefreshRunResult
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.settings import load_settings
-from finance_data_ops.validation.coverage import assess_symbol_coverage, build_symbol_coverage_rows
+from finance_data_ops.validation.coverage import (
+    assess_symbol_coverage,
+    build_symbol_coverage_rows,
+    merge_symbol_coverage_rows_for_fundamentals,
+)
 from finance_data_ops.validation.freshness import FreshnessState, classify_freshness
 
 
@@ -39,6 +43,7 @@ def run_dataops_fundamentals_daily(
     publish_enabled: bool = True,
     provider: FundamentalsDataProvider | None = None,
     publisher: Publisher | None = None,
+    existing_symbol_coverage_rows: list[dict[str, object]] | None = None,
     max_attempts: int = 3,
     raise_on_failed_hard: bool = True,
 ) -> dict[str, Any]:
@@ -72,12 +77,24 @@ def run_dataops_fundamentals_daily(
     cached_quotes = read_parquet_table("market_quotes", cache_root=settings.cache_root, required=False)
     cached_earnings_events = read_parquet_table("market_earnings_events", cache_root=settings.cache_root, required=False)
 
+    existing_coverage_rows = list(existing_symbol_coverage_rows or [])
+    if publish_enabled and publisher is None and not existing_coverage_rows:
+        existing_coverage_rows = _load_existing_symbol_coverage_rows(
+            supabase_url=settings.supabase_url,
+            service_role_key=settings.supabase_service_role_key,
+            symbols=normalized_symbols,
+        )
+
     coverage_rows = build_symbol_coverage_rows(
         required_symbols=normalized_symbols,
         prices_frame=cached_prices,
         quotes_frame=cached_quotes,
         fundamentals_frame=cached_fundamentals,
         earnings_events_frame=cached_earnings_events,
+    )
+    coverage_rows = merge_symbol_coverage_rows_for_fundamentals(
+        computed_rows=coverage_rows,
+        existing_rows=existing_coverage_rows,
     )
     coverage_summary = assess_symbol_coverage(
         required_symbols=normalized_symbols,
@@ -237,15 +254,8 @@ def _build_asset_status_rows(
     flow_run_id: str,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
-    fundamentals_last = pd.to_datetime(
-        fundamentals_frame.get("period_end"),
-        errors="coerce",
-    ).max()
-    summary_last = pd.to_datetime(
-        fundamentals_summary.get("updated_at"),
-        utc=True,
-        errors="coerce",
-    ).max()
+    fundamentals_last = _frame_datetime_max(fundamentals_frame, "period_end")
+    summary_last = _frame_datetime_max(fundamentals_summary, "updated_at", utc=True)
 
     fundamentals_state = classify_freshness(
         last_observed_at=fundamentals_last,
@@ -500,6 +510,16 @@ def _latest_period_date(frame: pd.DataFrame) -> str | None:
     return pd.Timestamp(value).date().isoformat()
 
 
+def _frame_datetime_max(frame: pd.DataFrame, column: str, *, utc: bool = False) -> pd.Timestamp | None:
+    if frame.empty or column not in frame.columns:
+        return None
+    values = pd.to_datetime(frame[column], utc=utc, errors="coerce")
+    value = values.max() if hasattr(values, "max") else values
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value)
+
+
 def _symbol_values(frame: pd.DataFrame) -> list[str]:
     if frame.empty:
         return []
@@ -511,6 +531,25 @@ def _symbol_values(frame: pd.DataFrame) -> list[str]:
 
 def _parse_symbols(raw: str) -> list[str]:
     return [str(v).strip().upper() for v in str(raw).split(",") if str(v).strip()]
+
+
+def _load_existing_symbol_coverage_rows(
+    *,
+    supabase_url: str,
+    service_role_key: str,
+    symbols: list[str],
+) -> list[dict[str, object]]:
+    if not str(supabase_url).strip() or not str(service_role_key).strip():
+        return []
+    try:
+        rows = fetch_symbol_data_coverage_rows(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            tickers=symbols,
+        )
+        return [row for row in rows if isinstance(row, dict)]
+    except Exception:
+        return []
 
 
 def build_parser() -> argparse.ArgumentParser:
