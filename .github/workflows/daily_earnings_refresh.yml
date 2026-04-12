@@ -1,8 +1,6 @@
 name: Daily Earnings Refresh
 
 on:
-  schedule:
-    - cron: "20 3 * * 1-5"
   workflow_dispatch:
     inputs:
       symbols:

@@ -1,0 +1,308 @@
+name: finance-data-ops
+prefect-version: null
+
+build: []
+push: []
+pull: []
+
+deployments:
+  - name: market-daily
+    version: null
+    tags:
+      - dataops
+      - market
+      - daily
+    description: Data Ops market daily orchestration.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_market_daily_flow
+    parameters:
+      symbols: null
+      start: null
+      end: null
+      lookback_days: null
+      region: null
+    schedules:
+      - cron: "20 2 * * 1-5"
+        timezone: "UTC"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: fundamentals-daily
+    version: null
+    tags:
+      - dataops
+      - fundamentals
+      - daily
+    description: Data Ops fundamentals daily orchestration.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_fundamentals_daily_flow
+    parameters:
+      symbols: null
+      region: null
+    schedules:
+      - cron: "50 2 * * 1-5"
+        timezone: "UTC"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: earnings-daily
+    version: null
+    tags:
+      - dataops
+      - earnings
+      - daily
+    description: Data Ops earnings daily orchestration.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_earnings_daily_flow
+    parameters:
+      symbols: null
+      history_limit: 12
+      region: null
+    schedules:
+      - cron: "20 3 * * 1-5"
+        timezone: "UTC"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: ticker-backfill
+    version: null
+    tags:
+      - dataops
+      - backfill
+      - ticker
+      - event-driven
+    description: Targeted backfill orchestration for newly added tickers.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_backfill_flow
+    parameters:
+      ticker: null
+      start: null
+      end: null
+      history_limit: 24
+      region: null
+    concurrency_limit:
+      limit: 4
+      collision_strategy: ENQUEUE
+    work_pool:
+      name: dataops-pool
+      work_queue_name: ticker-backfill
+      job_variables: {}
+    triggers:
+      - type: event
+        enabled: true
+        match:
+          prefect.resource.role: ticker
+        expect:
+          - dataops.ticker.added
+        parameters:
+          ticker: "{{ event.payload.ticker }}"
+          region: "{{ event.payload.region }}"
+          start: "{{ event.payload.start }}"
+          end: "{{ event.payload.end }}"
+          history_limit: "{{ event.payload.history_limit }}"
+
+  - name: market-us
+    version: null
+    tags:
+      - dataops
+      - market
+      - us
+      - regional
+    description: Market flow for US region symbols and schedule.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_market_daily_flow
+    parameters:
+      symbols: null
+      start: null
+      end: null
+      lookback_days: null
+      region: us
+    schedules:
+      - cron: "15 17 * * 1-5"
+        timezone: "America/New_York"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: market-eu
+    version: null
+    tags:
+      - dataops
+      - market
+      - eu
+      - regional
+    description: Market flow for EU region symbols and schedule.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_market_daily_flow
+    parameters:
+      symbols: null
+      start: null
+      end: null
+      lookback_days: null
+      region: eu
+    schedules:
+      - cron: "45 18 * * 1-5"
+        timezone: "Europe/Paris"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: market-apac
+    version: null
+    tags:
+      - dataops
+      - market
+      - apac
+      - regional
+    description: Market flow for APAC region symbols and schedule.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_market_daily_flow
+    parameters:
+      symbols: null
+      start: null
+      end: null
+      lookback_days: null
+      region: apac
+    schedules:
+      - cron: "30 16 * * 1-5"
+        timezone: "Asia/Tokyo"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: fundamentals-us
+    version: null
+    tags:
+      - dataops
+      - fundamentals
+      - us
+      - regional
+    description: Fundamentals flow for US region symbols and schedule.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_fundamentals_daily_flow
+    parameters:
+      symbols: null
+      region: us
+    schedules:
+      - cron: "30 18 * * 1-5"
+        timezone: "America/New_York"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: fundamentals-eu
+    version: null
+    tags:
+      - dataops
+      - fundamentals
+      - eu
+      - regional
+    description: Fundamentals flow for EU region symbols and schedule.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_fundamentals_daily_flow
+    parameters:
+      symbols: null
+      region: eu
+    schedules:
+      - cron: "0 20 * * 1-5"
+        timezone: "Europe/Paris"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: fundamentals-apac
+    version: null
+    tags:
+      - dataops
+      - fundamentals
+      - apac
+      - regional
+    description: Fundamentals flow for APAC region symbols and schedule.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_fundamentals_daily_flow
+    parameters:
+      symbols: null
+      region: apac
+    schedules:
+      - cron: "45 17 * * 1-5"
+        timezone: "Asia/Tokyo"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: earnings-us
+    version: null
+    tags:
+      - dataops
+      - earnings
+      - us
+      - regional
+    description: Earnings flow for US region symbols and schedule.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_earnings_daily_flow
+    parameters:
+      symbols: null
+      history_limit: 12
+      region: us
+    schedules:
+      - cron: "45 18 * * 1-5"
+        timezone: "America/New_York"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: earnings-eu
+    version: null
+    tags:
+      - dataops
+      - earnings
+      - eu
+      - regional
+    description: Earnings flow for EU region symbols and schedule.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_earnings_daily_flow
+    parameters:
+      symbols: null
+      history_limit: 12
+      region: eu
+    schedules:
+      - cron: "15 20 * * 1-5"
+        timezone: "Europe/Paris"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}
+
+  - name: earnings-apac
+    version: null
+    tags:
+      - dataops
+      - earnings
+      - apac
+      - regional
+    description: Earnings flow for APAC region symbols and schedule.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_earnings_daily_flow
+    parameters:
+      symbols: null
+      history_limit: 12
+      region: apac
+    schedules:
+      - cron: "0 18 * * 1-5"
+        timezone: "Asia/Tokyo"
+        active: true
+    work_pool:
+      name: dataops-pool
+      work_queue_name: default
+      job_variables: {}

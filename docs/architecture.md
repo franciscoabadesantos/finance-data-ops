@@ -65,9 +65,16 @@ Those remain in the `Finance` repository.
 - Market: `flows/dataops_market_daily.py` / `scripts/run_market_daily.py`
 - Fundamentals: `flows/dataops_fundamentals_daily.py` / `scripts/run_fundamentals_daily.py`
 - Earnings: `flows/dataops_earnings_daily.py` / `scripts/run_earnings_daily.py`
+- Ticker backfill orchestration: `flows/prefect_dataops_daily.py:dataops_ticker_backfill_flow`
 
 Production scheduler automation is domain-separated to match those entrypoints:
 
-- Market workflow: `.github/workflows/daily_market_refresh.yml`
-- Fundamentals workflow: `.github/workflows/daily_fundamentals_refresh.yml`
-- Earnings workflow: `.github/workflows/daily_earnings_refresh.yml`
+- Primary scheduler: Prefect Cloud deployments defined in `prefect.yaml`
+  - Market: `market-daily` (+ regional `market-us`, `market-eu`, `market-apac`)
+  - Fundamentals: `fundamentals-daily` (+ regional `fundamentals-us`, `fundamentals-eu`, `fundamentals-apac`)
+  - Earnings: `earnings-daily` (+ regional `earnings-us`, `earnings-eu`, `earnings-apac`)
+  - Event-driven onboarding backfill: `ticker-backfill` (triggered by `dataops.ticker.added`)
+- GitHub Actions workflows remain for CI/manual backfills only:
+  - `.github/workflows/daily_market_refresh.yml`
+  - `.github/workflows/daily_fundamentals_refresh.yml`
+  - `.github/workflows/daily_earnings_refresh.yml`

@@ -1,0 +1,78 @@
+automations:
+  # If your workspace includes non-Data Ops flows, add match/match_related filters
+  # before applying these templates.
+  - name: Data Ops - Flow Failure Alert
+    description: Alert immediately when a Data Ops flow run fails.
+    enabled: true
+    trigger:
+      type: event
+      posture: Reactive
+      expect:
+        - prefect.flow-run.Failed
+        - prefect.flow-run.Crashed
+      threshold: 1
+    actions:
+      - type: send-notification
+        subject: "Data Ops flow failed: {{ flow.name }}"
+        body: |
+          Flow run {{ flow_run.name }} entered {{ flow_run.state.name }}.
+          Deployment: {{ deployment.name }}
+          UI: {{ flow_run|ui_url }}
+
+  - name: Data Ops - Repeated Failures Escalation
+    description: Escalate if multiple flow failures occur inside the lookback window.
+    enabled: true
+    trigger:
+      type: event
+      posture: Reactive
+      expect:
+        - prefect.flow-run.Failed
+        - prefect.flow-run.Crashed
+      threshold: 3
+      within: 21600
+    actions:
+      - type: send-notification
+        subject: "Data Ops escalation: repeated flow failures"
+        body: |
+          Three or more failed/crashed runs were observed in the last 6 hours.
+          Latest flow run: {{ flow_run.name }}
+          Deployment: {{ deployment.name }}
+          UI: {{ flow_run|ui_url }}
+
+  - name: Data Ops - Missed Schedule Alert
+    description: Alert when a scheduled flow run is late/missed.
+    enabled: true
+    trigger:
+      type: event
+      posture: Reactive
+      expect:
+        - prefect.flow-run.Late
+      threshold: 1
+    actions:
+      - type: send-notification
+        subject: "Data Ops schedule missed: {{ flow.name }}"
+        body: |
+          Flow run {{ flow_run.name }} is late.
+          Deployment: {{ deployment.name }}
+          UI: {{ flow_run|ui_url }}
+
+  - name: Data Ops - Long Running Flow Alert
+    description: Alert if a flow run does not complete within 45 minutes.
+    enabled: true
+    trigger:
+      type: event
+      posture: Proactive
+      expect:
+        - prefect.flow-run.Completed
+      threshold: 1
+      within: 2700
+      for_each:
+        - prefect.resource.id
+    actions:
+      - type: send-notification
+        subject: "Data Ops long-running flow detected"
+        body: |
+          A flow run has not completed within 45 minutes.
+          Flow run: {{ flow_run.name }}
+          Deployment: {{ deployment.name }}
+          UI: {{ flow_run|ui_url }}

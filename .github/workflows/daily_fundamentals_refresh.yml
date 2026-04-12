@@ -1,8 +1,6 @@
 name: Daily Fundamentals Refresh
 
 on:
-  schedule:
-    - cron: "50 2 * * 1-5"
   workflow_dispatch:
     inputs:
       symbols:

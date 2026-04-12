@@ -59,6 +59,7 @@ Optional:
 - `DATA_OPS_SYMBOL_BATCH_SIZE` (default `100`)
 - `DATA_OPS_CACHE_ROOT` (default `./data_cache`)
 - `DATA_OPS_ALERT_WEBHOOK_URL` (critical failure webhook)
+- `DATA_OPS_SYMBOLS_US` / `DATA_OPS_SYMBOLS_EU` / `DATA_OPS_SYMBOLS_APAC` (regional deployments)
 
 See [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example).
 
@@ -88,24 +89,51 @@ Status check:
 python scripts/validate_market_status.py
 ```
 
-## GitHub Actions automation
+## Prefect orchestration
 
-Production workflows now cover all three daily domains:
+Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
 
-- Market: [`.github/workflows/daily_market_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_market_refresh.yml)
-  - Purpose: price window backfills and daily quote refresh.
-  - Triggers: weekday schedule + `workflow_dispatch`.
-  - Inputs: optional `symbols`, `lookback_days`, `start`, `end`.
-- Fundamentals: [`.github/workflows/daily_fundamentals_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_fundamentals_refresh.yml)
-  - Purpose: provider-history fundamentals refresh/publish.
-  - Triggers: weekday schedule + `workflow_dispatch`.
-  - Inputs: optional `symbols`.
-- Earnings: [`.github/workflows/daily_earnings_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_earnings_refresh.yml)
-  - Purpose: next-event refresh plus bounded historical rows (`history_limit`).
-  - Triggers: weekday schedule + `workflow_dispatch`.
-  - Inputs: optional `symbols`, optional `history_limit`.
+- Prefect flow wrappers (orchestration only):
+  - [flows/prefect_dataops_daily.py](/home/franciscosantos/finance-data-ops/flows/prefect_dataops_daily.py)
+  - `dataops_market_daily`
+  - `dataops_fundamentals_daily`
+  - `dataops_earnings_daily`
+  - `dataops_ticker_backfill` (event-driven ticker onboarding backfill)
+- Deployment definitions:
+  - [prefect.yaml](/home/franciscosantos/finance-data-ops/prefect.yaml)
+  - Includes `market-daily`, `fundamentals-daily`, `earnings-daily`, `ticker-backfill`
+  - Includes region-aware variants: `*-us`, `*-eu`, `*-apac`
+- Prefect bootstrap script:
+  - [scripts/prefect_bootstrap.sh](/home/franciscosantos/finance-data-ops/scripts/prefect_bootstrap.sh)
+  - Creates `dataops-pool`, deploys `prefect.yaml`, and applies automation templates
+- Automation templates:
+  - [orchestration/prefect/automations.yaml](/home/franciscosantos/finance-data-ops/orchestration/prefect/automations.yaml)
 
-Each workflow remains independently runnable for targeted backfills and debugging.
+Install orchestration dependencies:
+
+```bash
+pip install -e ".[dev,orchestration]"
+```
+
+Deploy to Prefect Cloud:
+
+```bash
+./scripts/prefect_bootstrap.sh
+```
+
+Emit ticker-added event (triggers `ticker-backfill` deployment):
+
+```bash
+python scripts/emit_ticker_added_event.py AAPL --region us
+```
+
+Ticker backfill concurrency defaults to queued execution (`limit=4`) to protect providers during burst onboarding.
+
+GitHub Actions remains available for CI and manual domain backfills/debugging via `workflow_dispatch`:
+
+- [daily_market_refresh.yml](/home/franciscosantos/finance-data-ops/.github/workflows/daily_market_refresh.yml)
+- [daily_fundamentals_refresh.yml](/home/franciscosantos/finance-data-ops/.github/workflows/daily_fundamentals_refresh.yml)
+- [daily_earnings_refresh.yml](/home/franciscosantos/finance-data-ops/.github/workflows/daily_earnings_refresh.yml)
 
 Project aggregation (same pattern as `Finance` repo):
 
@@ -124,3 +152,4 @@ python scripts/run_project_aggregation.py --mode no-tests --ext .py .toml .md
 - Schema contract: [`docs/schema_contract.md`](/home/franciscosantos/finance-data-ops/docs/schema_contract.md)
 - Operations runbook: [`docs/operations.md`](/home/franciscosantos/finance-data-ops/docs/operations.md)
 - Migrations runbook: [`docs/migrations.md`](/home/franciscosantos/finance-data-ops/docs/migrations.md)
+- Prefect orchestration: [`docs/prefect_orchestration.md`](/home/franciscosantos/finance-data-ops/docs/prefect_orchestration.md)

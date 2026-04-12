@@ -20,21 +20,44 @@ Earnings:
 python scripts/run_earnings_daily.py
 ```
 
+Ticker onboarding backfill (Prefect wrapper flow):
+
+```bash
+python flows/prefect_dataops_daily.py ticker-backfill --ticker AAPL
+```
+
 Each flow performs refresh, derived summary generation, Supabase publish, and status/coverage updates.
 
-GitHub Actions production automation (weekday schedule + manual dispatch):
+Primary scheduler/orchestrator: Prefect Cloud (`prefect.yaml` deployments + `dataops-pool` worker).
 
-- Market workflow: [`.github/workflows/daily_market_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_market_refresh.yml)
-  - Price-window backfills and daily quote refresh.
-  - Optional manual inputs: `symbols`, `lookback_days`, `start`, `end`.
-- Fundamentals workflow: [`.github/workflows/daily_fundamentals_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_fundamentals_refresh.yml)
-  - Provider-history fundamentals refresh.
-  - Optional manual input: `symbols`.
-- Earnings workflow: [`.github/workflows/daily_earnings_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_earnings_refresh.yml)
-  - Next-event refresh plus bounded history via `history_limit`.
-  - Optional manual inputs: `symbols`, `history_limit`.
+Daily deployments (weekday schedules):
 
-Per-domain workflows are intentionally independent for targeted backfills and debugging.
+- Market:
+  - `market-daily`
+  - `market-us`, `market-eu`, `market-apac`
+- Fundamentals:
+  - `fundamentals-daily`
+  - `fundamentals-us`, `fundamentals-eu`, `fundamentals-apac`
+- Earnings:
+  - `earnings-daily`
+  - `earnings-us`, `earnings-eu`, `earnings-apac`
+
+Manual backfills/debugging remain available in GitHub Actions via `workflow_dispatch`:
+
+- [`.github/workflows/daily_market_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_market_refresh.yml)
+- [`.github/workflows/daily_fundamentals_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_fundamentals_refresh.yml)
+- [`.github/workflows/daily_earnings_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_earnings_refresh.yml)
+
+Ticker-added event trigger helper:
+
+```bash
+python scripts/emit_ticker_added_event.py AAPL --region us
+```
+
+Backfill queueing defaults:
+
+- deployment `ticker-backfill` uses queue `ticker-backfill`
+- deployment concurrency limit is `4` (`ENQUEUE`) to absorb burst ticker adds
 
 ## Required environment
 
@@ -49,6 +72,7 @@ Optional:
 - `DATA_OPS_SYMBOL_BATCH_SIZE`
 - `DATA_OPS_CACHE_ROOT`
 - `DATA_OPS_ALERT_WEBHOOK_URL`
+- `DATA_OPS_SYMBOLS_US` / `DATA_OPS_SYMBOLS_EU` / `DATA_OPS_SYMBOLS_APAC`
 
 ## Manual operations
 
@@ -87,10 +111,16 @@ Look for:
   - `fundamentals_last_date`
   - `earnings_available`
   - `next_earnings_date`
+- ticker onboarding status cache in `data_cache/ticker_backfill_status.parquet`:
+  - `ticker`
+  - `status`
+  - `failed_step`
+  - `last_success_at`
+  - note: local durability for Phase 1; promote to shared persistent ops storage in follow-up
 
 ## Failure triage
 
-1. Check workflow/script logs for refresh or publish step failures.
+1. Check Prefect deployment/flow-run logs (or manual GitHub workflow logs) for refresh or publish step failures.
 2. Inspect `data_source_runs.error_messages` and `failure_classification`.
 3. Inspect `data_asset_status.reason`, `freshness_status`, and `coverage_status`.
 4. Inspect `symbol_data_coverage.reason` for missing domain components.

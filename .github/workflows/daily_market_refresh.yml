@@ -1,8 +1,6 @@
 name: Daily Market Refresh
 
 on:
-  schedule:
-    - cron: "20 2 * * 1-5"
   workflow_dispatch:
     inputs:
       symbols:
