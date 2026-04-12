@@ -1,3 +1,11 @@
+# Top-level folder: .
+# Source files aggregated: 2
+
+# --------------------
+# File: README.md
+# Source folder: .
+# --------------------
+
 # finance-data-ops
 
 Data Ops service for Finance product-data domains.
@@ -105,3 +113,40 @@ python scripts/run_project_aggregation.py --mode no-tests --ext .py .toml .md
 - Schema contract: [`docs/schema_contract.md`](/home/franciscosantos/finance-data-ops/docs/schema_contract.md)
 - Operations runbook: [`docs/operations.md`](/home/franciscosantos/finance-data-ops/docs/operations.md)
 - Migrations runbook: [`docs/migrations.md`](/home/franciscosantos/finance-data-ops/docs/migrations.md)
+
+
+# --------------------
+# File: pyproject.toml
+# Source folder: .
+# --------------------
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finance-data-ops"
+version = "0.1.0"
+description = "Boundary-first Data Ops service for market data refresh, validation, and product data publishing."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pyarrow>=10.0",
+    "yfinance>=0.2",
+    "lxml>=4.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+

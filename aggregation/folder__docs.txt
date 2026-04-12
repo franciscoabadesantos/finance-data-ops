@@ -1,0 +1,329 @@
+# Top-level folder: docs
+# Source files aggregated: 4
+
+# --------------------
+# File: docs/architecture.md
+# Source folder: docs
+# --------------------
+
+# Data Ops v2 Architecture
+
+## System position
+
+`finance-data-ops` is the operational product-data backend.
+
+Flow per domain:
+
+1. Fetch from external providers (`providers/`)
+2. Normalize + persist canonical cache tables (`refresh/`)
+3. Compute frontend-serving summaries (`derived/`)
+4. Publish owned Supabase surfaces (`publish/`)
+5. Publish operational status + coverage (`data_source_runs`, `data_asset_status`, `symbol_data_coverage`)
+
+## Production boundary
+
+Only this repo performs provider fetching for owned product-data domains.
+
+This repo owns:
+
+- Market data refresh + publish (v1)
+- Fundamentals refresh + publish (v2)
+- Earnings refresh + publish (v2)
+- Frontend-serving product summaries derived from those domains
+- Freshness, coverage, and run-status publication for all three domains
+
+This repo does not own:
+
+- Research/training/backtests
+- Live inference/signal generation
+- Signal publication workflows
+
+Those remain in the `Finance` repository.
+
+## Owned Supabase surfaces
+
+### Market
+
+- `market_price_daily`
+- `market_quotes`
+- `market_quotes_history`
+- `mv_latest_prices` refresh RPC
+- `ticker_market_stats_snapshot`
+
+### Fundamentals
+
+- `market_fundamentals_v2` (canonical normalized history)
+- `mv_latest_fundamentals` (latest per `(ticker, metric)`)
+- `ticker_fundamental_summary` (frontend-serving denormalized snapshot)
+
+### Earnings
+
+- `market_earnings_events` (upcoming/scheduled events)
+- `market_earnings_history` (historical results)
+- `mv_next_earnings` (next event per ticker)
+
+### Operational
+
+- `data_source_runs`
+- `data_asset_status`
+- `symbol_data_coverage`
+
+## Operational entrypoints
+
+- Market: `flows/dataops_market_daily.py` / `scripts/run_market_daily.py`
+- Fundamentals: `flows/dataops_fundamentals_daily.py` / `scripts/run_fundamentals_daily.py`
+- Earnings: `flows/dataops_earnings_daily.py` / `scripts/run_earnings_daily.py`
+
+
+# --------------------
+# File: docs/migrations.md
+# Source folder: docs
+# --------------------
+
+# Migration runbook (Data Ops v2)
+
+## Purpose
+
+Prepare Supabase for Data Ops-owned market/fundamentals/earnings surfaces and operational metadata.
+
+## SQL sources
+
+Apply in order:
+
+- [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
+- [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
+
+Both scripts are idempotent (`create ... if not exists`, `add column if not exists`, guarded compatibility updates).
+
+## Existing surfaces expected before first run
+
+- `market_price_daily`
+- `market_quotes`
+- `market_quotes_history`
+- RPC/function `refresh_mv_latest_prices`
+
+## Surfaces created/owned by migrations
+
+- v1:
+  - `ticker_market_stats_snapshot`
+  - `data_source_runs`
+  - `data_asset_status`
+  - `symbol_data_coverage`
+- v2:
+  - `market_fundamentals_v2`
+  - `mv_latest_fundamentals` + `refresh_mv_latest_fundamentals`
+  - `ticker_fundamental_summary`
+  - `market_earnings_events`
+  - `market_earnings_history`
+  - `mv_next_earnings` + `refresh_mv_next_earnings`
+
+## Apply steps
+
+1. Open Supabase SQL editor (or run via migration tool).
+2. Execute `001_data_ops_v1_surfaces.sql`.
+3. Execute `002_data_ops_v2_fundamentals_earnings.sql`.
+4. Run dry flows:
+   - `python scripts/run_market_daily.py --symbols SPY --no-publish`
+   - `python scripts/run_fundamentals_daily.py --symbols SPY --no-publish`
+   - `python scripts/run_earnings_daily.py --symbols SPY --no-publish`
+5. Verify status rows update in `data_source_runs`, `data_asset_status`, `symbol_data_coverage`.
+
+
+# --------------------
+# File: docs/operations.md
+# Source folder: docs
+# --------------------
+
+# Operations runbook (Data Ops v2)
+
+## Daily jobs
+
+Market:
+
+```bash
+python scripts/run_market_daily.py
+```
+
+Fundamentals:
+
+```bash
+python scripts/run_fundamentals_daily.py
+```
+
+Earnings:
+
+```bash
+python scripts/run_earnings_daily.py
+```
+
+Each flow performs refresh, derived summary generation, Supabase publish, and status/coverage updates.
+
+## Required environment
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `DATA_OPS_SYMBOLS`
+
+Optional:
+
+- `DATA_OPS_LOOKBACK_DAYS`
+- `DATA_OPS_MAX_ATTEMPTS`
+- `DATA_OPS_SYMBOL_BATCH_SIZE`
+- `DATA_OPS_CACHE_ROOT`
+- `DATA_OPS_ALERT_WEBHOOK_URL`
+
+## Manual operations
+
+Fundamentals dry run:
+
+```bash
+python scripts/run_fundamentals_daily.py --symbols SPY,QQQ --no-publish
+```
+
+Earnings dry run:
+
+```bash
+python scripts/run_earnings_daily.py --symbols SPY,QQQ --no-publish
+```
+
+Market status check:
+
+```bash
+python scripts/validate_market_status.py
+```
+
+## Healthy run checks
+
+Look for:
+
+- flow exit code `0`
+- `data_source_runs` rows for refresh + orchestration jobs
+- `data_asset_status` rows for:
+  - `market_fundamentals_v2`
+  - `ticker_fundamental_summary`
+  - `market_earnings_events`
+  - `market_earnings_history`
+  - `mv_next_earnings`
+- `symbol_data_coverage` rows with populated:
+  - `fundamentals_available`
+  - `fundamentals_last_date`
+  - `earnings_available`
+  - `next_earnings_date`
+
+## Failure triage
+
+1. Check workflow/script logs for refresh or publish step failures.
+2. Inspect `data_source_runs.error_messages` and `failure_classification`.
+3. Inspect `data_asset_status.reason`, `freshness_status`, and `coverage_status`.
+4. Inspect `symbol_data_coverage.reason` for missing domain components.
+5. If configured, verify alert webhook delivery for unhealthy runs.
+
+
+# --------------------
+# File: docs/schema_contract.md
+# Source folder: docs
+# --------------------
+
+# Supabase schema contract (Data Ops v2)
+
+Data Ops now writes three product-data domains: market, fundamentals, earnings.
+
+## Existing market surfaces (v1)
+
+- `market_price_daily`
+- `market_quotes`
+- `market_quotes_history`
+- `mv_latest_prices` (RPC refresh path: `refresh_mv_latest_prices`)
+- `ticker_market_stats_snapshot`
+
+## Fundamentals surfaces (v2)
+
+- `market_fundamentals_v2` (canonical normalized history)
+- `mv_latest_fundamentals` (latest per `(ticker, metric)`)
+- `ticker_fundamental_summary` (frontend snapshot)
+
+`market_fundamentals_v2` write contract:
+
+- `ticker`
+- `period`
+- `period_end`
+- `metric`
+- `value`
+- `value_text`
+- `source`
+- `fetched_at`
+- upsert key: `ticker,period,period_end,metric`
+
+`ticker_fundamental_summary` write contract:
+
+- `ticker` (upsert key)
+- `latest_revenue`
+- `latest_eps`
+- `trailing_pe`
+- `market_cap`
+- `revenue_growth_yoy`
+- `earnings_growth_yoy`
+- `latest_period_end`
+- `source`
+- `updated_at`
+
+## Earnings surfaces (v2)
+
+- `market_earnings_events` (upcoming/scheduled)
+- `market_earnings_history` (historical results)
+- `mv_next_earnings` (next event per ticker)
+
+`market_earnings_events` write contract:
+
+- `ticker`
+- `earnings_date`
+- `earnings_time`
+- `fiscal_period`
+- `estimate_eps`
+- `estimate_revenue`
+- `source`
+- `fetched_at`
+- `created_at`
+- `updated_at`
+- upsert key: `ticker,earnings_date`
+
+`market_earnings_history` write contract:
+
+- `ticker`
+- `earnings_date`
+- `fiscal_period`
+- `actual_eps`
+- `estimate_eps`
+- `surprise_eps`
+- `actual_revenue`
+- `estimate_revenue`
+- `surprise_revenue`
+- `source`
+- `fetched_at`
+- `created_at`
+- `updated_at`
+- upsert key: `ticker,earnings_date`
+
+## Operational surfaces
+
+- `data_source_runs` (run trail for market/fundamentals/earnings refresh + publish)
+- `data_asset_status` (freshness/coverage per owned asset)
+- `symbol_data_coverage` (ticker coverage state)
+
+`symbol_data_coverage` required fields:
+
+- `ticker`
+- `market_data_available`
+- `fundamentals_available`
+- `earnings_available`
+- `signal_available`
+- `market_data_last_date`
+- `fundamentals_last_date`
+- `next_earnings_date`
+- `coverage_status`
+- `reason`
+- `updated_at`
+
+Migration file for v2 surfaces: [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
+
+
