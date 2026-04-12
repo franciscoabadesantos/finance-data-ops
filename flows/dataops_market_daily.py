@@ -387,21 +387,10 @@ def _build_asset_status_rows(
     quotes_run: RefreshRunResult,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
-    date_series = None
-    if isinstance(prices_frame, pd.DataFrame) and "date" in prices_frame.columns:
-        date_series = prices_frame["date"]
-
-    if date_series is None or len(date_series) == 0:
-        prices_last = None
-    else:
-        prices_last = pd.to_datetime(date_series, errors="coerce").max()
-
-    if prices_last is None:
-        # Optional signal hook for empty/malformed `prices_frame["date"]`.
-        pass
-
-    quotes_last = pd.to_datetime(quotes_frame.get("quote_ts"), utc=True, errors="coerce").max()
-    stats_last = pd.to_datetime(market_stats_frame.get("updated_at"), utc=True, errors="coerce").max()
+    prices_last = _frame_datetime_max(prices_frame, "date")
+    quote_time_column = "quote_ts" if "quote_ts" in quotes_frame.columns else "fetched_at"
+    quotes_last = _frame_datetime_max(quotes_frame, quote_time_column, utc=True)
+    stats_last = _frame_datetime_max(market_stats_frame, "updated_at", utc=True)
 
     price_state = classify_freshness(
         last_observed_at=prices_last,
@@ -484,6 +473,16 @@ def _provider_from_frame(frame: pd.DataFrame, *, fallback: str) -> str:
         return fallback
     providers = [str(value).strip() for value in frame["provider"].dropna().tolist() if str(value).strip()]
     return providers[0] if providers else fallback
+
+
+def _frame_datetime_max(frame: pd.DataFrame, column: str, *, utc: bool = False) -> pd.Timestamp | None:
+    if frame.empty or column not in frame.columns:
+        return None
+    values = pd.to_datetime(frame[column], utc=utc, errors="coerce")
+    value = values.max() if hasattr(values, "max") else values
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value)
 
 
 def _date_or_none(value: Any) -> str | None:

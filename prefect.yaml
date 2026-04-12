@@ -3,7 +3,10 @@ prefect-version: null
 
 build: []
 push: []
-pull: []
+pull:
+  - prefect.deployments.steps.git_clone:
+      repository: https://github.com/franciscoabadesantos/finance-data-ops.git
+      branch: main
 
 deployments:
   - name: market-daily
@@ -19,7 +22,7 @@ deployments:
       start: null
       end: null
       lookback_days: null
-      region: null
+      region: us
     schedules:
       - cron: "30 6 * * 1-5"
         timezone: "UTC"
@@ -33,7 +36,20 @@ deployments:
     work_pool:
       name: dataops-managed-pool
       work_queue_name: default
-      job_variables: {}
+      job_variables:
+        pip_packages:
+          - "numpy>=1.24"
+          - "pandas>=2.0"
+          - "pyarrow>=10.0"
+          - "yfinance>=0.2"
+          - "lxml>=4.9"
+        env:
+          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
+          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
+          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK.B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
+          DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
+          DATA_OPS_SYMBOLS_APAC: "TSM,BABA,JD,BIDU,EWJ,EWT,MCHI,NTES,SONY,KWEB,FXI,KORU,EWY,EWS,EWM,EPHE,VNM,IDX,THD,EIDO,ASEA,INDA,INFY,HDB,IBN,WIT,TTM,RDY,INDY,SMIN,EWA,BHP,RIO,CSL,WOW,WBC,ANZ,ASX,EZA,AFK,NGE,EGPT,GAF,EIS,ISRA,UAE,SAUD,QAT,KSA,EWZ,VALE,PBR,EWW,MELI,ILF,BAP,EC,CX,SBS,BBD,ARGT"
 
   - name: fundamentals-daily
     version: null
@@ -45,7 +61,7 @@ deployments:
     entrypoint: flows/prefect_dataops_daily.py:dataops_fundamentals_daily_flow
     parameters:
       symbols: null
-      region: null
+      region: us
     schedules:
       - cron: "0 3 * * 1-5"
         timezone: "UTC"
@@ -53,7 +69,20 @@ deployments:
     work_pool:
       name: dataops-managed-pool
       work_queue_name: default
-      job_variables: {}
+      job_variables:
+        pip_packages:
+          - "numpy>=1.24"
+          - "pandas>=2.0"
+          - "pyarrow>=10.0"
+          - "yfinance>=0.2"
+          - "lxml>=4.9"
+        env:
+          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
+          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
+          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK.B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
+          DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
+          DATA_OPS_SYMBOLS_APAC: "TSM,BABA,JD,BIDU,EWJ,EWT,MCHI,NTES,SONY,KWEB,FXI,KORU,EWY,EWS,EWM,EPHE,VNM,IDX,THD,EIDO,ASEA,INDA,INFY,HDB,IBN,WIT,TTM,RDY,INDY,SMIN,EWA,BHP,RIO,CSL,WOW,WBC,ANZ,ASX,EZA,AFK,NGE,EGPT,GAF,EIS,ISRA,UAE,SAUD,QAT,KSA,EWZ,VALE,PBR,EWW,MELI,ILF,BAP,EC,CX,SBS,BBD,ARGT"
 
   - name: earnings-daily
     version: null
@@ -66,7 +95,7 @@ deployments:
     parameters:
       symbols: null
       history_limit: 12
-      region: null
+      region: us
     schedules:
       - cron: "0 8 * * 1-5"
         timezone: "UTC"
@@ -77,7 +106,20 @@ deployments:
     work_pool:
       name: dataops-managed-pool
       work_queue_name: default
-      job_variables: {}
+      job_variables:
+        pip_packages:
+          - "numpy>=1.24"
+          - "pandas>=2.0"
+          - "pyarrow>=10.0"
+          - "yfinance>=0.2"
+          - "lxml>=4.9"
+        env:
+          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
+          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
+          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK.B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
+          DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
+          DATA_OPS_SYMBOLS_APAC: "TSM,BABA,JD,BIDU,EWJ,EWT,MCHI,NTES,SONY,KWEB,FXI,KORU,EWY,EWS,EWM,EPHE,VNM,IDX,THD,EIDO,ASEA,INDA,INFY,HDB,IBN,WIT,TTM,RDY,INDY,SMIN,EWA,BHP,RIO,CSL,WOW,WBC,ANZ,ASX,EZA,AFK,NGE,EGPT,GAF,EIS,ISRA,UAE,SAUD,QAT,KSA,EWZ,VALE,PBR,EWW,MELI,ILF,BAP,EC,CX,SBS,BBD,ARGT"
 
   - name: ticker-backfill
     version: null
@@ -99,7 +141,20 @@ deployments:
     work_pool:
       name: dataops-managed-pool
       work_queue_name: default
-      job_variables: {}
+      job_variables:
+        pip_packages:
+          - "numpy>=1.24"
+          - "pandas>=2.0"
+          - "pyarrow>=10.0"
+          - "yfinance>=0.2"
+          - "lxml>=4.9"
+        env:
+          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
+          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
+          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK.B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
+          DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
+          DATA_OPS_SYMBOLS_APAC: "TSM,BABA,JD,BIDU,EWJ,EWT,MCHI,NTES,SONY,KWEB,FXI,KORU,EWY,EWS,EWM,EPHE,VNM,IDX,THD,EIDO,ASEA,INDA,INFY,HDB,IBN,WIT,TTM,RDY,INDY,SMIN,EWA,BHP,RIO,CSL,WOW,WBC,ANZ,ASX,EZA,AFK,NGE,EGPT,GAF,EIS,ISRA,UAE,SAUD,QAT,KSA,EWZ,VALE,PBR,EWW,MELI,ILF,BAP,EC,CX,SBS,BBD,ARGT"
     triggers:
       - type: event
         enabled: true
