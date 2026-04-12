@@ -35,6 +35,7 @@ Owned Supabase surfaces:
   - `data_source_runs`
   - `data_asset_status`
   - `symbol_data_coverage`
+  - `ticker_registry` (validation + promotion status)
 
 `Finance` (research/signals repo) owns:
 
@@ -83,6 +84,12 @@ Earnings:
 python scripts/run_earnings_daily.py --no-publish
 ```
 
+Ticker validation:
+
+```bash
+python scripts/run_ticker_validation.py ANZ --region apac --instrument-type-hint equity --no-publish
+```
+
 Status check:
 
 ```bash
@@ -99,15 +106,17 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
   - `dataops_fundamentals_daily`
   - `dataops_earnings_daily`
   - `dataops_ticker_backfill` (event-driven ticker onboarding backfill)
+  - `dataops_ticker_validation` (on-demand symbol normalization + validation)
 - Deployment definitions:
   - [prefect.yaml](/home/franciscosantos/finance-data-ops/prefect.yaml)
-  - Includes exactly 4 deployments: `market-daily`, `fundamentals-daily`, `earnings-daily`, `ticker-backfill`
+  - Includes 5 deployments: `market-daily`, `fundamentals-daily`, `earnings-daily`, `ticker-backfill`, `ticker-validation`
   - Region is handled via deployment parameters/flow logic (`region`) instead of per-region deployments
   - Cadence strategy (weekday UTC):
     - Market: `06:30`, `14:30`, `22:30` (higher freshness priority)
     - Earnings: `08:00`, `20:00` (medium freshness priority)
     - Fundamentals: `03:00` (low-change domain, daily is sufficient)
     - Ticker backfill: event-driven only (`dataops.ticker.added`)
+    - Ticker validation: webhook/API-invoked from ticker onboarding path (no schedule)
 - Prefect bootstrap script:
   - [scripts/prefect_bootstrap.sh](/home/franciscosantos/finance-data-ops/scripts/prefect_bootstrap.sh)
   - Creates `dataops-managed-pool` (Prefect-managed execution), deploys `prefect.yaml`, and applies automation templates
@@ -132,6 +141,10 @@ Emit ticker-added event (triggers `ticker-backfill` deployment):
 python scripts/emit_ticker_added_event.py AAPL --region us
 ```
 
+Normalization config used by ticker validation:
+
+- [config/symbol_normalization.yml](/home/franciscosantos/finance-data-ops/config/symbol_normalization.yml)
+
 Ticker backfill concurrency defaults to queued execution (`limit=4`) to protect providers during burst onboarding.
 No always-on worker VM is required in this setup.
 
@@ -151,6 +164,7 @@ python scripts/run_project_aggregation.py --mode no-tests --ext .py .toml .md
 
 - v1: [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
 - v2: [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
+- v3: [`sql/003_ticker_registry.sql`](/home/franciscosantos/finance-data-ops/sql/003_ticker_registry.sql)
 
 ## Additional docs
 

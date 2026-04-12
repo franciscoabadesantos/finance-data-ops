@@ -1,0 +1,37 @@
+suffix_by_exchange:
+  ASX: ".AX"
+  HKEX: ".HK"
+  TSE: ".T"
+  NSE: ".NS"
+  BSE: ".BO"
+  LSE: ".L"
+  TSX: ".TO"
+  ETR: ".DE"
+  EPA: ".PA"
+  BIT: ".MI"
+
+explicit_overrides:
+  ANZ:
+    - "ANZ.AX"
+    - "ANZ"
+  WBC:
+    - "WBC.AX"
+    - "WBC"
+  WOW:
+    - "WOW.AX"
+    - "WOW"
+
+region_defaults:
+  us:
+    exchanges: []
+  eu:
+    exchanges:
+      - "LSE"
+      - "ETR"
+      - "EPA"
+      - "BIT"
+  apac:
+    exchanges:
+      - "ASX"
+      - "HKEX"
+      - "TSE"

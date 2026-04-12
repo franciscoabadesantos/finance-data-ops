@@ -30,8 +30,12 @@ from flows.dataops_earnings_daily import run_dataops_earnings_daily
 from flows.dataops_fundamentals_daily import run_dataops_fundamentals_daily
 from flows.dataops_market_daily import run_dataops_market_daily
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
+from finance_data_ops.publish.client import SupabaseRestPublisher
+from finance_data_ops.publish.ticker_registry import publish_ticker_registry
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.settings import DataOpsSettings, load_settings
+from finance_data_ops.validation.ticker_registry import upsert_ticker_registry_rows
+from finance_data_ops.validation.ticker_validation import run_single_ticker_validation
 
 REGION_SYMBOL_ENV = {
     "us": "DATA_OPS_SYMBOLS_US",
@@ -473,16 +477,97 @@ def dataops_ticker_backfill_flow(
         raise
 
 
+@flow(
+    name="dataops_ticker_validation",
+    retries=0,
+    log_prints=True,
+)
+def dataops_ticker_validation_flow(
+    *,
+    input_symbol: str,
+    region: str | None = None,
+    exchange: str | None = None,
+    instrument_type_hint: str | None = None,
+    history_limit: int | None = 12,
+    cache_root: str | None = None,
+    publish_registry: bool = True,
+) -> dict[str, Any]:
+    settings = load_settings(cache_root=cache_root)
+    logger = get_run_logger()
+
+    result = run_single_ticker_validation(
+        input_symbol=input_symbol,
+        region=str(region or "us").strip().lower(),
+        exchange=_normalize_optional_text(exchange),
+        instrument_type_hint=_normalize_optional_text(instrument_type_hint),
+        history_limit=int(history_limit or 12),
+    )
+
+    upsert_ticker_registry_rows(
+        cache_root=settings.cache_root,
+        rows=[result["registry_row"]],
+    )
+
+    remote_publish_result: dict[str, Any] = {"status": "skipped"}
+    if bool(publish_registry) and settings.supabase_url and settings.supabase_service_role_key:
+        publisher = SupabaseRestPublisher(
+            supabase_url=settings.supabase_url,
+            service_role_key=settings.supabase_service_role_key,
+        )
+        remote_publish_result = publish_ticker_registry(
+            publisher=publisher,
+            rows=[result["registry_row"]],
+        )
+    elif bool(publish_registry):
+        logger.info("Ticker registry remote publish skipped: SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY missing.")
+
+    selected = result.get("selected", {})
+    if str(selected.get("validation_status")) == "rejected":
+        payload = build_alert_payload(
+            severity="warning",
+            message="Ticker validation rejected symbol candidate.",
+            run_id=f"run_dataops_ticker_validation_{uuid4().hex[:12]}",
+            context={
+                "input_symbol": result.get("input_symbol"),
+                "region": result.get("region"),
+                "exchange": result.get("exchange"),
+                "selected": selected,
+            },
+        )
+        emit_alert(payload)
+        emit_alert_webhook(payload, webhook_url=settings.alert_webhook_url)
+
+    result["registry_persistence"] = {
+        "local_table": "ticker_registry",
+        "cache_root": str(settings.cache_root),
+        "remote": remote_publish_result,
+    }
+    return result
+
+
 def _build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Prefect Data Ops flows locally.")
     parser.add_argument(
         "domain",
-        choices=["market", "fundamentals", "earnings", "ticker-backfill"],
+        choices=["market", "fundamentals", "earnings", "ticker-backfill", "ticker-validation"],
         help="Domain flow to execute.",
     )
     parser.add_argument("--symbols", type=str, default=None, help="Comma-separated symbol universe override.")
     parser.add_argument("--ticker", type=str, default=None, help="Single ticker symbol for ticker-backfill flow.")
+    parser.add_argument(
+        "--input-symbol",
+        type=str,
+        default=None,
+        help="Single ticker symbol input for ticker-validation flow.",
+    )
     parser.add_argument("--region", type=str, default=None, help="Region key (us, eu, apac).")
+    parser.add_argument("--exchange", type=str, default=None, help="Optional exchange code (for example: ASX).")
+    parser.add_argument(
+        "--instrument-type-hint",
+        type=str,
+        default=None,
+        help="Optional instrument type hint (equity, adr, etf, index_proxy, country_fund, unknown).",
+    )
     parser.add_argument("--cache-root", type=str, default=None, help="Override local cache root.")
     parser.add_argument("--max-attempts", type=int, default=None, help="Retry attempts override.")
     parser.add_argument("--no-publish", action="store_true", help="Skip Supabase publishing.")
@@ -525,17 +610,28 @@ def main() -> None:
             history_limit=int(args.history_limit or 12),
         )
     else:
-        result = dataops_ticker_backfill_flow(
-            ticker=str(args.ticker or "").strip(),
-            start=args.start,
-            end=args.end,
-            history_limit=int(args.history_limit or DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT),
-            region=args.region,
-            cache_root=args.cache_root,
-            max_attempts=args.max_attempts,
-            publish_enabled=not bool(args.no_publish),
-            allow_unhealthy=bool(args.allow_unhealthy),
-        )
+        if args.domain == "ticker-backfill":
+            result = dataops_ticker_backfill_flow(
+                ticker=str(args.ticker or "").strip(),
+                start=args.start,
+                end=args.end,
+                history_limit=int(args.history_limit or DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT),
+                region=args.region,
+                cache_root=args.cache_root,
+                max_attempts=args.max_attempts,
+                publish_enabled=not bool(args.no_publish),
+                allow_unhealthy=bool(args.allow_unhealthy),
+            )
+        else:
+            result = dataops_ticker_validation_flow(
+                input_symbol=str(args.input_symbol or args.ticker or "").strip(),
+                region=str(args.region or "").strip(),
+                exchange=args.exchange,
+                instrument_type_hint=args.instrument_type_hint,
+                history_limit=int(args.history_limit or 12),
+                cache_root=args.cache_root,
+                publish_registry=not bool(args.no_publish),
+            )
     print(json.dumps(result, indent=2, default=str))
 
 

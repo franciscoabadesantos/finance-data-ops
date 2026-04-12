@@ -6,6 +6,7 @@ from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
 from finance_data_ops.publish.prices import publish_prices_surfaces
 from finance_data_ops.publish.product_metrics import publish_product_metrics
 from finance_data_ops.publish.status import publish_status_surfaces
+from finance_data_ops.publish.ticker_registry import publish_ticker_registry
 
 __all__ = [
     "SupabaseRestPublisher",
@@ -15,4 +16,5 @@ __all__ = [
     "publish_fundamentals_surfaces",
     "publish_earnings_surfaces",
     "publish_status_surfaces",
+    "publish_ticker_registry",
 ]

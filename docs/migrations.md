@@ -10,6 +10,7 @@ Apply in order:
 
 - [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
 - [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
+- [`sql/003_ticker_registry.sql`](/home/franciscosantos/finance-data-ops/sql/003_ticker_registry.sql)
 
 Both scripts are idempotent (`create ... if not exists`, `add column if not exists`, guarded compatibility updates).
 
@@ -40,8 +41,10 @@ Both scripts are idempotent (`create ... if not exists`, `add column if not exis
 1. Open Supabase SQL editor (or run via migration tool).
 2. Execute `001_data_ops_v1_surfaces.sql`.
 3. Execute `002_data_ops_v2_fundamentals_earnings.sql`.
-4. Run dry flows:
+4. Execute `003_ticker_registry.sql`.
+5. Run dry flows:
    - `python scripts/run_market_daily.py --symbols SPY --no-publish`
    - `python scripts/run_fundamentals_daily.py --symbols SPY --no-publish`
    - `python scripts/run_earnings_daily.py --symbols SPY --no-publish`
-5. Verify status rows update in `data_source_runs`, `data_asset_status`, `symbol_data_coverage`.
+   - `python flows/prefect_dataops_daily.py ticker-validation --input-symbol SPY --region us --no-publish`
+6. Verify status rows update in `data_source_runs`, `data_asset_status`, `symbol_data_coverage` and `ticker_registry`.

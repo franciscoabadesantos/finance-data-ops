@@ -43,13 +43,15 @@ deployments:
           - "pyarrow>=10.0"
           - "yfinance>=0.2"
           - "lxml>=4.9"
+          - "PyYAML>=6.0"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
           SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
           DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK.B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
           DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
-          DATA_OPS_SYMBOLS_APAC: "TSM,BABA,JD,BIDU,EWJ,EWT,MCHI,NTES,SONY,KWEB,FXI,KORU,EWY,EWS,EWM,EPHE,VNM,IDX,THD,EIDO,ASEA,INDA,INFY,HDB,IBN,WIT,TTM,RDY,INDY,SMIN,EWA,BHP,RIO,CSL,WOW,WBC,ANZ,ASX,EZA,AFK,NGE,EGPT,GAF,EIS,ISRA,UAE,SAUD,QAT,KSA,EWZ,VALE,PBR,EWW,MELI,ILF,BAP,EC,CX,SBS,BBD,ARGT"
+          # APAC market exclusions (provider compatibility): TTM,WOW,WBC,SAUD,ANZ,EGPT,GAF
+          DATA_OPS_SYMBOLS_APAC: "TSM,BABA,SONY,INFY,HDB"
 
   - name: fundamentals-daily
     version: null
@@ -76,6 +78,7 @@ deployments:
           - "pyarrow>=10.0"
           - "yfinance>=0.2"
           - "lxml>=4.9"
+          - "PyYAML>=6.0"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
           SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
@@ -113,6 +116,7 @@ deployments:
           - "pyarrow>=10.0"
           - "yfinance>=0.2"
           - "lxml>=4.9"
+          - "PyYAML>=6.0"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
           SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
@@ -148,6 +152,7 @@ deployments:
           - "pyarrow>=10.0"
           - "yfinance>=0.2"
           - "lxml>=4.9"
+          - "PyYAML>=6.0"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
           SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
@@ -168,3 +173,37 @@ deployments:
           start: "{{ event.payload.start }}"
           end: "{{ event.payload.end }}"
           history_limit: "{{ event.payload.history_limit }}"
+
+  - name: ticker-validation
+    version: null
+    tags:
+      - dataops
+      - validation
+      - ticker
+      - onboarding
+    description: Symbol normalization and domain validation before production promotion (API/webhook-invoked).
+    entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_validation_flow
+    parameters:
+      region: us
+      exchange: null
+      instrument_type_hint: null
+      history_limit: 12
+      publish_registry: true
+    concurrency_limit:
+      limit: 8
+      collision_strategy: ENQUEUE
+    work_pool:
+      name: dataops-managed-pool
+      work_queue_name: default
+      job_variables:
+        pip_packages:
+          - "numpy>=1.24"
+          - "pandas>=2.0"
+          - "pyarrow>=10.0"
+          - "yfinance>=0.2"
+          - "lxml>=4.9"
+          - "PyYAML>=6.0"
+        env:
+          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
+          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"

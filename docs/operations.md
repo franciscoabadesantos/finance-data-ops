@@ -26,11 +26,18 @@ Ticker onboarding backfill (Prefect wrapper flow):
 python flows/prefect_dataops_daily.py ticker-backfill --ticker AAPL
 ```
 
-Each flow performs refresh, derived summary generation, Supabase publish, and status/coverage updates.
+Ticker symbol validation (Prefect wrapper flow):
+
+```bash
+python flows/prefect_dataops_daily.py ticker-validation --input-symbol ANZ --region apac --instrument-type-hint equity --no-publish
+```
+
+Daily domain flows perform refresh, derived summary generation, Supabase publish, and status/coverage updates.
+Ticker validation flow performs normalization + support checks and writes `ticker_registry`.
 
 Primary scheduler/orchestrator: Prefect Cloud managed execution (`prefect.yaml` deployments + `dataops-managed-pool`).
 
-Prefect deployments (4 total):
+Prefect deployments (5 total):
 
 - Market:
   - `market-daily`
@@ -40,6 +47,8 @@ Prefect deployments (4 total):
   - `earnings-daily`
 - Ticker onboarding:
   - `ticker-backfill` (event-driven)
+- Ticker validation:
+  - `ticker-validation` (on-demand)
 
 Cadence (weekday UTC):
 
@@ -47,6 +56,7 @@ Cadence (weekday UTC):
 - Earnings `earnings-daily`: `08:00`, `20:00` (medium frequency)
 - Fundamentals `fundamentals-daily`: `03:00` (slow-moving domain)
 - Ticker onboarding `ticker-backfill`: event-driven only
+- Ticker validation `ticker-validation`: webhook/API-invoked from onboarding path (no schedule)
 
 Manual backfills/debugging remain available in GitHub Actions via `workflow_dispatch`:
 
@@ -64,6 +74,12 @@ Backfill queueing defaults:
 
 - deployment `ticker-backfill` concurrency limit is `4` (`ENQUEUE`) to absorb burst ticker adds
 - region is passed per-run via `region` parameter/event payload (not separate deployments)
+
+Validation queueing defaults:
+
+- deployment `ticker-validation` concurrency limit is `8` (`ENQUEUE`) to validate symbol candidates in parallel
+- market validation includes quote publish-safety precheck (`price`/`change` required before promotion)
+- validation rows are persisted to `ticker_registry` (Supabase when configured; local cache fallback table `ticker_registry.parquet`)
 
 ## Required environment
 
@@ -92,6 +108,12 @@ Earnings dry run:
 
 ```bash
 python scripts/run_earnings_daily.py --symbols SPY,QQQ --no-publish
+```
+
+Ticker validation dry run:
+
+```bash
+python scripts/run_ticker_validation.py ANZ --region apac --instrument-type-hint equity --no-publish
 ```
 
 Market status check:

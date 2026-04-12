@@ -83,6 +83,7 @@ Data Ops now writes three product-data domains: market, fundamentals, earnings.
 - `data_source_runs` (run trail for market/fundamentals/earnings refresh + publish)
 - `data_asset_status` (freshness/coverage per owned asset)
 - `symbol_data_coverage` (ticker coverage state)
+- `ticker_registry` (symbol normalization + validation registry)
 
 `symbol_data_coverage` required fields:
 
@@ -98,4 +99,24 @@ Data Ops now writes three product-data domains: market, fundamentals, earnings.
 - `reason`
 - `updated_at`
 
+`ticker_registry` required fields:
+
+- `registry_key` (upsert key)
+- `input_symbol`
+- `normalized_symbol`
+- `region`
+- `exchange`
+- `instrument_type`
+- `status`
+- `market_supported`
+- `fundamentals_supported`
+- `earnings_supported`
+- `validation_status`
+- `validation_reason`
+- `promotion_status`
+- `last_validated_at`
+- `notes`
+- `updated_at`
+
 Migration file for v2 surfaces: [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
+Migration file for ticker registry: [`sql/003_ticker_registry.sql`](/home/franciscosantos/finance-data-ops/sql/003_ticker_registry.sql)

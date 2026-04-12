@@ -22,6 +22,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Custom event name expected by Prefect trigger.",
     )
     parser.add_argument("--region", type=str, default=None, help="Optional region hint (us, eu, apac).")
+    parser.add_argument("--exchange", type=str, default=None, help="Optional exchange hint (for example: ASX).")
+    parser.add_argument(
+        "--instrument-type-hint",
+        type=str,
+        default=None,
+        help="Optional instrument hint (equity, adr, etf, index_proxy, country_fund, unknown).",
+    )
     parser.add_argument("--start", type=str, default=None, help="Optional market backfill start YYYY-MM-DD.")
     parser.add_argument("--end", type=str, default=None, help="Optional market backfill end YYYY-MM-DD.")
     parser.add_argument("--history-limit", type=int, default=None, help="Optional earnings history limit override.")
@@ -46,7 +53,9 @@ def main() -> None:
     payload: dict[str, object] = {
         "ticker": ticker,
         "requested_at": datetime.now(UTC).isoformat(),
-        "region": (str(args.region).strip().lower() if args.region else None),
+        "region": (str(args.region).strip().lower() if args.region else "us"),
+        "exchange": (str(args.exchange).strip().upper() if args.exchange else None),
+        "instrument_type_hint": (str(args.instrument_type_hint).strip().lower() if args.instrument_type_hint else None),
         "start": (str(args.start).strip() if args.start else None),
         "end": (str(args.end).strip() if args.end else None),
         "history_limit": (int(args.history_limit) if args.history_limit is not None else None),

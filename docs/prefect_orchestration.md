@@ -20,6 +20,7 @@ Wrapped domains:
 - `dataops_fundamentals_daily`
 - `dataops_earnings_daily`
 - `dataops_ticker_backfill`
+- `dataops_ticker_validation`
 
 Default flow-level retries (orchestration only):
 
@@ -27,6 +28,7 @@ Default flow-level retries (orchestration only):
 - Fundamentals: `retries=1`, `retry_delay_seconds=900`
 - Earnings: `retries=2`, `retry_delay_seconds=600`
 - Ticker backfill: `retries=0` (step-level failures are surfaced immediately with alerts)
+- Ticker validation: `retries=0` (validation result should be explicit and deterministic per symbol input)
 
 These wrappers delegate to existing orchestration functions:
 
@@ -41,6 +43,7 @@ python flows/prefect_dataops_daily.py market --region us --lookback-days 400
 python flows/prefect_dataops_daily.py fundamentals --region eu
 python flows/prefect_dataops_daily.py earnings --region apac --history-limit 12
 python flows/prefect_dataops_daily.py ticker-backfill --ticker AAPL
+python flows/prefect_dataops_daily.py ticker-validation --input-symbol ANZ --region apac --instrument-type-hint equity
 ```
 
 ## Deployments
@@ -55,6 +58,7 @@ Base deployments:
 - `fundamentals-daily` (args: `symbols`)
 - `earnings-daily` (args: `symbols`, `history_limit`)
 - `ticker-backfill` (args: `ticker`, optional `start`, `end`, `history_limit`)
+- `ticker-validation` (args: `input_symbol`, `region`, optional `exchange`, `instrument_type_hint`)
 
 Cadence strategy (weekday UTC):
 
@@ -62,6 +66,7 @@ Cadence strategy (weekday UTC):
 - Earnings (`earnings-daily`): `08:00`, `20:00`
 - Fundamentals (`fundamentals-daily`): `03:00`
 - Ticker backfill (`ticker-backfill`): event-driven only
+- Ticker validation (`ticker-validation`): onboarding webhook/API invoked (no schedule)
 
 Rationale:
 
@@ -119,6 +124,32 @@ Ticker normalization contract:
 - accepted format: plain uppercase symbol (for example: `AAPL`, `BRK.B`, `RDS-A`)
 - rejected: prefixed or mixed-format identifiers (for example: `ticker:AAPL`, `us/AAPL`)
 
+## Ticker validation flow
+
+Ticker validation flow behavior:
+
+1. Generate ordered candidate symbols from [`config/symbol_normalization.yml`](/home/franciscosantos/finance-data-ops/config/symbol_normalization.yml)
+2. Validate market support (daily + latest quotes)
+3. Enforce market publish-safety precheck (`market_quotes` required fields `price`, `change`)
+4. Validate fundamentals support
+5. Validate earnings support
+6. Select best candidate by validation status/score
+7. Persist result in registry (`ticker_registry`)
+
+Validation status outputs:
+
+- `pending_validation`
+- `validated_market_only`
+- `validated_full`
+- `rejected`
+
+Instrument types and domain policy:
+
+- `equity` / `adr`: market required; fundamentals/earnings preferred
+- `etf` / `country_fund`: market required; fundamentals/earnings optional
+- `index_proxy`: market required; fundamentals/earnings optional
+- `unknown`: market required; fundamentals/earnings optional
+
 ## Batch-add behavior and queueing
 
 High-volume ticker adds are buffered by Prefect queueing:
@@ -129,6 +160,13 @@ High-volume ticker adds are buffered by Prefect queueing:
 When many `dataops.ticker.added` events arrive in a short interval, runs queue
 instead of executing all at once, which limits provider load.
 
+Validation queueing:
+
+- deployment: `ticker-validation`
+- deployment concurrency limit: `8` with `ENQUEUE` collision strategy
+- invoke with Prefect deployment run API/CLI from ticker onboarding events
+- note: this avoids consuming extra Prefect Cloud Hobby automation slots
+
 ## Region symbol universes
 
 Flow wrappers resolve symbols in this order:
@@ -138,6 +176,17 @@ Flow wrappers resolve symbols in this order:
 3. Default `DATA_OPS_SYMBOLS`
 
 This enables separate symbol sets per region without changing domain logic.
+
+APAC market exclusions are tracked explicitly during production-universe cleanup.
+These exclusions currently apply to the `market-daily` APAC symbol universe only:
+
+- `TTM`
+- `WOW`
+- `WBC`
+- `SAUD`
+- `ANZ`
+- `EGPT`
+- `GAF`
 
 ## Work pool
 
