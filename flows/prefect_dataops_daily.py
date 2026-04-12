@@ -18,6 +18,7 @@ from uuid import uuid4
 
 import pandas as pd
 from prefect import flow, get_run_logger
+from prefect.deployments import run_deployment
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = REPO_ROOT / "src"
@@ -34,25 +35,17 @@ from finance_data_ops.publish.client import SupabaseRestPublisher
 from finance_data_ops.publish.ticker_registry import publish_ticker_registry
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.settings import DataOpsSettings, load_settings
-from finance_data_ops.validation.ticker_registry import upsert_ticker_registry_rows
+from finance_data_ops.validation.ticker_registry import (
+    build_pending_registry_row,
+    fetch_registry_row_by_key,
+    is_promotable_registry_row,
+    upsert_ticker_registry_rows,
+)
+from finance_data_ops.validation.symbol_resolution import resolve_symbols
 from finance_data_ops.validation.ticker_validation import run_single_ticker_validation
-
-REGION_SYMBOL_ENV = {
-    "us": "DATA_OPS_SYMBOLS_US",
-    "eu": "DATA_OPS_SYMBOLS_EU",
-    "apac": "DATA_OPS_SYMBOLS_APAC",
-}
 DEFAULT_TICKER_BACKFILL_YEARS = 5
 DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT = 24
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
-
-
-def _parse_symbols(raw: str | list[str] | None) -> list[str]:
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return [str(v).strip().upper() for v in raw if str(v).strip()]
-    return [str(v).strip().upper() for v in str(raw).split(",") if str(v).strip()]
 
 
 def _resolve_symbols(
@@ -61,18 +54,12 @@ def _resolve_symbols(
     region: str | None,
     settings: DataOpsSettings,
 ) -> list[str]:
-    parsed_symbols = _parse_symbols(symbols)
-    if parsed_symbols:
-        return parsed_symbols
-
-    normalized_region = str(region or "").strip().lower()
-    if normalized_region:
-        region_env_key = REGION_SYMBOL_ENV.get(normalized_region, f"DATA_OPS_SYMBOLS_{normalized_region.upper()}")
-        region_symbols = _parse_symbols(os.environ.get(region_env_key))
-        if region_symbols:
-            return region_symbols
-
-    return list(settings.default_symbols)
+    return resolve_symbols(
+        symbols=symbols,
+        region=region,
+        settings=settings,
+        env=dict(os.environ),
+    )
 
 
 def _resolve_market_window(
@@ -545,15 +532,173 @@ def dataops_ticker_validation_flow(
     return result
 
 
+@flow(
+    name="dataops_ticker_onboarding",
+    retries=0,
+    log_prints=True,
+)
+def dataops_ticker_onboarding_flow(
+    *,
+    input_symbol: str,
+    region: str | None = None,
+    exchange: str | None = None,
+    instrument_type_hint: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    history_limit: int | None = None,
+    cache_root: str | None = None,
+    publish_enabled: bool = True,
+    validation_deployment_name: str = "dataops_ticker_validation/ticker-validation",
+    backfill_deployment_name: str = "dataops_ticker_backfill/ticker-backfill",
+    deployment_timeout_seconds: int = 7200,
+) -> dict[str, Any]:
+    settings = load_settings(cache_root=cache_root)
+    normalized_input = _normalize_ticker(input_symbol)
+    normalized_region = str(region or "us").strip().lower()
+    normalized_exchange = _normalize_optional_text(exchange)
+    normalized_hint = _normalize_optional_text(instrument_type_hint)
+    resolved_history_limit = int(history_limit or DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT)
+    logger = get_run_logger()
+
+    pending_row = build_pending_registry_row(
+        input_symbol=normalized_input,
+        region=normalized_region,
+        exchange=normalized_exchange,
+        instrument_type=str(normalized_hint or "unknown"),
+    )
+    upsert_ticker_registry_rows(
+        cache_root=settings.cache_root,
+        rows=[pending_row],
+    )
+
+    pending_publish_result: dict[str, Any] = {"status": "skipped"}
+    if bool(publish_enabled) and settings.supabase_url and settings.supabase_service_role_key:
+        publisher = SupabaseRestPublisher(
+            supabase_url=settings.supabase_url,
+            service_role_key=settings.supabase_service_role_key,
+        )
+        pending_publish_result = publish_ticker_registry(
+            publisher=publisher,
+            rows=[pending_row],
+        )
+
+    logger.info(
+        "Starting onboarding validation deployment (ticker=%s, region=%s, exchange=%s).",
+        normalized_input,
+        normalized_region,
+        str(normalized_exchange or "default"),
+    )
+    validation_run = run_deployment(
+        validation_deployment_name,
+        parameters={
+            "input_symbol": normalized_input,
+            "region": normalized_region,
+            "exchange": normalized_exchange,
+            "instrument_type_hint": normalized_hint,
+            "history_limit": 12,
+            "publish_registry": bool(publish_enabled),
+        },
+        timeout=float(deployment_timeout_seconds),
+        poll_interval=10,
+        flow_run_name=f"onboarding-validate-{normalized_input.lower()}",
+    )
+    validation_state = str(validation_run.state_name or "")
+
+    registry_row = fetch_registry_row_by_key(
+        registry_key=str(pending_row["registry_key"]),
+        cache_root=settings.cache_root,
+        supabase_url=settings.supabase_url,
+        service_role_key=settings.supabase_service_role_key,
+    )
+    if str(validation_state).lower() != "completed":
+        fallback_row = build_pending_registry_row(
+            input_symbol=normalized_input,
+            region=normalized_region,
+            exchange=normalized_exchange,
+            instrument_type=str(normalized_hint or "unknown"),
+        )
+        fallback_row.update(
+            {
+                "status": "rejected",
+                "validation_status": "rejected",
+                "promotion_status": "rejected",
+                "validation_reason": f"validation_flow_state_{str(validation_state).lower()}",
+                "notes": f"validation_flow_failed state={validation_state}",
+            }
+        )
+        upsert_ticker_registry_rows(cache_root=settings.cache_root, rows=[fallback_row])
+        if bool(publish_enabled) and settings.supabase_url and settings.supabase_service_role_key:
+            publisher = SupabaseRestPublisher(
+                supabase_url=settings.supabase_url,
+                service_role_key=settings.supabase_service_role_key,
+            )
+            publish_ticker_registry(publisher=publisher, rows=[fallback_row])
+        registry_row = fallback_row
+
+    promotable = is_promotable_registry_row(registry_row)
+    if not promotable:
+        logger.info(
+            "Ticker onboarding rejected (ticker=%s, reason=%s).",
+            normalized_input,
+            str((registry_row or {}).get("validation_reason") or "unknown"),
+        )
+        return {
+            "input_symbol": normalized_input,
+            "region": normalized_region,
+            "exchange": normalized_exchange,
+            "pending_registry_publish": pending_publish_result,
+            "validation_flow_run_id": str(validation_run.id),
+            "validation_state": validation_state,
+            "decision": "rejected",
+            "registry_row": registry_row,
+            "backfill_flow_run_id": None,
+        }
+
+    promoted_symbol = str((registry_row or {}).get("normalized_symbol") or "").strip().upper()
+    logger.info(
+        "Ticker promotable; launching backfill deployment (input=%s, promoted=%s).",
+        normalized_input,
+        promoted_symbol,
+    )
+    backfill_run = run_deployment(
+        backfill_deployment_name,
+        parameters={
+            "ticker": promoted_symbol,
+            "region": normalized_region,
+            "start": _normalize_optional_text(start),
+            "end": _normalize_optional_text(end),
+            "history_limit": resolved_history_limit,
+            "publish_enabled": bool(publish_enabled),
+        },
+        timeout=float(deployment_timeout_seconds),
+        poll_interval=10,
+        flow_run_name=f"onboarding-backfill-{promoted_symbol.lower()}",
+    )
+    backfill_state = str(backfill_run.state_name or "")
+    return {
+        "input_symbol": normalized_input,
+        "promoted_symbol": promoted_symbol,
+        "region": normalized_region,
+        "exchange": normalized_exchange,
+        "pending_registry_publish": pending_publish_result,
+        "validation_flow_run_id": str(validation_run.id),
+        "validation_state": validation_state,
+        "decision": "promoted",
+        "registry_row": registry_row,
+        "backfill_flow_run_id": str(backfill_run.id),
+        "backfill_state": backfill_state,
+    }
+
+
 def _build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Prefect Data Ops flows locally.")
     parser.add_argument(
         "domain",
-        choices=["market", "fundamentals", "earnings", "ticker-backfill", "ticker-validation"],
+        choices=["market", "fundamentals", "earnings", "ticker-backfill", "ticker-validation", "ticker-onboarding"],
         help="Domain flow to execute.",
     )
     parser.add_argument("--symbols", type=str, default=None, help="Comma-separated symbol universe override.")
-    parser.add_argument("--ticker", type=str, default=None, help="Single ticker symbol for ticker-backfill flow.")
+    parser.add_argument("--ticker", type=str, default=None, help="Single ticker symbol for ticker-backfill/onboarding.")
     parser.add_argument(
         "--input-symbol",
         type=str,
@@ -622,7 +767,7 @@ def main() -> None:
                 publish_enabled=not bool(args.no_publish),
                 allow_unhealthy=bool(args.allow_unhealthy),
             )
-        else:
+        elif args.domain == "ticker-validation":
             result = dataops_ticker_validation_flow(
                 input_symbol=str(args.input_symbol or args.ticker or "").strip(),
                 region=str(args.region or "").strip(),
@@ -631,6 +776,18 @@ def main() -> None:
                 history_limit=int(args.history_limit or 12),
                 cache_root=args.cache_root,
                 publish_registry=not bool(args.no_publish),
+            )
+        else:
+            result = dataops_ticker_onboarding_flow(
+                input_symbol=str(args.input_symbol or args.ticker or "").strip(),
+                region=str(args.region or "").strip() or None,
+                exchange=args.exchange,
+                instrument_type_hint=args.instrument_type_hint,
+                start=args.start,
+                end=args.end,
+                history_limit=int(args.history_limit or DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT),
+                cache_root=args.cache_root,
+                publish_enabled=not bool(args.no_publish),
             )
     print(json.dumps(result, indent=2, default=str))
 

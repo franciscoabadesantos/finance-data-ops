@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit a Prefect custom event to trigger ticker backfill deployments."""
+"""Emit a Prefect custom event to trigger ticker onboarding orchestration."""
 
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Emit dataops.ticker.added event for Prefect deployment triggers.")
+    parser = argparse.ArgumentParser(
+        description="Emit dataops.ticker.added event for Prefect ticker onboarding trigger."
+    )
     parser.add_argument("ticker", type=str, help="Ticker symbol (for example: AAPL).")
     parser.add_argument(
         "--event-name",

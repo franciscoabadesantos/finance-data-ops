@@ -163,3 +163,53 @@ def test_problematic_symbols_fail_before_promotion() -> None:
     assert gaf["selected"]["validation_status"] == "rejected"
     assert "market_required_failed" in egpt["selected"]["validation_reason"]
     assert "market_required_failed" in gaf["selected"]["validation_reason"]
+
+
+def test_explicit_override_wins_for_index_proxy_policy() -> None:
+    result = run_single_ticker_validation(
+        input_symbol="SPY",
+        region="us",
+        instrument_type_hint="equity",
+        market_provider=FakeMarketProvider(),
+        fundamentals_provider=FakeFundamentalsProvider(),
+        earnings_provider=FakeEarningsProvider(),
+        metadata_lookup_fn=lambda _symbol: {"quoteType": "ETF"},
+    )
+
+    assert result["selected"]["instrument_type"] == "index_proxy"
+    assert result["selected"]["instrument_type_source"] == "explicit_override"
+    assert result["selected"]["validation_status"] == "validated_market_only"
+    assert result["selected"]["validation_reason"] == "market_supported_index_proxy"
+
+
+def test_metadata_hint_classifies_adr() -> None:
+    result = run_single_ticker_validation(
+        input_symbol="BABA",
+        region="us",
+        market_provider=FakeMarketProvider(),
+        fundamentals_provider=FakeFundamentalsProvider(),
+        earnings_provider=FakeEarningsProvider(),
+        metadata_lookup_fn=lambda _symbol: {"quoteType": "EQUITY", "longName": "Alibaba Group Holding Limited ADR"},
+    )
+
+    assert result["selected"]["instrument_type"] == "adr"
+    assert result["selected"]["instrument_type_source"] == "provider_metadata"
+    assert result["selected"]["validation_status"] == "validated_market_only"
+    assert "fundamentals:" in result["selected"]["validation_reason"]
+    assert "earnings:" in result["selected"]["validation_reason"]
+
+
+def test_metadata_hint_classifies_etf_with_earnings_optional() -> None:
+    result = run_single_ticker_validation(
+        input_symbol="XLK",
+        region="us",
+        market_provider=FakeMarketProvider(),
+        fundamentals_provider=FakeFundamentalsProvider(),
+        earnings_provider=FakeEarningsProvider(),
+        metadata_lookup_fn=lambda _symbol: {"quoteType": "ETF", "longName": "Technology Select Sector SPDR Fund"},
+    )
+
+    assert result["selected"]["instrument_type"] == "etf"
+    assert result["selected"]["instrument_type_source"] == "provider_metadata"
+    assert result["selected"]["validation_status"] == "validated_market_only"
+    assert result["selected"]["validation_reason"] == "market_supported"

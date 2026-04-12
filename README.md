@@ -105,17 +105,21 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
   - `dataops_market_daily`
   - `dataops_fundamentals_daily`
   - `dataops_earnings_daily`
-  - `dataops_ticker_backfill` (event-driven ticker onboarding backfill)
+  - `dataops_ticker_backfill` (targeted single-ticker backfill)
   - `dataops_ticker_validation` (on-demand symbol normalization + validation)
+  - `dataops_ticker_onboarding` (event-driven validation gate + conditional backfill)
 - Deployment definitions:
   - [prefect.yaml](/home/franciscosantos/finance-data-ops/prefect.yaml)
-  - Includes 5 deployments: `market-daily`, `fundamentals-daily`, `earnings-daily`, `ticker-backfill`, `ticker-validation`
+  - Includes 6 deployments: `market-daily`, `fundamentals-daily`, `earnings-daily`, `ticker-validation`, `ticker-onboarding`, `ticker-backfill`
   - Region is handled via deployment parameters/flow logic (`region`) instead of per-region deployments
+  - Daily symbol resolution order: deployment `symbols` override -> validated `ticker_registry` region universe -> `DATA_OPS_SYMBOLS_<REGION>` fallback -> `DATA_OPS_SYMBOLS` fallback
+  - Validation output in `ticker_registry` is the production-universe gate; direct manual symbol additions should be fallback-only during rollout.
   - Cadence strategy (weekday UTC):
     - Market: `06:30`, `14:30`, `22:30` (higher freshness priority)
     - Earnings: `08:00`, `20:00` (medium freshness priority)
     - Fundamentals: `03:00` (low-change domain, daily is sufficient)
-    - Ticker backfill: event-driven only (`dataops.ticker.added`)
+    - Ticker onboarding: event-driven only (`dataops.ticker.added`)
+    - Ticker backfill: no schedule (invoked only after onboarding promotion)
     - Ticker validation: webhook/API-invoked from ticker onboarding path (no schedule)
 - Prefect bootstrap script:
   - [scripts/prefect_bootstrap.sh](/home/franciscosantos/finance-data-ops/scripts/prefect_bootstrap.sh)
@@ -135,10 +139,16 @@ Deploy to Prefect Cloud:
 ./scripts/prefect_bootstrap.sh
 ```
 
-Emit ticker-added event (triggers `ticker-backfill` deployment):
+Emit ticker-added event (triggers `ticker-onboarding` deployment):
 
 ```bash
 python scripts/emit_ticker_added_event.py AAPL --region us
+```
+
+Or submit onboarding directly to the deployment (backend/API entrypoint):
+
+```bash
+python scripts/submit_ticker_onboarding.py AAPL --region us
 ```
 
 Normalization config used by ticker validation:

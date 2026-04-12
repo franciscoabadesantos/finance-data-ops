@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -11,7 +12,11 @@ import pandas as pd
 from finance_data_ops.providers.earnings import EarningsDataProvider
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
 from finance_data_ops.providers.market import MarketDataProvider
-from finance_data_ops.providers.symbols import normalize_input_symbol, normalize_symbol_for_provider
+from finance_data_ops.providers.symbols import (
+    load_symbol_normalization_config,
+    normalize_input_symbol,
+    normalize_symbol_for_provider,
+)
 from finance_data_ops.publish.prices import build_market_quotes_payload
 from finance_data_ops.validation.ticker_registry import build_registry_key
 
@@ -34,7 +39,7 @@ DOMAIN_EXPECTATION_POLICY = {
     "adr": {"market": "required", "fundamentals": "preferred", "earnings": "preferred"},
     "etf": {"market": "required", "fundamentals": "optional", "earnings": "optional"},
     "country_fund": {"market": "required", "fundamentals": "optional", "earnings": "optional"},
-    "index_proxy": {"market": "required", "fundamentals": "optional", "earnings": "optional"},
+    "index_proxy": {"market": "required", "fundamentals": "ignored", "earnings": "ignored"},
     "unknown": {"market": "required", "fundamentals": "optional", "earnings": "optional"},
 }
 
@@ -89,6 +94,7 @@ class DomainCheckResult:
 class CandidateValidation:
     candidate_symbol: str
     instrument_type: str
+    instrument_type_source: str
     market: DomainCheckResult
     fundamentals: DomainCheckResult
     earnings: DomainCheckResult
@@ -101,6 +107,7 @@ class CandidateValidation:
         return {
             "candidate_symbol": self.candidate_symbol,
             "instrument_type": self.instrument_type,
+            "instrument_type_source": self.instrument_type_source,
             "market": self.market.as_dict(),
             "fundamentals": self.fundamentals.as_dict(),
             "earnings": self.earnings.as_dict(),
@@ -121,6 +128,7 @@ def run_single_ticker_validation(
     market_provider: MarketDataProvider | None = None,
     fundamentals_provider: FundamentalsDataProvider | None = None,
     earnings_provider: EarningsDataProvider | None = None,
+    metadata_lookup_fn: Callable[[str], Mapping[str, Any] | dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     normalized_input = normalize_input_symbol(input_symbol)
     if not normalized_input:
@@ -143,9 +151,13 @@ def run_single_ticker_validation(
 
     validations: list[CandidateValidation] = []
     for candidate in candidates:
-        instrument_type = classify_instrument_type(
+        metadata = _lookup_instrument_metadata(candidate_symbol=candidate, metadata_lookup_fn=metadata_lookup_fn)
+        instrument_type, instrument_type_source = classify_instrument_type(
+            input_symbol=normalized_input,
             candidate_symbol=candidate,
             instrument_type_hint=instrument_type_hint,
+            exchange=normalized_exchange,
+            metadata=metadata,
         )
         market_result = validate_market_support(candidate_symbol=candidate, provider=market_impl)
         fundamentals_result = validate_fundamentals_support(candidate_symbol=candidate, provider=fundamentals_impl)
@@ -171,6 +183,7 @@ def run_single_ticker_validation(
             CandidateValidation(
                 candidate_symbol=candidate,
                 instrument_type=instrument_type,
+                instrument_type_source=instrument_type_source,
                 market=market_result,
                 fundamentals=fundamentals_result,
                 earnings=earnings_result,
@@ -355,18 +368,43 @@ def validate_earnings_support(
     )
 
 
-def classify_instrument_type(*, candidate_symbol: str, instrument_type_hint: str | None = None) -> str:
+def classify_instrument_type(
+    *,
+    input_symbol: str,
+    candidate_symbol: str,
+    instrument_type_hint: str | None = None,
+    exchange: str | None = None,
+    metadata: Mapping[str, Any] | dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    overrides = _load_instrument_type_overrides()
+    normalized_input = normalize_input_symbol(input_symbol)
+    normalized_candidate = normalize_input_symbol(candidate_symbol)
+
+    for key in (normalized_candidate, normalized_input):
+        override = overrides.get(key)
+        if override:
+            return override, "explicit_override"
+
     if instrument_type_hint:
         normalized_hint = str(instrument_type_hint).strip().lower()
         if normalized_hint in SUPPORTED_INSTRUMENT_TYPES:
-            return normalized_hint
+            return normalized_hint, "input_hint"
 
-    symbol = normalize_input_symbol(candidate_symbol)
-    if symbol in INDEX_PROXY_SYMBOLS:
-        return "index_proxy"
-    if symbol in COUNTRY_FUND_SYMBOLS or (symbol.startswith("EW") and len(symbol) <= 4):
-        return "country_fund"
-    return "unknown"
+    metadata_hint = _infer_instrument_type_from_metadata(
+        symbol=normalized_candidate,
+        metadata=dict(metadata or {}),
+    )
+    if metadata_hint:
+        return metadata_hint, "provider_metadata"
+
+    heuristic = _infer_instrument_type_from_symbol(
+        symbol=normalized_candidate,
+        exchange=exchange,
+    )
+    if heuristic:
+        return heuristic, "symbol_heuristic"
+
+    return "unknown", "fallback_unknown"
 
 
 def classify_candidate_status(
@@ -377,14 +415,14 @@ def classify_candidate_status(
     earnings_result: DomainCheckResult,
 ) -> tuple[str, str, str]:
     policy = DOMAIN_EXPECTATION_POLICY.get(instrument_type, DOMAIN_EXPECTATION_POLICY["unknown"])
-    if policy["market"] == "required" and not market_result.supported:
+    if policy.get("market") == "required" and not market_result.supported:
         reason = f"market_required_failed:{market_result.reason}"
         return "rejected", "rejected", reason
 
     required_failures: list[str] = []
-    if policy["fundamentals"] == "required" and not fundamentals_result.supported:
+    if policy.get("fundamentals") == "required" and not fundamentals_result.supported:
         required_failures.append(f"fundamentals:{fundamentals_result.reason}")
-    if policy["earnings"] == "required" and not earnings_result.supported:
+    if policy.get("earnings") == "required" and not earnings_result.supported:
         required_failures.append(f"earnings:{earnings_result.reason}")
     if required_failures:
         return "rejected", "rejected", ",".join(required_failures)
@@ -394,15 +432,141 @@ def classify_candidate_status(
 
     if market_result.supported:
         preferred_missing: list[str] = []
-        if policy["fundamentals"] == "preferred" and not fundamentals_result.supported:
+        if policy.get("fundamentals") == "preferred" and not fundamentals_result.supported:
             preferred_missing.append(f"fundamentals:{fundamentals_result.reason}")
-        if policy["earnings"] == "preferred" and not earnings_result.supported:
+        if policy.get("earnings") == "preferred" and not earnings_result.supported:
             preferred_missing.append(f"earnings:{earnings_result.reason}")
         if preferred_missing:
             return "validated_market_only", "validated_market_only", ",".join(preferred_missing)
+        if instrument_type == "index_proxy":
+            return "validated_market_only", "validated_market_only", "market_supported_index_proxy"
         return "validated_market_only", "validated_market_only", "market_supported"
 
     return "rejected", "rejected", f"market_failed:{market_result.reason}"
+
+
+def _lookup_instrument_metadata(
+    *,
+    candidate_symbol: str,
+    metadata_lookup_fn: Callable[[str], Mapping[str, Any] | dict[str, Any] | None] | None,
+) -> dict[str, Any]:
+    lookup_fn = metadata_lookup_fn or _default_metadata_lookup
+    try:
+        payload = lookup_fn(candidate_symbol)
+    except Exception:
+        return {}
+    if isinstance(payload, Mapping):
+        return {str(k): v for k, v in payload.items()}
+    return {}
+
+
+def _load_instrument_type_overrides() -> dict[str, str]:
+    cfg = load_symbol_normalization_config()
+    raw = dict(cfg.get("instrument_type_overrides") or {})
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        symbol = normalize_input_symbol(str(key))
+        instrument = str(value).strip().lower()
+        if symbol and instrument in SUPPORTED_INSTRUMENT_TYPES:
+            out[symbol] = instrument
+    return out
+
+
+def _default_metadata_lookup(symbol: str) -> dict[str, Any]:
+    try:
+        import yfinance as yf
+    except Exception:
+        return {}
+    try:
+        ticker = yf.Ticker(symbol)
+        info = dict(getattr(ticker, "info", {}) or {})
+        fast = dict(getattr(ticker, "fast_info", {}) or {})
+    except Exception:
+        return {}
+    merged = dict(info)
+    if "quoteType" not in merged and "quoteType" in fast:
+        merged["quoteType"] = fast.get("quoteType")
+    if "exchange" not in merged and "exchange" in fast:
+        merged["exchange"] = fast.get("exchange")
+    if "market" not in merged and "market" in fast:
+        merged["market"] = fast.get("market")
+    return merged
+
+
+def _infer_instrument_type_from_metadata(*, symbol: str, metadata: dict[str, Any]) -> str | None:
+    if not metadata:
+        return None
+
+    quote_type = _normalize_metadata_token(
+        metadata.get("quoteType")
+        or metadata.get("quote_type")
+        or metadata.get("securityType")
+        or metadata.get("security_type")
+    )
+    short_name = str(metadata.get("shortName") or metadata.get("short_name") or "").upper()
+    long_name = str(metadata.get("longName") or metadata.get("long_name") or "").upper()
+    category = str(metadata.get("category") or "").upper()
+    fund_family = str(metadata.get("fundFamily") or metadata.get("fund_family") or "").upper()
+    is_adr_flag = bool(metadata.get("isAdr") or metadata.get("is_adr"))
+    descriptor = " ".join(item for item in (short_name, long_name, category, fund_family) if item)
+
+    if quote_type in {"INDEX"}:
+        return "index_proxy"
+    if quote_type in {"ETF", "MUTUALFUND", "FUND"}:
+        if symbol in COUNTRY_FUND_SYMBOLS or _looks_like_country_fund_text(descriptor):
+            return "country_fund"
+        return "etf"
+    if quote_type in {"ADR"}:
+        return "adr"
+    if quote_type in {"EQUITY", "COMMONSTOCK", "STOCK"}:
+        if is_adr_flag or " ADR" in f" {descriptor} " or " ADS" in f" {descriptor} ":
+            return "adr"
+        return "equity"
+
+    if " ETF" in f" {descriptor} " or " FUND" in f" {descriptor} ":
+        if symbol in COUNTRY_FUND_SYMBOLS or _looks_like_country_fund_text(descriptor):
+            return "country_fund"
+        return "etf"
+    if " INDEX" in f" {descriptor} " and symbol in INDEX_PROXY_SYMBOLS:
+        return "index_proxy"
+    if " ADR" in f" {descriptor} " or " ADS" in f" {descriptor} ":
+        return "adr"
+    return None
+
+
+def _infer_instrument_type_from_symbol(*, symbol: str, exchange: str | None) -> str | None:
+    if symbol in INDEX_PROXY_SYMBOLS or symbol.startswith("^"):
+        return "index_proxy"
+    if symbol in COUNTRY_FUND_SYMBOLS or (symbol.startswith("EW") and len(symbol) <= 4):
+        return "country_fund"
+    if "." in symbol:
+        suffix = symbol.split(".")[-1]
+        known_suffixes = _known_exchange_suffixes()
+        if suffix in known_suffixes:
+            return "equity"
+    if str(exchange or "").strip().upper():
+        return "equity"
+    return None
+
+
+def _known_exchange_suffixes() -> set[str]:
+    cfg = load_symbol_normalization_config()
+    suffix_by_exchange = dict(cfg.get("suffix_by_exchange") or {})
+    known: set[str] = set()
+    for value in suffix_by_exchange.values():
+        token = str(value).strip().upper()
+        if token.startswith(".") and len(token) > 1:
+            known.add(token[1:])
+    return known
+
+
+def _normalize_metadata_token(raw: object) -> str:
+    return str(raw or "").strip().upper().replace(" ", "")
+
+
+def _looks_like_country_fund_text(raw: str) -> bool:
+    text = str(raw or "").upper()
+    return " MSCI " in f" {text} " or " COUNTRY " in f" {text} "
 
 
 def _select_best_candidate(candidates: list[CandidateValidation]) -> CandidateValidation:
@@ -437,6 +601,8 @@ def _build_notes(*, candidates: list[str], selected: CandidateValidation, policy
     return (
         f"candidates={','.join(candidates)};"
         f"selected={selected.candidate_symbol};"
+        f"instrument_type={selected.instrument_type};"
+        f"instrument_type_source={selected.instrument_type_source};"
         f"policy={policy};"
         f"market={selected.market.reason};"
         f"fundamentals={selected.fundamentals.reason};"

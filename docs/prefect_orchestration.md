@@ -21,6 +21,7 @@ Wrapped domains:
 - `dataops_earnings_daily`
 - `dataops_ticker_backfill`
 - `dataops_ticker_validation`
+- `dataops_ticker_onboarding`
 
 Default flow-level retries (orchestration only):
 
@@ -29,6 +30,7 @@ Default flow-level retries (orchestration only):
 - Earnings: `retries=2`, `retry_delay_seconds=600`
 - Ticker backfill: `retries=0` (step-level failures are surfaced immediately with alerts)
 - Ticker validation: `retries=0` (validation result should be explicit and deterministic per symbol input)
+- Ticker onboarding: `retries=0` (gate decision should be explicit per submission event)
 
 These wrappers delegate to existing orchestration functions:
 
@@ -44,6 +46,7 @@ python flows/prefect_dataops_daily.py fundamentals --region eu
 python flows/prefect_dataops_daily.py earnings --region apac --history-limit 12
 python flows/prefect_dataops_daily.py ticker-backfill --ticker AAPL
 python flows/prefect_dataops_daily.py ticker-validation --input-symbol ANZ --region apac --instrument-type-hint equity
+python flows/prefect_dataops_daily.py ticker-onboarding --input-symbol ANZ --region apac --instrument-type-hint equity
 ```
 
 ## Deployments
@@ -57,6 +60,7 @@ Base deployments:
 - `market-daily` (args: `symbols`, `start`, `end`, `lookback_days`)
 - `fundamentals-daily` (args: `symbols`)
 - `earnings-daily` (args: `symbols`, `history_limit`)
+- `ticker-onboarding` (args: `input_symbol`, optional `region`, `exchange`, `instrument_type_hint`, `start`, `end`, `history_limit`)
 - `ticker-backfill` (args: `ticker`, optional `start`, `end`, `history_limit`)
 - `ticker-validation` (args: `input_symbol`, `region`, optional `exchange`, `instrument_type_hint`)
 
@@ -65,7 +69,8 @@ Cadence strategy (weekday UTC):
 - Market (`market-daily`): `06:30`, `14:30`, `22:30`
 - Earnings (`earnings-daily`): `08:00`, `20:00`
 - Fundamentals (`fundamentals-daily`): `03:00`
-- Ticker backfill (`ticker-backfill`): event-driven only
+- Ticker onboarding (`ticker-onboarding`): event-driven only (`dataops.ticker.added`)
+- Ticker backfill (`ticker-backfill`): no schedule (only invoked after onboarding promotion decision)
 - Ticker validation (`ticker-validation`): onboarding webhook/API invoked (no schedule)
 
 Rationale:
@@ -80,9 +85,16 @@ Region handling is parameterized:
 - flow logic resolves region-specific symbol universes when present
 - no separate per-region deployments
 
-## Ticker onboarding backfill
+## Ticker onboarding gate
 
-Ticker backfill flow behavior:
+Ticker onboarding flow behavior:
+
+1. create/refresh `ticker_registry` row as `pending_validation`
+2. run `ticker-validation` deployment
+3. if promotable (`status='active'` and `promotion_status in ('validated_market_only','validated_full')`) trigger `ticker-backfill`
+4. if rejected, persist rejection reason and stop without backfill
+
+Ticker backfill flow behavior (invoked by onboarding only after promotion, or manually for debugging):
 
 1. market backfill for one ticker (default window: last 5 years, override with `start`/`end`)
 2. earnings backfill for one ticker (default `history_limit=24`)
@@ -108,12 +120,20 @@ Helper script:
 python scripts/emit_ticker_added_event.py AAPL --region us
 ```
 
-The `ticker-backfill` deployment in `prefect.yaml` includes an event trigger:
+Direct deployment submitter helper:
+
+```bash
+python scripts/submit_ticker_onboarding.py AAPL --region us
+```
+
+The `ticker-onboarding` deployment in `prefect.yaml` includes an event trigger:
 
 - expects: `dataops.ticker.added`
 - maps normalized payload values into parameters:
-  - `ticker <- event.payload.ticker`
+  - `input_symbol <- event.payload.ticker`
   - `region <- event.payload.region`
+  - `exchange <- event.payload.exchange`
+  - `instrument_type_hint <- event.payload.instrument_type_hint`
   - `start <- event.payload.start`
   - `end <- event.payload.end`
   - `history_limit <- event.payload.history_limit`
@@ -154,28 +174,34 @@ Instrument types and domain policy:
 
 High-volume ticker adds are buffered by Prefect queueing:
 
-- deployment: `ticker-backfill`
+- deployment: `ticker-onboarding`
 - deployment concurrency limit: `4` with `ENQUEUE` collision strategy
 
 When many `dataops.ticker.added` events arrive in a short interval, runs queue
 instead of executing all at once, which limits provider load.
 
+Backfill queueing:
+
+- deployment: `ticker-backfill`
+- deployment concurrency limit: `4` with `ENQUEUE` collision strategy
+- backfills are launched only after onboarding promotion decisions
+
 Validation queueing:
 
 - deployment: `ticker-validation`
 - deployment concurrency limit: `8` with `ENQUEUE` collision strategy
-- invoke with Prefect deployment run API/CLI from ticker onboarding events
-- note: this avoids consuming extra Prefect Cloud Hobby automation slots
+- invoked by `ticker-onboarding` via deployment run API
 
 ## Region symbol universes
 
 Flow wrappers resolve symbols in this order:
 
 1. Deployment parameter `symbols`
-2. Region-specific env var (`DATA_OPS_SYMBOLS_US`, `DATA_OPS_SYMBOLS_EU`, `DATA_OPS_SYMBOLS_APAC`)
-3. Default `DATA_OPS_SYMBOLS`
+2. Validated registry universe from `ticker_registry` (filtered by `region`, active promotion status, market support)
+3. Region-specific env var (`DATA_OPS_SYMBOLS_US`, `DATA_OPS_SYMBOLS_EU`, `DATA_OPS_SYMBOLS_APAC`)
+4. Default `DATA_OPS_SYMBOLS`
 
-This enables separate symbol sets per region without changing domain logic.
+This enables registry-driven production universes while keeping env-based fallback during rollout.
 
 APAC market exclusions are tracked explicitly during production-universe cleanup.
 These exclusions currently apply to the `market-daily` APAC symbol universe only:

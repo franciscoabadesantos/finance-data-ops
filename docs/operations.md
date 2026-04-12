@@ -20,7 +20,13 @@ Earnings:
 python scripts/run_earnings_daily.py
 ```
 
-Ticker onboarding backfill (Prefect wrapper flow):
+Ticker onboarding orchestration (Prefect wrapper flow):
+
+```bash
+python flows/prefect_dataops_daily.py ticker-onboarding --input-symbol AAPL --region us
+```
+
+Targeted ticker backfill (manual/debug):
 
 ```bash
 python flows/prefect_dataops_daily.py ticker-backfill --ticker AAPL
@@ -33,11 +39,12 @@ python flows/prefect_dataops_daily.py ticker-validation --input-symbol ANZ --reg
 ```
 
 Daily domain flows perform refresh, derived summary generation, Supabase publish, and status/coverage updates.
-Ticker validation flow performs normalization + support checks and writes `ticker_registry`.
+Ticker onboarding flow creates `pending_validation`, runs ticker validation, and triggers backfill only for promotable symbols.
+Production universes are registry-driven; avoid direct manual edits to runtime region symbol lists except temporary fallback scenarios.
 
 Primary scheduler/orchestrator: Prefect Cloud managed execution (`prefect.yaml` deployments + `dataops-managed-pool`).
 
-Prefect deployments (5 total):
+Prefect deployments (6 total):
 
 - Market:
   - `market-daily`
@@ -46,17 +53,20 @@ Prefect deployments (5 total):
 - Earnings:
   - `earnings-daily`
 - Ticker onboarding:
-  - `ticker-backfill` (event-driven)
+  - `ticker-onboarding` (event-driven)
 - Ticker validation:
   - `ticker-validation` (on-demand)
+- Targeted backfill:
+  - `ticker-backfill` (on-demand, invoked by onboarding after promotion)
 
 Cadence (weekday UTC):
 
 - Market `market-daily`: `06:30`, `14:30`, `22:30` (higher frequency for user-facing freshness)
 - Earnings `earnings-daily`: `08:00`, `20:00` (medium frequency)
 - Fundamentals `fundamentals-daily`: `03:00` (slow-moving domain)
-- Ticker onboarding `ticker-backfill`: event-driven only
+- Ticker onboarding `ticker-onboarding`: event-driven only
 - Ticker validation `ticker-validation`: webhook/API-invoked from onboarding path (no schedule)
+- Ticker backfill `ticker-backfill`: no schedule (triggered by onboarding decision or manual debug run)
 
 Manual backfills/debugging remain available in GitHub Actions via `workflow_dispatch`:
 
@@ -70,9 +80,16 @@ Ticker-added event trigger helper:
 python scripts/emit_ticker_added_event.py AAPL --region us
 ```
 
+Direct deployment submitter helper (backend/API path):
+
+```bash
+python scripts/submit_ticker_onboarding.py AAPL --region us
+```
+
 Backfill queueing defaults:
 
-- deployment `ticker-backfill` concurrency limit is `4` (`ENQUEUE`) to absorb burst ticker adds
+- deployment `ticker-onboarding` concurrency limit is `4` (`ENQUEUE`) to absorb burst ticker adds
+- deployment `ticker-backfill` concurrency limit is `4` (`ENQUEUE`) to protect provider load when onboarding bursts occur
 - region is passed per-run via `region` parameter/event payload (not separate deployments)
 
 Validation queueing defaults:

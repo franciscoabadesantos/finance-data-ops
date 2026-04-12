@@ -68,6 +68,7 @@ Those remain in the `Finance` repository.
 - Earnings: `flows/dataops_earnings_daily.py` / `scripts/run_earnings_daily.py`
 - Ticker backfill orchestration: `flows/prefect_dataops_daily.py:dataops_ticker_backfill_flow`
 - Ticker validation orchestration: `flows/prefect_dataops_daily.py:dataops_ticker_validation_flow`
+- Ticker onboarding orchestration: `flows/prefect_dataops_daily.py:dataops_ticker_onboarding_flow`
 
 Production scheduler automation is domain-separated to match those entrypoints:
 
@@ -75,8 +76,9 @@ Production scheduler automation is domain-separated to match those entrypoints:
   - Market: `market-daily`
   - Fundamentals: `fundamentals-daily`
   - Earnings: `earnings-daily`
-  - Event-driven onboarding backfill: `ticker-backfill` (triggered by `dataops.ticker.added`)
-  - Ticker validation: `ticker-validation` (invoked by onboarding webhook/API before promotion)
+  - Event-driven onboarding gate: `ticker-onboarding` (triggered by `dataops.ticker.added`)
+  - Ticker validation: `ticker-validation` (invoked by onboarding before promotion)
+  - Ticker backfill: `ticker-backfill` (invoked only after onboarding promotion decision)
   - Region routing is handled as flow/deployment parameter (`region`), not as separate deployments
   - Cadence priority is intentional: market (high) > earnings (medium) > fundamentals (low)
 - GitHub Actions workflows remain for CI/manual backfills only:
