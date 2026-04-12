@@ -89,7 +89,6 @@ deployments:
     description: Targeted backfill orchestration for newly added tickers.
     entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_backfill_flow
     parameters:
-      ticker: null
       start: null
       end: null
       history_limit: 24

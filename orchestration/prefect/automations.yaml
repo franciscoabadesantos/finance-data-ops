@@ -12,12 +12,18 @@ automations:
         - prefect.flow-run.Crashed
       threshold: 1
     actions:
-      - type: send-notification
-        subject: "Data Ops flow failed: {{ flow.name }}"
-        body: |
-          Flow run {{ flow_run.name }} entered {{ flow_run.state.name }}.
-          Deployment: {{ deployment.name }}
-          UI: {{ flow_run|ui_url }}
+      - type: call-webhook
+        block_document_id: "e60319d8-225b-4560-9c71-54f052011b5c"
+        payload: |
+          {
+            "severity": "error",
+            "title": "Data Ops flow failed",
+            "flow": "{{ flow.name }}",
+            "flow_run": "{{ flow_run.name }}",
+            "state": "{{ flow_run.state.name }}",
+            "deployment": "{{ deployment.name }}",
+            "ui_url": "{{ flow_run|ui_url }}"
+          }
 
   - name: Data Ops - Repeated Failures Escalation
     description: Escalate if multiple flow failures occur inside the lookback window.
@@ -31,13 +37,17 @@ automations:
       threshold: 3
       within: 21600
     actions:
-      - type: send-notification
-        subject: "Data Ops escalation: repeated flow failures"
-        body: |
-          Three or more failed/crashed runs were observed in the last 6 hours.
-          Latest flow run: {{ flow_run.name }}
-          Deployment: {{ deployment.name }}
-          UI: {{ flow_run|ui_url }}
+      - type: call-webhook
+        block_document_id: "e60319d8-225b-4560-9c71-54f052011b5c"
+        payload: |
+          {
+            "severity": "critical",
+            "title": "Data Ops repeated failures escalation",
+            "message": "Three or more failed/crashed runs were observed in the last 6 hours.",
+            "flow_run": "{{ flow_run.name }}",
+            "deployment": "{{ deployment.name }}",
+            "ui_url": "{{ flow_run|ui_url }}"
+          }
 
   - name: Data Ops - Missed Schedule Alert
     description: Alert when a scheduled flow run is late/missed.
@@ -49,12 +59,17 @@ automations:
         - prefect.flow-run.Late
       threshold: 1
     actions:
-      - type: send-notification
-        subject: "Data Ops schedule missed: {{ flow.name }}"
-        body: |
-          Flow run {{ flow_run.name }} is late.
-          Deployment: {{ deployment.name }}
-          UI: {{ flow_run|ui_url }}
+      - type: call-webhook
+        block_document_id: "e60319d8-225b-4560-9c71-54f052011b5c"
+        payload: |
+          {
+            "severity": "warning",
+            "title": "Data Ops schedule missed",
+            "flow": "{{ flow.name }}",
+            "flow_run": "{{ flow_run.name }}",
+            "deployment": "{{ deployment.name }}",
+            "ui_url": "{{ flow_run|ui_url }}"
+          }
 
   - name: Data Ops - Long Running Flow Alert
     description: Alert if a flow run does not complete within 45 minutes.
@@ -69,10 +84,14 @@ automations:
       for_each:
         - prefect.resource.id
     actions:
-      - type: send-notification
-        subject: "Data Ops long-running flow detected"
-        body: |
-          A flow run has not completed within 45 minutes.
-          Flow run: {{ flow_run.name }}
-          Deployment: {{ deployment.name }}
-          UI: {{ flow_run|ui_url }}
+      - type: call-webhook
+        block_document_id: "e60319d8-225b-4560-9c71-54f052011b5c"
+        payload: |
+          {
+            "severity": "warning",
+            "title": "Data Ops long-running flow detected",
+            "message": "A flow run has not completed within 45 minutes.",
+            "flow_run": "{{ flow_run.name }}",
+            "deployment": "{{ deployment.name }}",
+            "ui_url": "{{ flow_run|ui_url }}"
+          }
