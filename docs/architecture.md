@@ -65,3 +65,9 @@ Those remain in the `Finance` repository.
 - Market: `flows/dataops_market_daily.py` / `scripts/run_market_daily.py`
 - Fundamentals: `flows/dataops_fundamentals_daily.py` / `scripts/run_fundamentals_daily.py`
 - Earnings: `flows/dataops_earnings_daily.py` / `scripts/run_earnings_daily.py`
+
+Production scheduler automation is domain-separated to match those entrypoints:
+
+- Market workflow: `.github/workflows/daily_market_refresh.yml`
+- Fundamentals workflow: `.github/workflows/daily_fundamentals_refresh.yml`
+- Earnings workflow: `.github/workflows/daily_earnings_refresh.yml`

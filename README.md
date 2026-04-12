@@ -88,6 +88,25 @@ Status check:
 python scripts/validate_market_status.py
 ```
 
+## GitHub Actions automation
+
+Production workflows now cover all three daily domains:
+
+- Market: [`.github/workflows/daily_market_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_market_refresh.yml)
+  - Purpose: price window backfills and daily quote refresh.
+  - Triggers: weekday schedule + `workflow_dispatch`.
+  - Inputs: optional `symbols`, `lookback_days`, `start`, `end`.
+- Fundamentals: [`.github/workflows/daily_fundamentals_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_fundamentals_refresh.yml)
+  - Purpose: provider-history fundamentals refresh/publish.
+  - Triggers: weekday schedule + `workflow_dispatch`.
+  - Inputs: optional `symbols`.
+- Earnings: [`.github/workflows/daily_earnings_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_earnings_refresh.yml)
+  - Purpose: next-event refresh plus bounded historical rows (`history_limit`).
+  - Triggers: weekday schedule + `workflow_dispatch`.
+  - Inputs: optional `symbols`, optional `history_limit`.
+
+Each workflow remains independently runnable for targeted backfills and debugging.
+
 Project aggregation (same pattern as `Finance` repo):
 
 ```bash

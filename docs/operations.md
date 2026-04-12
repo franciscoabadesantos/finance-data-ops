@@ -22,6 +22,20 @@ python scripts/run_earnings_daily.py
 
 Each flow performs refresh, derived summary generation, Supabase publish, and status/coverage updates.
 
+GitHub Actions production automation (weekday schedule + manual dispatch):
+
+- Market workflow: [`.github/workflows/daily_market_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_market_refresh.yml)
+  - Price-window backfills and daily quote refresh.
+  - Optional manual inputs: `symbols`, `lookback_days`, `start`, `end`.
+- Fundamentals workflow: [`.github/workflows/daily_fundamentals_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_fundamentals_refresh.yml)
+  - Provider-history fundamentals refresh.
+  - Optional manual input: `symbols`.
+- Earnings workflow: [`.github/workflows/daily_earnings_refresh.yml`](/home/franciscosantos/finance-data-ops/.github/workflows/daily_earnings_refresh.yml)
+  - Next-event refresh plus bounded history via `history_limit`.
+  - Optional manual inputs: `symbols`, `history_limit`.
+
+Per-domain workflows are intentionally independent for targeted backfills and debugging.
+
 ## Required environment
 
 - `SUPABASE_URL`

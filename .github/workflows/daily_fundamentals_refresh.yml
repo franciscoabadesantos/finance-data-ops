@@ -1,0 +1,40 @@
+name: Daily Fundamentals Refresh
+
+on:
+  schedule:
+    - cron: "50 2 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Comma-separated symbols (optional override)"
+        required: false
+        type: string
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run daily Data Ops fundamentals flow
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DATA_OPS_SYMBOLS: ${{ github.event.inputs.symbols || vars.DATA_OPS_SYMBOLS }}
+          DATA_OPS_MAX_ATTEMPTS: ${{ vars.DATA_OPS_MAX_ATTEMPTS || '3' }}
+          DATA_OPS_ALERT_WEBHOOK_URL: ${{ secrets.DATA_OPS_ALERT_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          python scripts/run_fundamentals_daily.py
