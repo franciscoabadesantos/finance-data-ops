@@ -28,19 +28,25 @@ python flows/prefect_dataops_daily.py ticker-backfill --ticker AAPL
 
 Each flow performs refresh, derived summary generation, Supabase publish, and status/coverage updates.
 
-Primary scheduler/orchestrator: Prefect Cloud (`prefect.yaml` deployments + `dataops-pool` worker).
+Primary scheduler/orchestrator: Prefect Cloud managed execution (`prefect.yaml` deployments + `dataops-managed-pool`).
 
-Daily deployments (weekday schedules):
+Prefect deployments (4 total):
 
 - Market:
   - `market-daily`
-  - `market-us`, `market-eu`, `market-apac`
 - Fundamentals:
   - `fundamentals-daily`
-  - `fundamentals-us`, `fundamentals-eu`, `fundamentals-apac`
 - Earnings:
   - `earnings-daily`
-  - `earnings-us`, `earnings-eu`, `earnings-apac`
+- Ticker onboarding:
+  - `ticker-backfill` (event-driven)
+
+Cadence (weekday UTC):
+
+- Market `market-daily`: `06:30`, `14:30`, `22:30` (higher frequency for user-facing freshness)
+- Earnings `earnings-daily`: `08:00`, `20:00` (medium frequency)
+- Fundamentals `fundamentals-daily`: `03:00` (slow-moving domain)
+- Ticker onboarding `ticker-backfill`: event-driven only
 
 Manual backfills/debugging remain available in GitHub Actions via `workflow_dispatch`:
 
@@ -56,8 +62,8 @@ python scripts/emit_ticker_added_event.py AAPL --region us
 
 Backfill queueing defaults:
 
-- deployment `ticker-backfill` uses queue `ticker-backfill`
-- deployment concurrency limit is `4` (`ENQUEUE`) to absorb burst ticker adds
+- deployment `ticker-backfill` concurrency limit is `4` (`ENQUEUE`) to absorb burst ticker adds
+- region is passed per-run via `region` parameter/event payload (not separate deployments)
 
 ## Required environment
 

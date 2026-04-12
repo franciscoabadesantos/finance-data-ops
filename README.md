@@ -59,7 +59,7 @@ Optional:
 - `DATA_OPS_SYMBOL_BATCH_SIZE` (default `100`)
 - `DATA_OPS_CACHE_ROOT` (default `./data_cache`)
 - `DATA_OPS_ALERT_WEBHOOK_URL` (critical failure webhook)
-- `DATA_OPS_SYMBOLS_US` / `DATA_OPS_SYMBOLS_EU` / `DATA_OPS_SYMBOLS_APAC` (regional deployments)
+- `DATA_OPS_SYMBOLS_US` / `DATA_OPS_SYMBOLS_EU` / `DATA_OPS_SYMBOLS_APAC` (region-parameterized runs)
 
 See [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example).
 
@@ -101,11 +101,16 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
   - `dataops_ticker_backfill` (event-driven ticker onboarding backfill)
 - Deployment definitions:
   - [prefect.yaml](/home/franciscosantos/finance-data-ops/prefect.yaml)
-  - Includes `market-daily`, `fundamentals-daily`, `earnings-daily`, `ticker-backfill`
-  - Includes region-aware variants: `*-us`, `*-eu`, `*-apac`
+  - Includes exactly 4 deployments: `market-daily`, `fundamentals-daily`, `earnings-daily`, `ticker-backfill`
+  - Region is handled via deployment parameters/flow logic (`region`) instead of per-region deployments
+  - Cadence strategy (weekday UTC):
+    - Market: `06:30`, `14:30`, `22:30` (higher freshness priority)
+    - Earnings: `08:00`, `20:00` (medium freshness priority)
+    - Fundamentals: `03:00` (low-change domain, daily is sufficient)
+    - Ticker backfill: event-driven only (`dataops.ticker.added`)
 - Prefect bootstrap script:
   - [scripts/prefect_bootstrap.sh](/home/franciscosantos/finance-data-ops/scripts/prefect_bootstrap.sh)
-  - Creates `dataops-pool`, deploys `prefect.yaml`, and applies automation templates
+  - Creates `dataops-managed-pool` (Prefect-managed execution), deploys `prefect.yaml`, and applies automation templates
 - Automation templates:
   - [orchestration/prefect/automations.yaml](/home/franciscosantos/finance-data-ops/orchestration/prefect/automations.yaml)
 
@@ -128,6 +133,7 @@ python scripts/emit_ticker_added_event.py AAPL --region us
 ```
 
 Ticker backfill concurrency defaults to queued execution (`limit=4`) to protect providers during burst onboarding.
+No always-on worker VM is required in this setup.
 
 GitHub Actions remains available for CI and manual domain backfills/debugging via `workflow_dispatch`:
 

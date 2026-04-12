@@ -70,10 +70,12 @@ Those remain in the `Finance` repository.
 Production scheduler automation is domain-separated to match those entrypoints:
 
 - Primary scheduler: Prefect Cloud deployments defined in `prefect.yaml`
-  - Market: `market-daily` (+ regional `market-us`, `market-eu`, `market-apac`)
-  - Fundamentals: `fundamentals-daily` (+ regional `fundamentals-us`, `fundamentals-eu`, `fundamentals-apac`)
-  - Earnings: `earnings-daily` (+ regional `earnings-us`, `earnings-eu`, `earnings-apac`)
+  - Market: `market-daily`
+  - Fundamentals: `fundamentals-daily`
+  - Earnings: `earnings-daily`
   - Event-driven onboarding backfill: `ticker-backfill` (triggered by `dataops.ticker.added`)
+  - Region routing is handled as flow/deployment parameter (`region`), not as separate deployments
+  - Cadence priority is intentional: market (high) > earnings (medium) > fundamentals (low)
 - GitHub Actions workflows remain for CI/manual backfills only:
   - `.github/workflows/daily_market_refresh.yml`
   - `.github/workflows/daily_fundamentals_refresh.yml`

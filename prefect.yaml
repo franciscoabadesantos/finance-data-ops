@@ -21,11 +21,17 @@ deployments:
       lookback_days: null
       region: null
     schedules:
-      - cron: "20 2 * * 1-5"
+      - cron: "30 6 * * 1-5"
+        timezone: "UTC"
+        active: true
+      - cron: "30 14 * * 1-5"
+        timezone: "UTC"
+        active: true
+      - cron: "30 22 * * 1-5"
         timezone: "UTC"
         active: true
     work_pool:
-      name: dataops-pool
+      name: dataops-managed-pool
       work_queue_name: default
       job_variables: {}
 
@@ -41,11 +47,11 @@ deployments:
       symbols: null
       region: null
     schedules:
-      - cron: "50 2 * * 1-5"
+      - cron: "0 3 * * 1-5"
         timezone: "UTC"
         active: true
     work_pool:
-      name: dataops-pool
+      name: dataops-managed-pool
       work_queue_name: default
       job_variables: {}
 
@@ -62,11 +68,14 @@ deployments:
       history_limit: 12
       region: null
     schedules:
-      - cron: "20 3 * * 1-5"
+      - cron: "0 8 * * 1-5"
+        timezone: "UTC"
+        active: true
+      - cron: "0 20 * * 1-5"
         timezone: "UTC"
         active: true
     work_pool:
-      name: dataops-pool
+      name: dataops-managed-pool
       work_queue_name: default
       job_variables: {}
 
@@ -89,8 +98,8 @@ deployments:
       limit: 4
       collision_strategy: ENQUEUE
     work_pool:
-      name: dataops-pool
-      work_queue_name: ticker-backfill
+      name: dataops-managed-pool
+      work_queue_name: default
       job_variables: {}
     triggers:
       - type: event
@@ -105,204 +114,3 @@ deployments:
           start: "{{ event.payload.start }}"
           end: "{{ event.payload.end }}"
           history_limit: "{{ event.payload.history_limit }}"
-
-  - name: market-us
-    version: null
-    tags:
-      - dataops
-      - market
-      - us
-      - regional
-    description: Market flow for US region symbols and schedule.
-    entrypoint: flows/prefect_dataops_daily.py:dataops_market_daily_flow
-    parameters:
-      symbols: null
-      start: null
-      end: null
-      lookback_days: null
-      region: us
-    schedules:
-      - cron: "15 17 * * 1-5"
-        timezone: "America/New_York"
-        active: true
-    work_pool:
-      name: dataops-pool
-      work_queue_name: default
-      job_variables: {}
-
-  - name: market-eu
-    version: null
-    tags:
-      - dataops
-      - market
-      - eu
-      - regional
-    description: Market flow for EU region symbols and schedule.
-    entrypoint: flows/prefect_dataops_daily.py:dataops_market_daily_flow
-    parameters:
-      symbols: null
-      start: null
-      end: null
-      lookback_days: null
-      region: eu
-    schedules:
-      - cron: "45 18 * * 1-5"
-        timezone: "Europe/Paris"
-        active: true
-    work_pool:
-      name: dataops-pool
-      work_queue_name: default
-      job_variables: {}
-
-  - name: market-apac
-    version: null
-    tags:
-      - dataops
-      - market
-      - apac
-      - regional
-    description: Market flow for APAC region symbols and schedule.
-    entrypoint: flows/prefect_dataops_daily.py:dataops_market_daily_flow
-    parameters:
-      symbols: null
-      start: null
-      end: null
-      lookback_days: null
-      region: apac
-    schedules:
-      - cron: "30 16 * * 1-5"
-        timezone: "Asia/Tokyo"
-        active: true
-    work_pool:
-      name: dataops-pool
-      work_queue_name: default
-      job_variables: {}
-
-  - name: fundamentals-us
-    version: null
-    tags:
-      - dataops
-      - fundamentals
-      - us
-      - regional
-    description: Fundamentals flow for US region symbols and schedule.
-    entrypoint: flows/prefect_dataops_daily.py:dataops_fundamentals_daily_flow
-    parameters:
-      symbols: null
-      region: us
-    schedules:
-      - cron: "30 18 * * 1-5"
-        timezone: "America/New_York"
-        active: true
-    work_pool:
-      name: dataops-pool
-      work_queue_name: default
-      job_variables: {}
-
-  - name: fundamentals-eu
-    version: null
-    tags:
-      - dataops
-      - fundamentals
-      - eu
-      - regional
-    description: Fundamentals flow for EU region symbols and schedule.
-    entrypoint: flows/prefect_dataops_daily.py:dataops_fundamentals_daily_flow
-    parameters:
-      symbols: null
-      region: eu
-    schedules:
-      - cron: "0 20 * * 1-5"
-        timezone: "Europe/Paris"
-        active: true
-    work_pool:
-      name: dataops-pool
-      work_queue_name: default
-      job_variables: {}
-
-  - name: fundamentals-apac
-    version: null
-    tags:
-      - dataops
-      - fundamentals
-      - apac
-      - regional
-    description: Fundamentals flow for APAC region symbols and schedule.
-    entrypoint: flows/prefect_dataops_daily.py:dataops_fundamentals_daily_flow
-    parameters:
-      symbols: null
-      region: apac
-    schedules:
-      - cron: "45 17 * * 1-5"
-        timezone: "Asia/Tokyo"
-        active: true
-    work_pool:
-      name: dataops-pool
-      work_queue_name: default
-      job_variables: {}
-
-  - name: earnings-us
-    version: null
-    tags:
-      - dataops
-      - earnings
-      - us
-      - regional
-    description: Earnings flow for US region symbols and schedule.
-    entrypoint: flows/prefect_dataops_daily.py:dataops_earnings_daily_flow
-    parameters:
-      symbols: null
-      history_limit: 12
-      region: us
-    schedules:
-      - cron: "45 18 * * 1-5"
-        timezone: "America/New_York"
-        active: true
-    work_pool:
-      name: dataops-pool
-      work_queue_name: default
-      job_variables: {}
-
-  - name: earnings-eu
-    version: null
-    tags:
-      - dataops
-      - earnings
-      - eu
-      - regional
-    description: Earnings flow for EU region symbols and schedule.
-    entrypoint: flows/prefect_dataops_daily.py:dataops_earnings_daily_flow
-    parameters:
-      symbols: null
-      history_limit: 12
-      region: eu
-    schedules:
-      - cron: "15 20 * * 1-5"
-        timezone: "Europe/Paris"
-        active: true
-    work_pool:
-      name: dataops-pool
-      work_queue_name: default
-      job_variables: {}
-
-  - name: earnings-apac
-    version: null
-    tags:
-      - dataops
-      - earnings
-      - apac
-      - regional
-    description: Earnings flow for APAC region symbols and schedule.
-    entrypoint: flows/prefect_dataops_daily.py:dataops_earnings_daily_flow
-    parameters:
-      symbols: null
-      history_limit: 12
-      region: apac
-    schedules:
-      - cron: "0 18 * * 1-5"
-        timezone: "Asia/Tokyo"
-        active: true
-    work_pool:
-      name: dataops-pool
-      work_queue_name: default
-      job_variables: {}

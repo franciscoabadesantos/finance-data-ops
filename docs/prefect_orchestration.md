@@ -56,13 +56,24 @@ Base deployments:
 - `earnings-daily` (args: `symbols`, `history_limit`)
 - `ticker-backfill` (args: `ticker`, optional `start`, `end`, `history_limit`)
 
-Region-aware deployments:
+Cadence strategy (weekday UTC):
 
-- Market: `market-us`, `market-eu`, `market-apac`
-- Fundamentals: `fundamentals-us`, `fundamentals-eu`, `fundamentals-apac`
-- Earnings: `earnings-us`, `earnings-eu`, `earnings-apac`
+- Market (`market-daily`): `06:30`, `14:30`, `22:30`
+- Earnings (`earnings-daily`): `08:00`, `20:00`
+- Fundamentals (`fundamentals-daily`): `03:00`
+- Ticker backfill (`ticker-backfill`): event-driven only
 
-Each regional deployment uses a local timezone schedule and optional region symbol universe resolution.
+Rationale:
+
+- Market is most time-sensitive, so it runs most frequently.
+- Earnings updates are less volatile than prices, so medium cadence is sufficient.
+- Fundamentals are slow-moving, so one daily run is enough.
+
+Region handling is parameterized:
+
+- pass `region` at run/deployment trigger time
+- flow logic resolves region-specific symbol universes when present
+- no separate per-region deployments
 
 ## Ticker onboarding backfill
 
@@ -78,8 +89,8 @@ Backfill status tracking:
 
 - local cache table: `ticker_backfill_status.parquet` (latest row per ticker)
 - fields include `ticker`, `status`, `failed_step`, `last_success_at`, and run metadata
-- durability note: this is local worker storage for Phase 1; move to a shared
-  persistent operational surface in a follow-up (for multi-worker HA visibility)
+- durability note: this is local runtime storage for Phase 1; with managed execution,
+  move to a shared persistent operational surface in a follow-up for durable history
 
 Trigger options when a ticker is added:
 
@@ -113,7 +124,6 @@ Ticker normalization contract:
 High-volume ticker adds are buffered by Prefect queueing:
 
 - deployment: `ticker-backfill`
-- queue: `ticker-backfill`
 - deployment concurrency limit: `4` with `ENQUEUE` collision strategy
 
 When many `dataops.ticker.added` events arrive in a short interval, runs queue
@@ -129,9 +139,9 @@ Flow wrappers resolve symbols in this order:
 
 This enables separate symbol sets per region without changing domain logic.
 
-## Work pool and worker
+## Work pool
 
-Default work pool name: `dataops-pool` (process worker).
+Default work pool name: `dataops-managed-pool` (`prefect:managed`).
 
 Bootstrap:
 
@@ -140,17 +150,11 @@ pip install -e ".[dev,orchestration]"
 ./scripts/prefect_bootstrap.sh
 ```
 
-Start worker in your own infra (required):
-
-```bash
-prefect worker start --pool dataops-pool
-```
-
-This design avoids Prefect-hosted execution and keeps secrets/network access in your environment.
+No always-on worker VM is required. Runs execute through Prefect-managed infrastructure.
 
 ## Environment and secrets
 
-Configure on worker host and/or Prefect blocks:
+Configure via deployment configuration and/or Prefect blocks:
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
