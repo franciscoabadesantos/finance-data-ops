@@ -2,7 +2,12 @@
 
 from finance_data_ops.providers.earnings import EarningsDataProvider, EarningsProviderError
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider, FundamentalsProviderError
+from finance_data_ops.providers.macro import MacroDataProvider, MacroProviderError
 from finance_data_ops.providers.market import MarketDataProvider, MarketProviderError
+from finance_data_ops.providers.release_calendar import (
+    EconomicReleaseCalendarProvider,
+    ReleaseCalendarProviderError,
+)
 from finance_data_ops.providers.symbols import normalize_symbol_for_provider
 
 __all__ = [
@@ -12,5 +17,9 @@ __all__ = [
     "FundamentalsProviderError",
     "EarningsDataProvider",
     "EarningsProviderError",
+    "MacroDataProvider",
+    "MacroProviderError",
+    "EconomicReleaseCalendarProvider",
+    "ReleaseCalendarProviderError",
     "normalize_symbol_for_provider",
 ]

@@ -105,12 +105,14 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
   - `dataops_market_daily`
   - `dataops_fundamentals_daily`
   - `dataops_earnings_daily`
+  - `dataops_macro_daily`
+  - `dataops_release_calendar_daily`
   - `dataops_ticker_backfill` (targeted single-ticker backfill)
   - `dataops_ticker_validation` (on-demand symbol normalization + validation)
   - `dataops_ticker_onboarding` (event-driven validation gate + conditional backfill)
 - Deployment definitions:
   - [prefect.yaml](/home/franciscosantos/finance-data-ops/prefect.yaml)
-  - Includes 6 deployments: `market-daily`, `fundamentals-daily`, `earnings-daily`, `ticker-validation`, `ticker-onboarding`, `ticker-backfill`
+  - Includes 8 deployments: `market-daily`, `fundamentals-daily`, `earnings-daily`, `macro-daily`, `release-calendar-daily`, `ticker-validation`, `ticker-onboarding`, `ticker-backfill`
   - Region is handled via deployment parameters/flow logic (`region`) instead of per-region deployments
   - Daily symbol resolution order: deployment `symbols` override -> validated `ticker_registry` region universe -> `DATA_OPS_SYMBOLS_<REGION>` fallback -> `DATA_OPS_SYMBOLS` fallback
   - Validation output in `ticker_registry` is the production-universe gate; direct manual symbol additions should be fallback-only during rollout.
@@ -118,6 +120,8 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
     - Market: `06:30`, `14:30`, `22:30` (higher freshness priority)
     - Earnings: `08:00`, `20:00` (medium freshness priority)
     - Fundamentals: `03:00` (low-change domain, daily is sufficient)
+    - Macro: `06:15`, `14:45`, `22:45`
+    - Release calendar: `05:00`, `15:00`
     - Ticker onboarding: event-driven only (`dataops.ticker.added`)
     - Ticker backfill: no schedule (invoked only after onboarding promotion)
     - Ticker validation: webhook/API-invoked from ticker onboarding path (no schedule)
@@ -175,6 +179,7 @@ python scripts/run_project_aggregation.py --mode no-tests --ext .py .toml .md
 - v1: [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
 - v2: [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
 - v3: [`sql/003_ticker_registry.sql`](/home/franciscosantos/finance-data-ops/sql/003_ticker_registry.sql)
+- v4: [`sql/004_data_ops_v3_macro_release.sql`](/home/franciscosantos/finance-data-ops/sql/004_data_ops_v3_macro_release.sql)
 
 ## Additional docs
 
@@ -183,3 +188,4 @@ python scripts/run_project_aggregation.py --mode no-tests --ext .py .toml .md
 - Operations runbook: [`docs/operations.md`](/home/franciscosantos/finance-data-ops/docs/operations.md)
 - Migrations runbook: [`docs/migrations.md`](/home/franciscosantos/finance-data-ops/docs/migrations.md)
 - Prefect orchestration: [`docs/prefect_orchestration.md`](/home/franciscosantos/finance-data-ops/docs/prefect_orchestration.md)
+- Parity rules: [`docs/parity_rules.md`](/home/franciscosantos/finance-data-ops/docs/parity_rules.md)

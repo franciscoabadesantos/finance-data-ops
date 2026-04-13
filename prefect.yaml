@@ -125,6 +125,87 @@ deployments:
           DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
           DATA_OPS_SYMBOLS_APAC: "TSM,BABA,JD,BIDU,EWJ,EWT,MCHI,NTES,SONY,KWEB,FXI,KORU,EWY,EWS,EWM,EPHE,VNM,IDX,THD,EIDO,ASEA,INDA,INFY,HDB,IBN,WIT,TTM,RDY,INDY,SMIN,EWA,BHP,RIO,CSL,WOW,WBC,ANZ,ASX,EZA,AFK,NGE,EGPT,GAF,EIS,ISRA,UAE,SAUD,QAT,KSA,EWZ,VALE,PBR,EWW,MELI,ILF,BAP,EC,CX,SBS,BBD,ARGT"
 
+  - name: macro-daily
+    version: null
+    tags:
+      - dataops
+      - macro
+      - daily
+    description: Data Ops macro daily orchestration.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_macro_daily_flow
+    parameters:
+      start: null
+      end: null
+      lookback_days: 730
+      force_recompute: false
+    schedules:
+      - cron: "15 6 * * 1-5"
+        timezone: "UTC"
+        active: true
+      - cron: "45 14 * * 1-5"
+        timezone: "UTC"
+        active: true
+      - cron: "45 22 * * 1-5"
+        timezone: "UTC"
+        active: true
+    work_pool:
+      name: dataops-managed-pool
+      work_queue_name: default
+      job_variables:
+        pip_packages:
+          - "numpy>=1.24"
+          - "pandas>=2.0"
+          - "pyarrow>=10.0"
+          - "yfinance>=0.2"
+          - "lxml>=4.9"
+          - "PyYAML>=6.0"
+          - "pandas-datareader>=0.10"
+        env:
+          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
+          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
+
+  - name: release-calendar-daily
+    version: null
+    tags:
+      - dataops
+      - macro
+      - release-calendar
+      - daily
+    description: Data Ops economic release-calendar daily orchestration.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_release_calendar_daily_flow
+    parameters:
+      start_date: null
+      end_date: null
+      lookback_days: 730
+      force_recompute: false
+      sleep_seconds: 0.0
+      official_start_year: null
+      official_end_year: null
+    schedules:
+      - cron: "0 5 * * 1-5"
+        timezone: "UTC"
+        active: true
+      - cron: "0 15 * * 1-5"
+        timezone: "UTC"
+        active: true
+    work_pool:
+      name: dataops-managed-pool
+      work_queue_name: default
+      job_variables:
+        pip_packages:
+          - "numpy>=1.24"
+          - "pandas>=2.0"
+          - "pyarrow>=10.0"
+          - "yfinance>=0.2"
+          - "lxml>=4.9"
+          - "PyYAML>=6.0"
+          - "pandas-datareader>=0.10"
+        env:
+          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
+          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
+
   - name: ticker-backfill
     version: null
     tags:

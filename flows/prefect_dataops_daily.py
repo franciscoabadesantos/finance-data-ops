@@ -29,7 +29,9 @@ if str(SRC_PATH) not in sys.path:
 
 from flows.dataops_earnings_daily import run_dataops_earnings_daily
 from flows.dataops_fundamentals_daily import run_dataops_fundamentals_daily
+from flows.dataops_macro_daily import run_dataops_macro_daily
 from flows.dataops_market_daily import run_dataops_market_daily
+from flows.dataops_release_calendar_daily import run_dataops_release_calendar_daily
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.publish.client import SupabaseRestPublisher
 from finance_data_ops.publish.ticker_registry import publish_ticker_registry
@@ -69,12 +71,29 @@ def _resolve_market_window(
     lookback_days: int | None,
     settings: DataOpsSettings,
 ) -> tuple[str, str]:
+    return _resolve_date_window(
+        start=start,
+        end=end,
+        lookback_days=lookback_days,
+        default_lookback_days=settings.default_lookback_days,
+    )
+
+
+def _resolve_date_window(
+    *,
+    start: str | None,
+    end: str | None,
+    lookback_days: int | None,
+    default_lookback_days: int,
+) -> tuple[str, str]:
     end_date = pd.Timestamp(end).date() if end else datetime.now(UTC).date()
     if start:
         start_date = pd.Timestamp(start).date()
     else:
-        resolved_lookback = int(lookback_days if lookback_days is not None else settings.default_lookback_days)
+        resolved_lookback = int(lookback_days if lookback_days is not None else default_lookback_days)
         start_date = end_date - timedelta(days=resolved_lookback)
+    if start_date > end_date:
+        raise ValueError(f"Invalid window: start ({start_date.isoformat()}) is after end ({end_date.isoformat()}).")
     return start_date.isoformat(), end_date.isoformat()
 
 
@@ -317,6 +336,100 @@ def dataops_earnings_daily_flow(
 
 
 @flow(
+    name="dataops_macro_daily",
+    retries=2,
+    retry_delay_seconds=600,
+    log_prints=True,
+)
+def dataops_macro_daily_flow(
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    lookback_days: int | None = None,
+    cache_root: str | None = None,
+    max_attempts: int | None = None,
+    publish_enabled: bool = True,
+    allow_unhealthy: bool = False,
+    force_recompute: bool = False,
+) -> dict[str, Any]:
+    settings = load_settings(cache_root=cache_root)
+    resolved_start, resolved_end = _resolve_date_window(
+        start=start,
+        end=end,
+        lookback_days=lookback_days,
+        default_lookback_days=settings.default_lookback_days,
+    )
+
+    logger = get_run_logger()
+    logger.info(
+        "Running macro flow (start=%s, end=%s, force_recompute=%s).",
+        resolved_start,
+        resolved_end,
+        bool(force_recompute),
+    )
+
+    return run_dataops_macro_daily(
+        start=resolved_start,
+        end=resolved_end,
+        cache_root=cache_root,
+        publish_enabled=bool(publish_enabled),
+        max_attempts=int(max_attempts or settings.default_max_attempts),
+        raise_on_failed_hard=not bool(allow_unhealthy),
+        force_recompute=bool(force_recompute),
+    )
+
+
+@flow(
+    name="dataops_release_calendar_daily",
+    retries=2,
+    retry_delay_seconds=600,
+    log_prints=True,
+)
+def dataops_release_calendar_daily_flow(
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    lookback_days: int | None = None,
+    cache_root: str | None = None,
+    max_attempts: int | None = None,
+    publish_enabled: bool = True,
+    allow_unhealthy: bool = False,
+    force_recompute: bool = False,
+    sleep_seconds: float = 0.0,
+    official_start_year: int | None = None,
+    official_end_year: int | None = None,
+) -> dict[str, Any]:
+    settings = load_settings(cache_root=cache_root)
+    resolved_start, resolved_end = _resolve_date_window(
+        start=start_date,
+        end=end_date,
+        lookback_days=lookback_days,
+        default_lookback_days=settings.default_lookback_days,
+    )
+
+    logger = get_run_logger()
+    logger.info(
+        "Running release-calendar flow (start_date=%s, end_date=%s, force_recompute=%s).",
+        resolved_start,
+        resolved_end,
+        bool(force_recompute),
+    )
+
+    return run_dataops_release_calendar_daily(
+        start_date=resolved_start,
+        end_date=resolved_end,
+        cache_root=cache_root,
+        publish_enabled=bool(publish_enabled),
+        max_attempts=int(max_attempts or settings.default_max_attempts),
+        raise_on_failed_hard=not bool(allow_unhealthy),
+        force_recompute=bool(force_recompute),
+        sleep_seconds=float(sleep_seconds),
+        official_start_year=official_start_year,
+        official_end_year=official_end_year,
+    )
+
+
+@flow(
     name="dataops_ticker_backfill",
     retries=0,
     log_prints=True,
@@ -413,12 +526,12 @@ def dataops_ticker_backfill_flow(
             "run_id": run_id,
             "ticker": normalized_ticker,
             "region": str(region or "").strip().lower() or None,
-                "status": flow_status,
-                "market_window": {"start": market_start, "end": market_end},
-                "history_limit": resolved_history_limit,
-                "steps": {
-                    "market": market_summary or {},
-                    "earnings": earnings_summary or {},
+            "status": flow_status,
+            "market_window": {"start": market_start, "end": market_end},
+            "history_limit": resolved_history_limit,
+            "steps": {
+                "market": market_summary or {},
+                "earnings": earnings_summary or {},
                 "fundamentals": fundamentals_summary or {},
             },
         }
@@ -694,7 +807,16 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Prefect Data Ops flows locally.")
     parser.add_argument(
         "domain",
-        choices=["market", "fundamentals", "earnings", "ticker-backfill", "ticker-validation", "ticker-onboarding"],
+        choices=[
+            "market",
+            "fundamentals",
+            "earnings",
+            "macro",
+            "release-calendar",
+            "ticker-backfill",
+            "ticker-validation",
+            "ticker-onboarding",
+        ],
         help="Domain flow to execute.",
     )
     parser.add_argument("--symbols", type=str, default=None, help="Comma-separated symbol universe override.")
@@ -719,6 +841,8 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-unhealthy", action="store_true", help="Do not raise on unhealthy status.")
     parser.add_argument("--start", type=str, default=None, help="Market only. Start date YYYY-MM-DD.")
     parser.add_argument("--end", type=str, default=None, help="Market only. End date YYYY-MM-DD.")
+    parser.add_argument("--start-date", type=str, default=None, help="Release-calendar only. Start date YYYY-MM-DD.")
+    parser.add_argument("--end-date", type=str, default=None, help="Release-calendar only. End date YYYY-MM-DD.")
     parser.add_argument("--lookback-days", type=int, default=None, help="Market only. Lookback days if start is unset.")
     parser.add_argument(
         "--history-limit",
@@ -726,6 +850,10 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         default=None,
         help="Earnings/ticker-backfill provider history row limit override.",
     )
+    parser.add_argument("--force-recompute", action="store_true", help="Macro/release only. Recompute selected range.")
+    parser.add_argument("--sleep-seconds", type=float, default=0.0, help="Release-calendar only. Provider pacing.")
+    parser.add_argument("--official-start-year", type=int, default=None, help="Release-calendar official start year.")
+    parser.add_argument("--official-end-year", type=int, default=None, help="Release-calendar official end year.")
     return parser
 
 
@@ -753,6 +881,31 @@ def main() -> None:
         result = dataops_earnings_daily_flow(
             **common_kwargs,
             history_limit=int(args.history_limit or 12),
+        )
+    elif args.domain == "macro":
+        result = dataops_macro_daily_flow(
+            start=args.start,
+            end=args.end,
+            lookback_days=args.lookback_days,
+            cache_root=args.cache_root,
+            max_attempts=args.max_attempts,
+            publish_enabled=not bool(args.no_publish),
+            allow_unhealthy=bool(args.allow_unhealthy),
+            force_recompute=bool(args.force_recompute),
+        )
+    elif args.domain == "release-calendar":
+        result = dataops_release_calendar_daily_flow(
+            start_date=args.start_date or args.start,
+            end_date=args.end_date or args.end,
+            lookback_days=args.lookback_days,
+            cache_root=args.cache_root,
+            max_attempts=args.max_attempts,
+            publish_enabled=not bool(args.no_publish),
+            allow_unhealthy=bool(args.allow_unhealthy),
+            force_recompute=bool(args.force_recompute),
+            sleep_seconds=float(args.sleep_seconds),
+            official_start_year=args.official_start_year,
+            official_end_year=args.official_end_year,
         )
     else:
         if args.domain == "ticker-backfill":
