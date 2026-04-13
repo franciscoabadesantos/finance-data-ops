@@ -1,0 +1,48 @@
+{
+  "generated_date": "2026-04-13",
+  "window": {
+    "start_date": "2020-01-01",
+    "end_date": "2026-04-13"
+  },
+  "macro": {
+    "publish_enabled_run": {
+      "status": "failed_hard",
+      "reason": "missing_supabase_tables",
+      "evidence": "PGRST205 macro_series_catalog not found"
+    },
+    "no_publish_run": {
+      "status": "fresh",
+      "rows": {
+        "macro_series_catalog": 17,
+        "macro_observations": 15738,
+        "macro_daily": 27863
+      }
+    }
+  },
+  "release_calendar": {
+    "publish_enabled_run": {
+      "status": "blocked",
+      "reason": "external_endpoint_timeouts"
+    },
+    "no_publish_run": {
+      "status": "failed_retrying",
+      "rows": {
+        "economic_release_calendar": 0
+      },
+      "reason": "The read operation timed out"
+    }
+  },
+  "parity": {
+    "macro": {
+      "status": "fail",
+      "value_mismatch_rows": 8764,
+      "availability_timing_mismatch_rows": 9831,
+      "staleness_mismatch_rows": 2311
+    },
+    "release_calendar": {
+      "status": "blocked",
+      "reason": "canonical_release_parquet_missing"
+    }
+  },
+  "cutover_recommendation": "not_safe"
+}

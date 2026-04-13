@@ -1,0 +1,117 @@
+{
+  "flow_run_id": "run_dataops_release_calendar_daily_2279747c1cef",
+  "window": {
+    "start_date": "2020-01-01",
+    "end_date": "2026-04-13"
+  },
+  "release_calendar_daily": {
+    "run_id": "run_release_calendar_daily_e0995d4b5ffb",
+    "asset_name": "economic_release_calendar",
+    "status": "failed_retrying",
+    "started_at": "2026-04-13T20:55:48.844144+00:00",
+    "ended_at": "2026-04-13T20:56:09.151540+00:00",
+    "symbols_requested": [
+      "CPI_Headline",
+      "CPI_Core",
+      "UNRATE",
+      "U6RATE",
+      "CIVPART",
+      "ICSA"
+    ],
+    "symbols_succeeded": [],
+    "symbols_failed": [
+      "CPI_Headline",
+      "CPI_Core",
+      "UNRATE",
+      "U6RATE",
+      "CIVPART",
+      "ICSA"
+    ],
+    "retry_exhausted_symbols": [
+      "CPI_Headline",
+      "CPI_Core",
+      "UNRATE",
+      "U6RATE",
+      "CIVPART",
+      "ICSA"
+    ],
+    "rows_written": 0,
+    "error_messages": [
+      "The read operation timed out"
+    ]
+  },
+  "asset_status": [
+    {
+      "asset_key": "economic_release_calendar",
+      "asset_type": "release_calendar",
+      "provider": "mixed_alfred_fred_dol",
+      "last_success_at": null,
+      "last_available_date": null,
+      "freshness_status": "failed_retrying",
+      "coverage_status": "failed_retrying",
+      "reason": "rows_written=0; run_id=run_release_calendar_daily_e0995d4b5ffb; errors=The read operation timed out",
+      "updated_at": "2026-04-13T20:56:09.152143+00:00"
+    },
+    {
+      "asset_key": "mv_latest_economic_release_calendar",
+      "asset_type": "derived",
+      "provider": "data_ops",
+      "last_success_at": null,
+      "last_available_date": null,
+      "freshness_status": "failed_retrying",
+      "coverage_status": "failed_retrying",
+      "reason": "rows_written=0; run_id=run_dataops_release_calendar_daily_2279747c1cef_mv_latest_economic_release_calendar; errors=The read operation timed out",
+      "updated_at": "2026-04-13T20:56:09.152143+00:00"
+    },
+    {
+      "asset_key": "data_ops_publish_pipeline_release_calendar",
+      "asset_type": "pipeline",
+      "provider": "data_ops",
+      "last_success_at": null,
+      "last_available_date": "2026-04-13",
+      "freshness_status": "failed_hard",
+      "coverage_status": "failed_hard",
+      "reason": "publish_failure; run_id=run_dataops_release_calendar_daily_2279747c1cef",
+      "updated_at": "2026-04-13T20:56:09.152418+00:00"
+    }
+  ],
+  "published": {
+    "release_calendar": {
+      "status": "failed_hard",
+      "error": "ReleaseCalendarValidationError(\"economic_release_calendar missing required columns: ['ingested_at', 'observation_date', 'observation_period', 'provenance_class', 'release_calendar_source', 'release_date_local', 'release_timestamp_utc', 'release_timezone', 'series_key', 'source']\")",
+      "retryable": false,
+      "message": "economic_release_calendar missing required columns: ['ingested_at', 'observation_date', 'observation_period', 'provenance_class', 'release_calendar_source', 'release_date_local', 'release_timestamp_utc', 'release_timezone', 'series_key', 'source']"
+    },
+    "status": {
+      "data_source_runs": {
+        "table": "data_source_runs",
+        "status": "ok",
+        "rows": 3
+      },
+      "data_asset_status": {
+        "table": "data_asset_status",
+        "status": "ok",
+        "rows": 3
+      },
+      "symbol_data_coverage": {
+        "table": "symbol_data_coverage",
+        "status": "ok",
+        "rows": 0
+      }
+    }
+  },
+  "publish_failures": [
+    {
+      "step": "release_calendar",
+      "error": "ReleaseCalendarValidationError(\"economic_release_calendar missing required columns: ['ingested_at', 'observation_date', 'observation_period', 'provenance_class', 'release_calendar_source', 'release_date_local', 'release_timestamp_utc', 'release_timezone', 'series_key', 'source']\")",
+      "classification": {
+        "code": "failed_hard",
+        "retryable": false,
+        "message": "economic_release_calendar missing required columns: ['ingested_at', 'observation_date', 'observation_period', 'provenance_class', 'release_calendar_source', 'release_date_local', 'release_timestamp_utc', 'release_timezone', 'series_key', 'source']"
+      }
+    }
+  ],
+  "rows": {
+    "economic_release_calendar": 0
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "flow_run_id": "run_dataops_release_calendar_daily_1b47d4bd0dfa",
+  "window": {
+    "start_date": "2020-01-01",
+    "end_date": "2026-04-13"
+  },
+  "release_calendar_daily": {
+    "run_id": "run_release_calendar_daily_e4ffcb513f72",
+    "asset_name": "economic_release_calendar",
+    "status": "fresh",
+    "started_at": "2026-04-13T22:02:16.025528+00:00",
+    "ended_at": "2026-04-13T22:02:45.372832+00:00",
+    "symbols_requested": [
+      "CPI_Headline",
+      "CPI_Core",
+      "UNRATE",
+      "U6RATE",
+      "CIVPART",
+      "ICSA"
+    ],
+    "symbols_succeeded": [
+      "CIVPART",
+      "CPI_Core",
+      "CPI_Headline",
+      "ICSA",
+      "U6RATE",
+      "UNRATE"
+    ],
+    "symbols_failed": [],
+    "retry_exhausted_symbols": [],
+    "rows_written": 697,
+    "error_messages": []
+  },
+  "asset_status": [
+    {
+      "asset_key": "economic_release_calendar",
+      "asset_type": "release_calendar",
+      "provider": "mixed_alfred_fred_dol",
+      "last_success_at": "2026-04-10T12:30:00+00:00",
+      "last_available_date": "2026-04-10",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows_written=697; run_id=run_release_calendar_daily_e4ffcb513f72",
+      "updated_at": "2026-04-13T22:02:45.372898+00:00"
+    },
+    {
+      "asset_key": "mv_latest_economic_release_calendar",
+      "asset_type": "derived",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-10T12:30:00+00:00",
+      "last_available_date": "2026-04-10",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows_written=697; run_id=run_dataops_release_calendar_daily_1b47d4bd0dfa_mv_latest_economic_release_calendar",
+      "updated_at": "2026-04-13T22:02:45.372898+00:00"
+    },
+    {
+      "asset_key": "data_ops_publish_pipeline_release_calendar",
+      "asset_type": "pipeline",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-13T22:02:47.566902+00:00",
+      "last_available_date": "2026-04-13",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "success; run_id=run_dataops_release_calendar_daily_1b47d4bd0dfa",
+      "updated_at": "2026-04-13T22:02:47.566939+00:00"
+    }
+  ],
+  "published": {
+    "release_calendar": {
+      "economic_release_calendar": {
+        "status_code": 201,
+        "data": null,
+        "table": "economic_release_calendar",
+        "rows": 697
+      },
+      "mv_latest_economic_release_calendar": {
+        "status_code": 204,
+        "data": null
+      }
+    },
+    "status": {
+      "data_source_runs": {
+        "status_code": 201,
+        "data": null,
+        "table": "data_source_runs",
+        "rows": 2
+      },
+      "data_asset_status": {
+        "status_code": 200,
+        "data": null,
+        "table": "data_asset_status",
+        "rows": 3
+      },
+      "symbol_data_coverage": {
+        "table": "symbol_data_coverage",
+        "status": "skipped",
+        "rows": 0
+      }
+    }
+  },
+  "publish_failures": [],
+  "rows": {
+    "economic_release_calendar": 697
+  }
+}

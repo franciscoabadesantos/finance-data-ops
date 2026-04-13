@@ -90,12 +90,15 @@ def validate_macro_publish_contract(
 
     _assert_valid_timestamp_column(macro_observations, "fetched_at", table_name="macro_observations", allow_null=False)
     _assert_valid_timestamp_column(macro_observations, "ingested_at", table_name="macro_observations", allow_null=False)
-    _assert_valid_timestamp_column(macro_daily, "available_at_utc", table_name="macro_daily", allow_null=False)
+    # Leading coverage windows for some series can be intentionally unavailable (NULL available_at_utc).
+    # Non-NULL timestamps must still parse correctly.
+    _assert_valid_timestamp_column(macro_daily, "available_at_utc", table_name="macro_daily", allow_null=True)
     _assert_valid_timestamp_column(macro_daily, "ingested_at", table_name="macro_daily", allow_null=False)
 
     _assert_valid_date_column(macro_observations, "observation_date", table_name="macro_observations")
     _assert_valid_date_column(macro_daily, "as_of_date", table_name="macro_daily")
-    _assert_valid_date_column(macro_daily, "source_observation_date", table_name="macro_daily")
+    # Leading coverage windows for some series can be intentionally unavailable.
+    _assert_valid_date_column(macro_daily, "source_observation_date", table_name="macro_daily", allow_null=True)
 
     if "release_timestamp_utc" in macro_observations.columns:
         _assert_valid_timestamp_column(
@@ -177,11 +180,18 @@ def _assert_valid_timestamp_column(
             )
 
 
-def _assert_valid_date_column(frame: pd.DataFrame, column: str, *, table_name: str) -> None:
+def _assert_valid_date_column(
+    frame: pd.DataFrame,
+    column: str,
+    *,
+    table_name: str,
+    allow_null: bool = False,
+) -> None:
     parsed = pd.to_datetime(frame[column], errors="coerce")
     invalid_mask = frame[column].notna() & parsed.isna()
     if invalid_mask.any():
         raise MacroValidationError(f"{table_name}.{column} contains {int(invalid_mask.sum())} invalid date values.")
-    null_mask = parsed.isna()
-    if null_mask.any():
-        raise MacroValidationError(f"{table_name}.{column} contains {int(null_mask.sum())} NULL date values.")
+    if not allow_null:
+        null_mask = parsed.isna()
+        if null_mask.any():
+            raise MacroValidationError(f"{table_name}.{column} contains {int(null_mask.sum())} NULL date values.")

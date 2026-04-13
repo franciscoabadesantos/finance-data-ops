@@ -1,0 +1,85 @@
+{
+  "window": {
+    "start": "2020-01-01",
+    "end": "2026-04-13"
+  },
+  "series_breakdown": [
+    {
+      "series_key": "CPI_Core",
+      "rows_compared": 1639,
+      "value_mismatch_rows": 1494,
+      "canonical_present_legacy_missing_rows": 139,
+      "legacy_present_canonical_missing_rows": 0,
+      "staleness_mismatch_rows": 139,
+      "availability_mismatch_rows": 1639,
+      "obs_rows": 74,
+      "obs_release_ts_missing_rows": 74
+    },
+    {
+      "series_key": "CPI_Headline",
+      "rows_compared": 1639,
+      "value_mismatch_rows": 1494,
+      "canonical_present_legacy_missing_rows": 139,
+      "legacy_present_canonical_missing_rows": 0,
+      "staleness_mismatch_rows": 139,
+      "availability_mismatch_rows": 1639,
+      "obs_rows": 74,
+      "obs_release_ts_missing_rows": 74
+    },
+    {
+      "series_key": "DBC",
+      "rows_compared": 1639,
+      "value_mismatch_rows": 1494,
+      "canonical_present_legacy_missing_rows": 138,
+      "legacy_present_canonical_missing_rows": 0,
+      "staleness_mismatch_rows": 138,
+      "availability_mismatch_rows": 0,
+      "obs_rows": 1577,
+      "obs_release_ts_missing_rows": 1577
+    },
+    {
+      "series_key": "U6RATE",
+      "rows_compared": 1639,
+      "value_mismatch_rows": 1207,
+      "canonical_present_legacy_missing_rows": 146,
+      "legacy_present_canonical_missing_rows": 0,
+      "staleness_mismatch_rows": 146,
+      "availability_mismatch_rows": 1639,
+      "obs_rows": 74,
+      "obs_release_ts_missing_rows": 74
+    },
+    {
+      "series_key": "CIVPART",
+      "rows_compared": 1639,
+      "value_mismatch_rows": 1128,
+      "canonical_present_legacy_missing_rows": 146,
+      "legacy_present_canonical_missing_rows": 0,
+      "staleness_mismatch_rows": 146,
+      "availability_mismatch_rows": 1639,
+      "obs_rows": 74,
+      "obs_release_ts_missing_rows": 74
+    },
+    {
+      "series_key": "UNRATE",
+      "rows_compared": 1639,
+      "value_mismatch_rows": 1120,
+      "canonical_present_legacy_missing_rows": 146,
+      "legacy_present_canonical_missing_rows": 0,
+      "staleness_mismatch_rows": 146,
+      "availability_mismatch_rows": 1639,
+      "obs_rows": 74,
+      "obs_release_ts_missing_rows": 74
+    },
+    {
+      "series_key": "ICSA",
+      "rows_compared": 1639,
+      "value_mismatch_rows": 824,
+      "canonical_present_legacy_missing_rows": 165,
+      "legacy_present_canonical_missing_rows": 2,
+      "staleness_mismatch_rows": 167,
+      "availability_mismatch_rows": 1636,
+      "obs_rows": 327,
+      "obs_release_ts_missing_rows": 327
+    }
+  ]
+}

@@ -86,16 +86,35 @@ class MacroDataProvider:
         raise MacroProviderError(f"Unsupported macro source={spec.source!r} for {spec.key}.")
 
     def _fetch_fred_series(self, spec: MacroSeriesSpec, *, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
-        try:
-            from pandas_datareader import data as pdr
-        except Exception as exc:  # pragma: no cover - runtime dependency
-            raise RuntimeError("pandas-datareader is required for FRED macro fetches.") from exc
+        import io
 
-        frame = pdr.DataReader(spec.source_code, "fred", start.date().isoformat(), end.date().isoformat())
-        if frame is None or frame.empty or spec.source_code not in frame.columns:
+        try:
+            import requests
+        except Exception as exc:  # pragma: no cover - runtime dependency
+            raise RuntimeError("requests is required for FRED macro fetches.") from exc
+
+        response = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv",
+            params={
+                "id": spec.source_code,
+                "cosd": start.date().isoformat(),
+                "coed": end.date().isoformat(),
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        frame = pd.read_csv(io.StringIO(response.text))
+        if frame is None or frame.empty:
+            return pd.Series(dtype="float64", name=spec.key)
+        date_col = "DATE" if "DATE" in frame.columns else frame.columns[0]
+        value_col = spec.source_code if spec.source_code in frame.columns else frame.columns[-1]
+        frame[date_col] = pd.to_datetime(frame[date_col], errors="coerce")
+        frame[value_col] = pd.to_numeric(frame[value_col], errors="coerce")
+        frame = frame.loc[~pd.isna(frame[date_col])].copy()
+        if frame.empty:
             return pd.Series(dtype="float64", name=spec.key)
 
-        series = pd.to_numeric(frame[spec.source_code], errors="coerce")
+        series = pd.Series(frame[value_col].to_numpy(), index=pd.DatetimeIndex(frame[date_col]), name=spec.key)
         series = series.dropna()
         if series.empty:
             return pd.Series(dtype="float64", name=spec.key)
@@ -117,7 +136,8 @@ class MacroDataProvider:
             start=start.date().isoformat(),
             end=(end + pd.Timedelta(days=1)).date().isoformat(),
             interval="1d",
-            auto_adjust=False,
+            # Match legacy Finance macro fetch behavior (yfinance default adjusted-close surface).
+            auto_adjust=True,
         )
         if history is None or history.empty or "Close" not in history.columns:
             return pd.Series(dtype="float64", name=spec.key)

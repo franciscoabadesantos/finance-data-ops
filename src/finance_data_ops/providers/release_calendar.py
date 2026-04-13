@@ -5,31 +5,26 @@ from __future__ import annotations
 import csv
 import json
 import re
-import socket
+import subprocess
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time as dtime, timedelta
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-ALFRED_BASE_URL = "https://alfred.stlouisfed.org"
+# Use the FRED host for ALFRED-mode endpoints; in this runtime environment it is
+# materially more reliable than direct alfred.stlouisfed.org while preserving payload semantics.
+ALFRED_BASE_URL = "https://fred.stlouisfed.org"
 ALFRED_GRAPH_API_SERIES_URL = f"{ALFRED_BASE_URL}/graph/api/series/"
-ALFRED_GRAPH_CSV_URL = f"{ALFRED_BASE_URL}/graph/alfredgraph.csv"
+ALFRED_GRAPH_CSV_URL = f"{ALFRED_BASE_URL}/graph/fredgraph.csv"
 DOL_AR539_URL = "https://oui.doleta.gov/unemploy/csv/ar539.csv"
 FRED_RELEASE_CALENDAR_URL = "https://fred.stlouisfed.org/releases/calendar"
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-)
-
-DEFAULT_TIMEOUT_SECONDS = 90
-DEFAULT_MAX_RETRIES = 6
-DEFAULT_RETRY_SLEEP_SECONDS = 0.75
+DEFAULT_TIMEOUT_SECONDS = 15
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_RETRY_SLEEP_SECONDS = 0.5
 
 RELEASE_TIMEZONE = "America/New_York"
 RELEASE_TIME_LOCAL = dtime(hour=8, minute=30)
@@ -66,8 +61,10 @@ ANCHOR_GROUPS: tuple[AnchorGroup, ...] = (
         anchor_series_id="CPIAUCSL",
         release_calendar_source="bls_cpi_release_calendar_v1",
         series_keys=("CPI_Headline", "CPI_Core"),
-        generation_method="observation_first_appearance",
-        source_label="alfred_observation_first_appearance_v1",
+        # Reliability path: avoid high-volume vintage snapshots and derive monthly first release
+        # from available revision dates + latest observation presence.
+        generation_method="monthly_first_release",
+        source_label="alfred_graph_revision_dates_v1",
     ),
     AnchorGroup(
         anchor_series_id="UNRATE",
@@ -193,6 +190,19 @@ class EconomicReleaseCalendarProvider:
         official_end_year: int,
     ) -> pd.DataFrame:
         observation_dates = _load_icsa_observation_weeks_from_dol(min_observation_date=min_observation_date)
+        # DOL ar539 can lag the newest weekly period; union with current ICSA observation
+        # presence so frontier weeks still get official release timestamps.
+        try:
+            latest_obs_raw = _load_latest_observation_presence("ICSA")
+            latest_obs_dates = [
+                date.fromisoformat(token)
+                for token in sorted(latest_obs_raw)
+                if token and date.fromisoformat(token) >= min_observation_date
+            ]
+            observation_dates = sorted(set(observation_dates).union(set(latest_obs_dates)))
+        except Exception:
+            # Keep DOL-derived baseline when latest presence probe is transiently unavailable.
+            observation_dates = sorted(set(observation_dates))
         available_revision_dates = _load_icsa_available_revision_dates()
         official_release_dates = _load_fred_release_calendar_dates(
             start_year=int(official_start_year),
@@ -226,7 +236,7 @@ class EconomicReleaseCalendarProvider:
 
         for official_release in sorted(official_release_dates):
             obs = _previous_saturday(official_release)
-            if obs in release_by_observation:
+            if obs in observation_dates:
                 release_by_observation[obs] = (official_release, "fred_release_calendar_rid180_v1")
 
         for obs in ICSA_LAPSE_BACKFILL_OBSERVATIONS:
@@ -282,23 +292,66 @@ def _fetch_text(
     max_retries: int = DEFAULT_MAX_RETRIES,
     retry_sleep_seconds: float = DEFAULT_RETRY_SLEEP_SECONDS,
 ) -> str:
-    req = Request(url, headers={"User-Agent": USER_AGENT})
+    last_error: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
-            with urlopen(req, timeout=timeout) as resp:
-                return resp.read().decode("utf-8", errors="replace")
-        except HTTPError:
-            raise
-        except (TimeoutError, socket.timeout, URLError, OSError):
+            # Curl transport with explicit subprocess timeout gives deterministic upper bounds
+            # in environments where Python TLS/DNS stack can block beyond socket read timeouts.
+            return _fetch_text_via_curl(url=url, timeout=timeout)
+        except Exception as exc:
+            last_error = exc
             if attempt >= max_retries:
-                raise
+                break
             time.sleep(retry_sleep_seconds * float(2 ** (attempt - 1)))
+
+    if last_error is not None:
+        raise last_error
     raise RuntimeError("unreachable")
 
 
+def _fetch_text_via_curl(*, url: str, timeout: int) -> str:
+    try:
+        result = subprocess.run(
+            [
+                "curl",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--location",
+                "--http1.1",
+                "--max-time",
+                str(int(timeout)),
+                "--connect-timeout",
+                "10",
+                url,
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=int(timeout) + 5,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"curl subprocess timeout for {url}") from exc
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise RuntimeError(f"curl fetch failed for {url}: rc={result.returncode} stderr={stderr}")
+    return str(result.stdout or "")
+
+
 def _fetch_json(url: str, *, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> dict:
-    raw = _fetch_text(url, timeout=timeout)
-    return json.loads(raw)
+    last_error: Exception | None = None
+    for attempt in range(1, DEFAULT_MAX_RETRIES + 1):
+        try:
+            raw = _fetch_text(url, timeout=timeout)
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            if attempt >= DEFAULT_MAX_RETRIES:
+                break
+            time.sleep(DEFAULT_RETRY_SLEEP_SECONDS * float(2 ** (attempt - 1)))
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("unreachable")
 
 
 def _parse_date(token: str, fmt: str) -> date | None:
@@ -338,12 +391,22 @@ def _load_available_revision_dates(series_id: str) -> list[str]:
 def _load_vintage_snapshot(series_id: str, vintage_date: str) -> dict[str, str]:
     raw = _fetch_text(f"{ALFRED_GRAPH_CSV_URL}?id={series_id}&vintage_date={vintage_date}")
     reader = csv.DictReader(raw.splitlines())
+    fieldnames = list(reader.fieldnames or [])
+    date_col = "observation_date" if "observation_date" in fieldnames else ("DATE" if "DATE" in fieldnames else None)
+    if date_col is None:
+        date_col = fieldnames[0] if fieldnames else None
     value_col = f"{series_id}_{vintage_date.replace('-', '')}"
+    if value_col not in fieldnames:
+        if series_id in fieldnames:
+            value_col = series_id
+        else:
+            fallback_cols = [name for name in fieldnames if name != date_col]
+            value_col = fallback_cols[0] if fallback_cols else value_col
     out: dict[str, str] = {}
     for row in reader:
         if not isinstance(row, dict):
             continue
-        obs = str(row.get("observation_date", "")).strip()
+        obs = str(row.get(str(date_col), "")).strip() if date_col is not None else ""
         if not obs:
             continue
         out[obs] = str(row.get(value_col, "")).strip()
@@ -354,6 +417,9 @@ def _load_latest_observation_presence(series_id: str) -> set[str]:
     raw = _fetch_text(f"{ALFRED_GRAPH_CSV_URL}?id={series_id}")
     reader = csv.DictReader(raw.splitlines())
     fieldnames = list(reader.fieldnames or [])
+    date_col = "observation_date" if "observation_date" in fieldnames else ("DATE" if "DATE" in fieldnames else None)
+    if date_col is None:
+        date_col = fieldnames[0] if fieldnames else None
 
     value_col: str | None = None
     if series_id in fieldnames:
@@ -372,7 +438,7 @@ def _load_latest_observation_presence(series_id: str) -> set[str]:
     for row in reader:
         if not isinstance(row, dict):
             continue
-        obs = str(row.get("observation_date", "")).strip()
+        obs = str(row.get(str(date_col), "")).strip() if date_col is not None else ""
         if not obs:
             continue
         val = str(row.get(value_col, "")).strip()
