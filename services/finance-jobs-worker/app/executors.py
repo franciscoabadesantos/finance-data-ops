@@ -6,6 +6,7 @@ from typing import Any
 from flows.dataops_earnings_daily import run_dataops_earnings_daily
 from flows.dataops_fundamentals_daily import run_dataops_fundamentals_daily
 from flows.dataops_market_daily import run_dataops_market_daily
+from finance_data_ops.analysis.coverage import build_coverage_report
 from finance_data_ops.analysis.snapshots import build_ticker_snapshot_report
 from finance_data_ops.validation.ticker_validation import run_single_ticker_validation
 
@@ -300,23 +301,41 @@ class JobExecutor:
                 "worker_job_id": worker_job_id,
             },
         )
-        result_json = build_ticker_snapshot_report(
-            ticker=request.ticker,
-            region=request.region,
-            exchange=request.exchange,
-            analysis_type=request.analysis_type or "ticker_snapshot",
-            market_snapshot=self.registry.fetch_market_snapshot(str(request.ticker).strip().upper()),
-            coverage=self.registry.fetch_symbol_coverage(str(request.ticker).strip().upper()),
-            asset_status_by_key=self.registry.fetch_data_asset_status(),
-            registry_row=self.registry.resolve_registry_row(
-                ticker=request.ticker,
-                region=str(request.region or "us").strip().lower() or "us",
-                exchange=request.exchange,
-            ),
+        resolved_analysis_type = request.analysis_type or "ticker_snapshot"
+        ticker = str(request.ticker).strip().upper()
+        region = str(request.region or "us").strip().lower() or "us"
+        exchange = request.exchange
+        coverage = self.registry.fetch_symbol_coverage(ticker)
+        assets = self.registry.fetch_data_asset_status()
+        registry_row = self.registry.resolve_registry_row(
+            ticker=ticker,
+            region=region,
+            exchange=exchange,
         )
+        if resolved_analysis_type == "ticker_snapshot":
+            result_json = build_ticker_snapshot_report(
+                ticker=ticker,
+                region=region,
+                exchange=exchange,
+                analysis_type=resolved_analysis_type,
+                market_snapshot=self.registry.fetch_market_snapshot(ticker),
+                coverage=coverage,
+                asset_status_by_key=assets,
+                registry_row=registry_row,
+            )
+        else:
+            result_json = build_coverage_report(
+                ticker=ticker,
+                region=region,
+                exchange=exchange,
+                analysis_type=resolved_analysis_type,
+                coverage=coverage,
+                asset_status_by_key=assets,
+                registry_row=registry_row,
+            )
         self.registry.upsert_analysis_result(
             job_id=analysis_job_id,
-            analysis_type=request.analysis_type or "ticker_snapshot",
+            analysis_type=resolved_analysis_type,
             result_json=result_json,
             summary_text=str(result_json.get("summary") or ""),
         )
@@ -333,7 +352,7 @@ class JobExecutor:
         return {
             "status": "completed",
             "job_id": analysis_job_id,
-            "analysis_type": request.analysis_type or "ticker_snapshot",
+            "analysis_type": resolved_analysis_type,
         }
 
     def _set_analysis_job_failed(self, *, request: ExecuteJobRequest, worker_job_id: str, error: str) -> None:

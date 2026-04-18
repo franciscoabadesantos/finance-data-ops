@@ -208,3 +208,84 @@ def test_analysis_job_transitions_to_completed_and_persists_result() -> None:
     assert payload["metadata"]["analysis_type"] == "ticker_snapshot"
     assert payload["metadata"]["ticker"] == "AAPL"
     assert isinstance(payload["sections"], list)
+
+
+def test_analysis_job_coverage_report_transitions_to_completed_and_persists_result() -> None:
+    supabase = FakeSupabaseClient()
+    supabase.tables["analysis_jobs"].append(
+        {
+            "job_id": "analysis-cov-1",
+            "ticker": "MSFT",
+            "region": "us",
+            "exchange": None,
+            "analysis_type": "coverage_report",
+            "status": "queued",
+            "created_at": "2026-04-18T00:00:00+00:00",
+            "error_message": None,
+            "worker_job_id": None,
+        }
+    )
+    supabase.tables["symbol_data_coverage"].append(
+        {
+            "ticker": "MSFT",
+            "market_data_available": True,
+            "fundamentals_available": True,
+            "earnings_available": False,
+            "coverage_status": "partial",
+            "coverage_ratio": 0.67,
+        }
+    )
+    supabase.tables["data_asset_status"].extend(
+        [
+            {"asset_key": "market_price_daily", "freshness_status": "fresh"},
+            {"asset_key": "market_quotes", "freshness_status": "fresh"},
+            {"asset_key": "fundamentals_daily", "freshness_status": "fresh"},
+            {"asset_key": "earnings_daily", "freshness_status": "stale"},
+        ]
+    )
+    supabase.tables["ticker_registry"].append(
+        {
+            "registry_key": "MSFT|us|default",
+            "input_symbol": "MSFT",
+            "region": "us",
+            "exchange": None,
+            "status": "active",
+            "validation_status": "validated",
+            "promotion_status": "validated_full",
+            "validation_reason": None,
+        }
+    )
+
+    request = ExecuteJobRequest(
+        job_type="analysis_job",
+        job_id="analysis-cov-1",
+        ticker="MSFT",
+        region="us",
+        analysis_type="coverage_report",
+        idempotency_key="analysis:analysis-cov-1",
+    )
+    executor = JobExecutor(
+        settings=FakeSettings(),
+        registry=WorkerRegistryStore(supabase),  # type: ignore[arg-type]
+        tasks=object(),  # type: ignore[arg-type]
+    )
+    result = executor.execute(
+        request,
+        job_id="worker-job-cov",
+        attempt=1,
+        task_name="projects/x/locations/y/queues/z/tasks/worker-job-cov",
+    )
+
+    assert result["status"] == "completed"
+    assert result["analysis_type"] == "coverage_report"
+
+    analysis_job = supabase.tables["analysis_jobs"][0]
+    assert analysis_job["status"] == "completed"
+    assert analysis_job["worker_job_id"] == "worker-job-cov"
+    assert analysis_job["error_message"] is None
+
+    stored = supabase.tables["analysis_results"][0]
+    assert stored["analysis_type"] == "coverage_report"
+    payload = stored["result_json"]
+    assert payload["metadata"]["analysis_type"] == "coverage_report"
+    assert any(section.get("title") == "Domain Coverage" for section in payload["sections"])

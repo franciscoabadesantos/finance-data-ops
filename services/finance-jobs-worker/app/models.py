@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
 JobType = Literal["ticker_validation", "ticker_backfill", "analysis_job"]
-AnalysisType = Literal["ticker_snapshot"]
+AnalysisType = Literal["ticker_snapshot", "coverage_report"]
 
 
 class ExecuteJobRequest(BaseModel):
@@ -58,8 +58,8 @@ class ExecuteJobRequest(BaseModel):
         if self.job_type == "analysis_job":
             if not self.job_id or not str(self.job_id).strip():
                 raise ValueError("job_id is required for analysis jobs")
-            if self.analysis_type != "ticker_snapshot":
-                raise ValueError("analysis_type must be ticker_snapshot")
+            if self.analysis_type not in {"ticker_snapshot", "coverage_report"}:
+                raise ValueError("analysis_type must be ticker_snapshot or coverage_report")
         return self
 
     def resolved_idempotency_key(self) -> str:
