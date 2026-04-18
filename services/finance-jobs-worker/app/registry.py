@@ -155,6 +155,15 @@ class WorkerRegistryStore:
             return None
         return dict(data[0])
 
+    def fetch_market_price_daily_rows(self, ticker: str, *, limit: int = 5000) -> list[dict[str, Any]]:
+        return self._fetch_rows_for_ticker("market_price_daily", ticker=ticker, limit=limit)
+
+    def fetch_fundamentals_rows(self, ticker: str, *, limit: int = 5000) -> list[dict[str, Any]]:
+        return self._fetch_rows_for_ticker("market_fundamentals_v2", ticker=ticker, limit=limit)
+
+    def fetch_earnings_history_rows(self, ticker: str, *, limit: int = 5000) -> list[dict[str, Any]]:
+        return self._fetch_rows_for_ticker("market_earnings_history", ticker=ticker, limit=limit)
+
     def fetch_data_asset_status(self) -> dict[str, dict[str, Any]]:
         response = self.client.table("data_asset_status").select("*").execute()
         rows = [dict(item) for item in (response.data or []) if isinstance(item, dict)]
@@ -164,6 +173,24 @@ class WorkerRegistryStore:
             if key:
                 by_key[key] = row
         return by_key
+
+    def _fetch_rows_for_ticker(self, table_name: str, *, ticker: str, limit: int) -> list[dict[str, Any]]:
+        symbol = str(ticker).strip().upper()
+        for column in ("ticker", "symbol"):
+            try:
+                response = (
+                    self.client.table(str(table_name))
+                    .select("*")
+                    .eq(column, symbol)
+                    .limit(max(1, int(limit)))
+                    .execute()
+                )
+            except Exception:
+                continue
+            rows = [dict(item) for item in (response.data or []) if isinstance(item, dict)]
+            if rows:
+                return rows
+        return []
 
     def merge_notes(self, registry_key: str, patch: dict[str, Any]) -> dict[str, Any]:
         row = self.get_by_key(registry_key)

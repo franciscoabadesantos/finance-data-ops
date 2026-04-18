@@ -31,6 +31,16 @@ def test_build_coverage_report_contract_shape() -> None:
             "promotion_status": "validated_full",
             "validation_reason": None,
         },
+        market_price_rows=[
+            {"ticker": "AAPL", "date": "2026-04-16", "fetched_at": "2026-04-16T23:59:00+00:00"},
+            {"ticker": "AAPL", "date": "2026-04-17", "fetched_at": "2026-04-17T23:59:00+00:00"},
+        ],
+        fundamentals_rows=[
+            {"ticker": "AAPL", "period_end": "2025-12-31", "fetched_at": "2026-01-15T00:00:00+00:00"},
+        ],
+        earnings_rows=[
+            {"ticker": "AAPL", "earnings_date": "2026-01-28", "fetched_at": "2026-01-28T12:00:00+00:00"},
+        ],
         generated_at="2026-04-18T00:00:00+00:00",
     )
 
@@ -45,6 +55,7 @@ def test_build_coverage_report_contract_shape() -> None:
         "generated_at": "2026-04-18T00:00:00+00:00",
     }
     assert any(section.get("title") == "Domain Coverage" for section in payload["sections"])
+    assert any(section.get("title") == "Data Window / Completeness" for section in payload["sections"])
     assert any("Freshness alerts" in warning for warning in payload["warnings"])
 
 
@@ -61,4 +72,7 @@ def test_build_coverage_report_missing_inputs_emit_warnings() -> None:
 
     warnings = payload["warnings"]
     assert "No symbol_data_coverage row found for ticker." in warnings
-    assert "No ticker_registry row found for requested scope." in warnings
+    assert (
+        "No ticker_registry onboarding row found for requested scope; canonical data availability is assessed independently."
+        in warnings
+    )

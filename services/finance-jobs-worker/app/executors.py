@@ -312,6 +312,9 @@ class JobExecutor:
             region=region,
             exchange=exchange,
         )
+        market_price_rows = self.registry.fetch_market_price_daily_rows(ticker)
+        fundamentals_rows = self.registry.fetch_fundamentals_rows(ticker)
+        earnings_rows = self.registry.fetch_earnings_history_rows(ticker)
         if resolved_analysis_type == "ticker_snapshot":
             result_json = build_ticker_snapshot_report(
                 ticker=ticker,
@@ -322,6 +325,9 @@ class JobExecutor:
                 coverage=coverage,
                 asset_status_by_key=assets,
                 registry_row=registry_row,
+                market_price_rows=market_price_rows,
+                fundamentals_rows=fundamentals_rows,
+                earnings_rows=earnings_rows,
             )
         else:
             result_json = build_coverage_report(
@@ -332,6 +338,9 @@ class JobExecutor:
                 coverage=coverage,
                 asset_status_by_key=assets,
                 registry_row=registry_row,
+                market_price_rows=market_price_rows,
+                fundamentals_rows=fundamentals_rows,
+                earnings_rows=earnings_rows,
             )
         self.registry.upsert_analysis_result(
             job_id=analysis_job_id,
