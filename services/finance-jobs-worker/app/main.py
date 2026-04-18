@@ -78,8 +78,8 @@ def execute_job(
             "job_id": job_id,
             "job_type": payload.job_type,
             "registry_key": payload.registry_key,
+            "analysis_job_id": payload.job_id,
             "result": result,
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-

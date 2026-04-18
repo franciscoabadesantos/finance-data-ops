@@ -5,7 +5,10 @@ import hashlib
 import json
 from typing import Any
 
-from supabase import Client
+try:
+    from supabase import Client
+except Exception:  # pragma: no cover - optional in local/test environments
+    Client = Any  # type: ignore[assignment]
 
 
 def now_iso() -> str:
@@ -51,6 +54,57 @@ class WorkerRegistryStore:
             return None
         return dict(data[0])
 
+    def get_analysis_job(self, job_id: str) -> dict[str, Any] | None:
+        response = (
+            self.client.table("analysis_jobs")
+            .select("*")
+            .eq("job_id", str(job_id).strip())
+            .limit(1)
+            .execute()
+        )
+        data = response.data or []
+        if not data:
+            return None
+        return dict(data[0])
+
+    def patch_analysis_job(self, job_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+        update_payload = dict(patch)
+        self.client.table("analysis_jobs").update(update_payload).eq("job_id", str(job_id).strip()).execute()
+        row = self.get_analysis_job(job_id)
+        if row is None:
+            raise RuntimeError("analysis_jobs row missing after update.")
+        return row
+
+    def upsert_analysis_result(
+        self,
+        *,
+        job_id: str,
+        analysis_type: str,
+        result_json: dict[str, Any],
+        summary_text: str | None,
+    ) -> None:
+        row = {
+            "job_id": str(job_id).strip(),
+            "analysis_type": str(analysis_type).strip(),
+            "result_json": dict(result_json),
+            "summary_text": (str(summary_text).strip() if summary_text is not None else None),
+            "created_at": now_iso(),
+        }
+        try:
+            self.client.table("analysis_results").upsert(row, on_conflict="job_id").execute()
+            return
+        except Exception:
+            pass
+
+        existing_response = (
+            self.client.table("analysis_results").select("*").eq("job_id", str(job_id).strip()).limit(1).execute()
+        )
+        existing = existing_response.data or []
+        if existing:
+            self.client.table("analysis_results").update(row).eq("job_id", str(job_id).strip()).execute()
+        else:
+            self.client.table("analysis_results").insert(row).execute()
+
     def patch_row(self, registry_key: str, patch: dict[str, Any]) -> dict[str, Any]:
         update_payload = dict(patch)
         update_payload["updated_at"] = now_iso()
@@ -59,6 +113,84 @@ class WorkerRegistryStore:
         if row is None:
             raise RuntimeError("ticker_registry row missing after update.")
         return row
+
+    def resolve_registry_row(self, *, ticker: str, region: str, exchange: str | None) -> dict[str, Any] | None:
+        query = (
+            self.client.table("ticker_registry")
+            .select("*")
+            .eq("input_symbol", str(ticker).strip().upper())
+            .eq("region", str(region).strip().lower())
+        )
+        if exchange:
+            query = query.eq("exchange", str(exchange).strip().upper())
+        response = query.execute()
+        data = response.data or []
+        if not data:
+            return None
+        return dict(data[0])
+
+    def fetch_market_snapshot(self, ticker: str) -> dict[str, Any] | None:
+        response = (
+            self.client.table("ticker_market_stats_snapshot")
+            .select("*")
+            .eq("ticker", str(ticker).strip().upper())
+            .limit(1)
+            .execute()
+        )
+        data = response.data or []
+        if not data:
+            return None
+        return dict(data[0])
+
+    def fetch_symbol_coverage(self, ticker: str) -> dict[str, Any] | None:
+        response = (
+            self.client.table("symbol_data_coverage")
+            .select("*")
+            .eq("ticker", str(ticker).strip().upper())
+            .limit(1)
+            .execute()
+        )
+        data = response.data or []
+        if not data:
+            return None
+        return dict(data[0])
+
+    def fetch_market_price_daily_rows(self, ticker: str, *, limit: int = 5000) -> list[dict[str, Any]]:
+        return self._fetch_rows_for_ticker("market_price_daily", ticker=ticker, limit=limit)
+
+    def fetch_fundamentals_rows(self, ticker: str, *, limit: int = 5000) -> list[dict[str, Any]]:
+        return self._fetch_rows_for_ticker("market_fundamentals_v2", ticker=ticker, limit=limit)
+
+    def fetch_earnings_history_rows(self, ticker: str, *, limit: int = 5000) -> list[dict[str, Any]]:
+        return self._fetch_rows_for_ticker("market_earnings_history", ticker=ticker, limit=limit)
+
+    def fetch_data_asset_status(self) -> dict[str, dict[str, Any]]:
+        response = self.client.table("data_asset_status").select("*").execute()
+        rows = [dict(item) for item in (response.data or []) if isinstance(item, dict)]
+        by_key: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            key = str(row.get("asset_key") or "").strip()
+            if key:
+                by_key[key] = row
+        return by_key
+
+    def _fetch_rows_for_ticker(self, table_name: str, *, ticker: str, limit: int) -> list[dict[str, Any]]:
+        symbol = str(ticker).strip().upper()
+        for column in ("ticker", "symbol"):
+            try:
+                response = (
+                    self.client.table(str(table_name))
+                    .select("*")
+                    .eq(column, symbol)
+                    .limit(max(1, int(limit)))
+                    .execute()
+                )
+            except Exception:
+                continue
+            rows = [dict(item) for item in (response.data or []) if isinstance(item, dict)]
+            if rows:
+                return rows
+        return []
 
     def merge_notes(self, registry_key: str, patch: dict[str, Any]) -> dict[str, Any]:
         row = self.get_by_key(registry_key)
@@ -85,7 +217,7 @@ class WorkerRegistryStore:
         *,
         job_id: str,
         job_type: str,
-        registry_key: str,
+        registry_key: str | None,
         idempotency_key: str,
         status: str,
         attempt: int,
@@ -98,7 +230,7 @@ class WorkerRegistryStore:
         row = {
             "job_id": str(job_id),
             "job_type": str(job_type),
-            "registry_key": str(registry_key),
+            "registry_key": str(registry_key or ""),
             "idempotency_key": str(idempotency_key),
             "status": str(status),
             "attempt": int(attempt),
@@ -114,4 +246,3 @@ class WorkerRegistryStore:
         except Exception:
             # Keep job execution resilient when audit table migration is not present yet.
             return
-
