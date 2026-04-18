@@ -1,0 +1,82 @@
+name: Deploy Finance Jobs Worker
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-finance-jobs-worker-main
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'finance-data-ops' }}
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+  WORKER_SERVICE: ${{ vars.GCP_WORKER_SERVICE || 'finance-jobs-worker' }}
+
+jobs:
+  deploy:
+    if: >-
+      ${{
+        (github.event_name == 'workflow_run' &&
+         github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.head_branch == 'main')
+        || github.event_name == 'workflow_dispatch'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout target revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Resolve image tag
+        id: image
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short=12 HEAD)"
+          IMAGE_URI="gcr.io/${GCP_PROJECT_ID}/${WORKER_SERVICE}:${SHORT_SHA}"
+          echo "image_uri=${IMAGE_URI}" >> "${GITHUB_OUTPUT}"
+          echo "Using image: ${IMAGE_URI}"
+
+      - name: Build and push worker image
+        run: |
+          set -euo pipefail
+          gcloud builds submit . \
+            --project "${GCP_PROJECT_ID}" \
+            --tag "${{ steps.image.outputs.image_uri }}" \
+            --file services/finance-jobs-worker/Dockerfile
+
+      - name: Deploy Cloud Run worker
+        run: |
+          set -euo pipefail
+          gcloud run deploy "${WORKER_SERVICE}" \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${GCP_REGION}" \
+            --image "${{ steps.image.outputs.image_uri }}" \
+            --quiet
+
+      - name: Show deployed revision
+        run: |
+          set -euo pipefail
+          gcloud run services describe "${WORKER_SERVICE}" \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${GCP_REGION}" \
+            --format='value(status.latestReadyRevisionName,spec.template.spec.containers[0].image)'
