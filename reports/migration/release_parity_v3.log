@@ -1,0 +1,163 @@
+{
+  "window": {
+    "start_date": "2020-01-01",
+    "end_date": "2026-04-13"
+  },
+  "inputs": {
+    "canonical_release_path": "/home/franciscosantos/finance-data-ops/data_cache/economic_release_calendar.parquet",
+    "finance_repo_root": "/home/franciscosantos/Finance",
+    "legacy_registry_path": "/home/franciscosantos/Finance/configs/release_calendars/registry.json"
+  },
+  "contract": {
+    "placeholder_policy": {
+      "canonical_rule": "Rows without release_timestamp_utc or with release_timestamp_utc beyond parity-window end are treated as non-canonical placeholders and excluded from strict parity comparison.",
+      "excluded_placeholder_reasons": [
+        "missing_release_timestamp",
+        "forward_unrealized_release_timestamp"
+      ]
+    },
+    "timing": {
+      "fields": [
+        "canonical.release_timestamp_utc",
+        "legacy.release_timestamp_utc"
+      ],
+      "key": [
+        "series_key",
+        "observation_period"
+      ],
+      "comparison": "exact_utc_timestamp_equality"
+    },
+    "coverage": {
+      "fields": [
+        "series_key",
+        "observation_period"
+      ],
+      "comparison": "exact_set_equality_after_placeholder_filter"
+    },
+    "counts": {
+      "comparison": "exact_total_and_per_series_count_equality_after_placeholder_filter"
+    }
+  },
+  "raw_counts": {
+    "canonical_total_events": 698,
+    "legacy_total_events": 696,
+    "canonical_placeholder_rows": 1,
+    "legacy_placeholder_rows": 4
+  },
+  "series": {
+    "canonical_series": [
+      "CIVPART",
+      "CPI_Core",
+      "CPI_Headline",
+      "ICSA",
+      "U6RATE",
+      "UNRATE"
+    ],
+    "legacy_series": [
+      "CIVPART",
+      "CPI_Core",
+      "CPI_Headline",
+      "ICSA",
+      "U6RATE",
+      "UNRATE"
+    ],
+    "missing_in_legacy": [],
+    "missing_in_canonical": []
+  },
+  "counts": {
+    "canonical_total_events": 697,
+    "legacy_total_events": 692,
+    "per_series_count_delta": {
+      "CIVPART": {
+        "canonical": 74,
+        "legacy": 73,
+        "delta": 1
+      },
+      "CPI_Core": {
+        "canonical": 74,
+        "legacy": 73,
+        "delta": 1
+      },
+      "CPI_Headline": {
+        "canonical": 74,
+        "legacy": 73,
+        "delta": 1
+      },
+      "U6RATE": {
+        "canonical": 74,
+        "legacy": 73,
+        "delta": 1
+      },
+      "UNRATE": {
+        "canonical": 74,
+        "legacy": 73,
+        "delta": 1
+      }
+    }
+  },
+  "timestamp_parity": {
+    "shared_rows": 692,
+    "timestamp_mismatch_rows": 0
+  },
+  "key_parity": {
+    "missing_keys_in_legacy": 5,
+    "missing_keys_in_canonical": 0
+  },
+  "samples": {
+    "timestamp_mismatch": [],
+    "missing_keys_in_legacy": [
+      {
+        "series_key": "CIVPART",
+        "observation_period": "2026-03"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2026-03"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2026-03"
+      },
+      {
+        "series_key": "U6RATE",
+        "observation_period": "2026-03"
+      },
+      {
+        "series_key": "UNRATE",
+        "observation_period": "2026-03"
+      }
+    ],
+    "missing_keys_in_canonical": [],
+    "legacy_placeholder_rows": [
+      {
+        "series_key": "CIVPART",
+        "observation_period": "2025-10",
+        "release_timestamp_utc": NaN,
+        "source": "bls_unrate_canceled_observation_v1",
+        "placeholder_reason": "missing_release_timestamp"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2026-04-11",
+        "release_timestamp_utc": "2026-04-16T12:30:00+00:00",
+        "source": "fred_release_calendar_rid180_v1",
+        "placeholder_reason": "forward_unrealized_release_timestamp"
+      },
+      {
+        "series_key": "U6RATE",
+        "observation_period": "2025-10",
+        "release_timestamp_utc": NaN,
+        "source": "bls_unrate_canceled_observation_v1",
+        "placeholder_reason": "missing_release_timestamp"
+      },
+      {
+        "series_key": "UNRATE",
+        "observation_period": "2025-10",
+        "release_timestamp_utc": NaN,
+        "source": "bls_unrate_canceled_observation_v1",
+        "placeholder_reason": "missing_release_timestamp"
+      }
+    ]
+  },
+  "status": "fail"
+}

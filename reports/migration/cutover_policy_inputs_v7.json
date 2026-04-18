@@ -1,0 +1,14 @@
+{
+  "canonical_only_total": 2137,
+  "legacy_only_total": 1238,
+  "canonical_only_category_counts": {
+    "boundary_end_legacy_tail_missing": 1103,
+    "in_window_legacy_missing": 1034
+  },
+  "legacy_only_category_counts": {
+    "canonical_stale_null_policy": 1098,
+    "boundary_start_pre_canonical_coverage": 140
+  },
+  "canonical_only_calendar_lag_proxy": 1405,
+  "canonical_only_calendar_lag_proxy_pct": 0.6575
+}

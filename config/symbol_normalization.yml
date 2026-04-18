@@ -11,6 +11,9 @@ suffix_by_exchange:
   BIT: ".MI"
 
 explicit_overrides:
+  BRK.B:
+    - "BRK-B"
+    - "BRK.B"
   ANZ:
     - "ANZ.AX"
     - "ANZ"

@@ -32,10 +32,25 @@ def refresh_latest_quotes(
             fetched = provider.fetch_latest_quotes(batch)
             if fetched is not None and not fetched.empty:
                 quote_batches.append(fetched)
+            else:
+                symbols_failed.extend(batch)
+                error_messages.append(f"batch[{','.join(batch)}]: provider returned zero rows")
         except Exception as exc:
             classification = classify_failure(exc)
-            symbols_failed.extend(batch)
-            error_messages.append(f"batch[{','.join(batch)}]: {classification.message}")
+            error_messages.append(f"batch[{','.join(batch)}]: {classification.message}; retrying per symbol")
+            for symbol in batch:
+                try:
+                    per_symbol_quotes = provider.fetch_latest_quotes([symbol])
+                except Exception as symbol_exc:
+                    symbol_classification = classify_failure(symbol_exc)
+                    symbols_failed.append(symbol)
+                    error_messages.append(f"{symbol}: {symbol_classification.message}")
+                    continue
+                if per_symbol_quotes is None or per_symbol_quotes.empty:
+                    symbols_failed.append(symbol)
+                    error_messages.append(f"{symbol}: provider returned zero rows")
+                    continue
+                quote_batches.append(per_symbol_quotes)
     quotes = pd.concat(quote_batches, ignore_index=True) if quote_batches else pd.DataFrame()
 
     if quotes.empty:
@@ -48,7 +63,7 @@ def refresh_latest_quotes(
             ended_at=datetime.now(UTC).isoformat(),
             symbols_requested=symbols_requested,
             symbols_succeeded=[],
-            symbols_failed=symbols_failed,
+            symbols_failed=sorted(set(symbols_failed)),
             retry_exhausted_symbols=[],
             rows_written=0,
             error_messages=error_messages or ["quote refresh produced no rows"],

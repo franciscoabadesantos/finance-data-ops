@@ -78,8 +78,14 @@ def refresh_release_calendar_daily(
         release_calendar["series_key"] = release_calendar["series_key"].astype(str)
         symbols_succeeded = sorted(set(release_calendar["series_key"].tolist()))
         symbols_failed = sorted(set(symbols_requested).difference(set(symbols_succeeded)))
-        status = "partial" if symbols_failed else "fresh"
+        late_rows = pd.Series(dtype=bool)
+        if "availability_status" in release_calendar.columns:
+            late_rows = release_calendar["availability_status"].astype(str).str.strip() == "late_missing_observation"
+        late_count = int(late_rows.sum()) if not late_rows.empty else 0
+        status = "partial" if (symbols_failed or late_count > 0) else "fresh"
         error_messages = [f"missing_series={','.join(symbols_failed)}"] if symbols_failed else []
+        if late_count > 0:
+            error_messages.append(f"late_missing_observation_rows={late_count}")
 
     write_parquet_table(
         "economic_release_calendar",

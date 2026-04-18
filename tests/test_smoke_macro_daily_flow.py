@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 
@@ -33,16 +33,27 @@ class FakeMacroProvider:
         return values
 
 
-def _seed_release_calendar(cache_root: str) -> None:
-    release_ts = datetime(2026, 4, 2, 12, 30, tzinfo=UTC).isoformat()
+def _seed_release_calendar(cache_root: str, *, run_date: date) -> None:
+    month_obs = run_date.replace(day=1)
+    month_release_date = run_date - timedelta(days=1)
+    release_ts = datetime.combine(month_release_date, datetime.min.time(), tzinfo=UTC) + pd.Timedelta(hours=12, minutes=30)
+    release_ts_iso = release_ts.isoformat()
+    icsa_obs = run_date - timedelta(days=(run_date.weekday() - 5) % 7)
+    icsa_release = icsa_obs + timedelta(days=(3 - icsa_obs.weekday()) % 7)
     rows = [
         {
             "series_key": "CPI_Headline",
-            "observation_period": "2026-04",
-            "observation_date": "2026-04-01",
-            "release_timestamp_utc": release_ts,
+            "observation_period": str(pd.Timestamp(month_obs).to_period("M")),
+            "observation_date": month_obs.isoformat(),
+            "scheduled_release_timestamp_utc": release_ts_iso,
+            "observed_first_available_at_utc": release_ts_iso,
+            "availability_status": "observed_available",
+            "availability_source": "test_release_calendar",
+            "delay_vs_schedule_seconds": 0,
+            "is_schedule_based_only": False,
+            "release_timestamp_utc": release_ts_iso,
             "release_timezone": "America/New_York",
-            "release_date_local": "2026-04-02",
+            "release_date_local": month_release_date.isoformat(),
             "release_calendar_source": "bls_cpi_release_calendar_v1",
             "source": "test_release_calendar",
             "provenance_class": "official",
@@ -50,11 +61,17 @@ def _seed_release_calendar(cache_root: str) -> None:
         },
         {
             "series_key": "CPI_Core",
-            "observation_period": "2026-04",
-            "observation_date": "2026-04-01",
-            "release_timestamp_utc": release_ts,
+            "observation_period": str(pd.Timestamp(month_obs).to_period("M")),
+            "observation_date": month_obs.isoformat(),
+            "scheduled_release_timestamp_utc": release_ts_iso,
+            "observed_first_available_at_utc": release_ts_iso,
+            "availability_status": "observed_available",
+            "availability_source": "test_release_calendar",
+            "delay_vs_schedule_seconds": 0,
+            "is_schedule_based_only": False,
+            "release_timestamp_utc": release_ts_iso,
             "release_timezone": "America/New_York",
-            "release_date_local": "2026-04-02",
+            "release_date_local": month_release_date.isoformat(),
             "release_calendar_source": "bls_cpi_release_calendar_v1",
             "source": "test_release_calendar",
             "provenance_class": "official",
@@ -62,11 +79,17 @@ def _seed_release_calendar(cache_root: str) -> None:
         },
         {
             "series_key": "UNRATE",
-            "observation_period": "2026-04",
-            "observation_date": "2026-04-01",
-            "release_timestamp_utc": release_ts,
+            "observation_period": str(pd.Timestamp(month_obs).to_period("M")),
+            "observation_date": month_obs.isoformat(),
+            "scheduled_release_timestamp_utc": release_ts_iso,
+            "observed_first_available_at_utc": release_ts_iso,
+            "availability_status": "observed_available",
+            "availability_source": "test_release_calendar",
+            "delay_vs_schedule_seconds": 0,
+            "is_schedule_based_only": False,
+            "release_timestamp_utc": release_ts_iso,
             "release_timezone": "America/New_York",
-            "release_date_local": "2026-04-02",
+            "release_date_local": month_release_date.isoformat(),
             "release_calendar_source": "bls_unrate_release_calendar_v1",
             "source": "test_release_calendar",
             "provenance_class": "official",
@@ -74,11 +97,17 @@ def _seed_release_calendar(cache_root: str) -> None:
         },
         {
             "series_key": "U6RATE",
-            "observation_period": "2026-04",
-            "observation_date": "2026-04-01",
-            "release_timestamp_utc": release_ts,
+            "observation_period": str(pd.Timestamp(month_obs).to_period("M")),
+            "observation_date": month_obs.isoformat(),
+            "scheduled_release_timestamp_utc": release_ts_iso,
+            "observed_first_available_at_utc": release_ts_iso,
+            "availability_status": "observed_available",
+            "availability_source": "test_release_calendar",
+            "delay_vs_schedule_seconds": 0,
+            "is_schedule_based_only": False,
+            "release_timestamp_utc": release_ts_iso,
             "release_timezone": "America/New_York",
-            "release_date_local": "2026-04-02",
+            "release_date_local": month_release_date.isoformat(),
             "release_calendar_source": "bls_unrate_release_calendar_v1",
             "source": "test_release_calendar",
             "provenance_class": "official",
@@ -86,11 +115,17 @@ def _seed_release_calendar(cache_root: str) -> None:
         },
         {
             "series_key": "CIVPART",
-            "observation_period": "2026-04",
-            "observation_date": "2026-04-01",
-            "release_timestamp_utc": release_ts,
+            "observation_period": str(pd.Timestamp(month_obs).to_period("M")),
+            "observation_date": month_obs.isoformat(),
+            "scheduled_release_timestamp_utc": release_ts_iso,
+            "observed_first_available_at_utc": release_ts_iso,
+            "availability_status": "observed_available",
+            "availability_source": "test_release_calendar",
+            "delay_vs_schedule_seconds": 0,
+            "is_schedule_based_only": False,
+            "release_timestamp_utc": release_ts_iso,
             "release_timezone": "America/New_York",
-            "release_date_local": "2026-04-02",
+            "release_date_local": month_release_date.isoformat(),
             "release_calendar_source": "bls_unrate_release_calendar_v1",
             "source": "test_release_calendar",
             "provenance_class": "official",
@@ -98,11 +133,17 @@ def _seed_release_calendar(cache_root: str) -> None:
         },
         {
             "series_key": "ICSA",
-            "observation_period": "2026-04-04",
-            "observation_date": "2026-04-04",
-            "release_timestamp_utc": datetime(2026, 4, 9, 12, 30, tzinfo=UTC).isoformat(),
+            "observation_period": icsa_obs.isoformat(),
+            "observation_date": icsa_obs.isoformat(),
+            "scheduled_release_timestamp_utc": (datetime.combine(icsa_release, datetime.min.time(), tzinfo=UTC) + pd.Timedelta(hours=12, minutes=30)).isoformat(),
+            "observed_first_available_at_utc": (datetime.combine(icsa_release, datetime.min.time(), tzinfo=UTC) + pd.Timedelta(hours=12, minutes=30)).isoformat(),
+            "availability_status": "observed_available",
+            "availability_source": "test_release_calendar",
+            "delay_vs_schedule_seconds": 0,
+            "is_schedule_based_only": False,
+            "release_timestamp_utc": (datetime.combine(icsa_release, datetime.min.time(), tzinfo=UTC) + pd.Timedelta(hours=12, minutes=30)).isoformat(),
             "release_timezone": "America/New_York",
-            "release_date_local": "2026-04-09",
+            "release_date_local": icsa_release.isoformat(),
             "release_calendar_source": "dol_icsa_release_calendar_v1",
             "source": "test_release_calendar",
             "provenance_class": "official",
@@ -120,10 +161,12 @@ def _seed_release_calendar(cache_root: str) -> None:
 
 def test_smoke_macro_daily_refresh_publish_status(tmp_path) -> None:
     publisher = RecordingPublisher()
-    _seed_release_calendar(str(tmp_path))
+    run_date = (pd.Timestamp(datetime.now(UTC).date()) - pd.offsets.BDay(1)).date()
+    _seed_release_calendar(str(tmp_path), run_date=run_date)
+    run_date_iso = run_date.isoformat()
     summary = run_dataops_macro_daily(
-        start="2026-04-10",
-        end="2026-04-10",
+        start=run_date_iso,
+        end=run_date_iso,
         cache_root=str(tmp_path),
         publish_enabled=True,
         provider=FakeMacroProvider(),
@@ -151,16 +194,18 @@ def test_smoke_macro_daily_refresh_publish_status(tmp_path) -> None:
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     orchestration = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_macro_daily")
     assert orchestration["status"] == "fresh"
-    assert orchestration["scope"] == "2026-04-10:2026-04-10"
+    assert orchestration["scope"] == f"{run_date_iso}:{run_date_iso}"
 
 
 def test_smoke_macro_daily_force_recompute_idempotent_write(tmp_path) -> None:
     publisher = RecordingPublisher()
-    _seed_release_calendar(str(tmp_path))
+    run_date = (pd.Timestamp(datetime.now(UTC).date()) - pd.offsets.BDay(1)).date()
+    _seed_release_calendar(str(tmp_path), run_date=run_date)
+    run_date_iso = run_date.isoformat()
 
     run_dataops_macro_daily(
-        start="2026-04-10",
-        end="2026-04-10",
+        start=run_date_iso,
+        end=run_date_iso,
         cache_root=str(tmp_path),
         publish_enabled=True,
         provider=FakeMacroProvider(),
@@ -171,8 +216,8 @@ def test_smoke_macro_daily_force_recompute_idempotent_write(tmp_path) -> None:
     first = pd.read_parquet(table_path("macro_daily", cache_root=tmp_path))
 
     run_dataops_macro_daily(
-        start="2026-04-10",
-        end="2026-04-10",
+        start=run_date_iso,
+        end=run_date_iso,
         cache_root=str(tmp_path),
         publish_enabled=True,
         provider=FakeMacroProvider(),

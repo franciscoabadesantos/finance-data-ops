@@ -60,6 +60,16 @@ def run_dataops_release_calendar_daily(
         official_end_year=official_end_year,
         force_recompute=bool(force_recompute),
     )
+    late_anomaly = _extract_late_release_anomaly(release_calendar_frame)
+    if late_anomaly is not None:
+        payload = build_alert_payload(
+            severity="warning",
+            message="Economic release availability lag exceeds grace window.",
+            run_id=flow_run_id,
+            context=late_anomaly,
+        )
+        emit_alert(payload)
+        emit_alert_webhook(payload, webhook_url=settings.alert_webhook_url)
 
     status_rows = _build_asset_status_rows(
         release_calendar=release_calendar_frame,
@@ -180,6 +190,7 @@ def run_dataops_release_calendar_daily(
         "flow_run_id": flow_run_id,
         "window": {"start_date": start_date, "end_date": end_date},
         "release_calendar_daily": release_run.as_dict(),
+        "availability_anomalies": late_anomaly,
         "asset_status": status_rows,
         "published": publish_results,
         "publish_failures": publish_failures,
@@ -196,7 +207,7 @@ def _build_asset_status_rows(
     flow_run_id: str,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
-    latest_release_ts = _frame_datetime_max(release_calendar, "release_timestamp_utc", utc=True)
+    latest_release_ts = _latest_release_effective_timestamp(release_calendar)
 
     release_state = classify_freshness(
         last_observed_at=latest_release_ts,
@@ -240,6 +251,51 @@ def _build_asset_status_rows(
             "updated_at": now_iso,
         },
     ]
+
+
+def _extract_late_release_anomaly(release_calendar: pd.DataFrame) -> dict[str, Any] | None:
+    if release_calendar.empty or "availability_status" not in release_calendar.columns:
+        return None
+    late = release_calendar[release_calendar["availability_status"].astype(str).str.strip() == "late_missing_observation"].copy()
+    if late.empty:
+        return None
+    return {
+        "late_row_count": int(len(late.index)),
+        "series_keys": sorted(set(late["series_key"].astype(str).tolist())),
+        "sample": late[
+            [
+                "series_key",
+                "observation_period",
+                "scheduled_release_timestamp_utc",
+                "availability_status",
+                "availability_source",
+            ]
+        ]
+        .head(25)
+        .to_dict(orient="records"),
+    }
+
+
+def _latest_release_effective_timestamp(release_calendar: pd.DataFrame) -> datetime | None:
+    if release_calendar.empty:
+        return None
+    local = release_calendar.copy()
+    observed = pd.to_datetime(local.get("observed_first_available_at_utc"), utc=True, errors="coerce")
+    scheduled = pd.to_datetime(
+        local.get("scheduled_release_timestamp_utc", local.get("release_timestamp_utc")),
+        utc=True,
+        errors="coerce",
+    )
+    effective = observed.fillna(scheduled)
+    effective = effective[effective.notna()]
+    if effective.empty:
+        return None
+    now_utc = pd.Timestamp(datetime.now(UTC))
+    effective_not_future = effective[effective <= now_utc]
+    latest = effective_not_future.max() if not effective_not_future.empty else effective.max()
+    if pd.isna(latest):
+        return None
+    return latest.to_pydatetime()
 
 
 def _execute_publish_step(

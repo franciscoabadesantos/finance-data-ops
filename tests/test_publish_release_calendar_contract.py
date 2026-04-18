@@ -15,6 +15,12 @@ def _valid_frame() -> pd.DataFrame:
                 "series_key": "UNRATE",
                 "observation_period": "2025-12",
                 "observation_date": "2025-12-01",
+                "scheduled_release_timestamp_utc": "2026-01-09T13:30:00+00:00",
+                "observed_first_available_at_utc": "2026-01-09T13:31:00+00:00",
+                "availability_status": "observed_available",
+                "availability_source": "alfred_graph_revision_dates_v1",
+                "delay_vs_schedule_seconds": 60,
+                "is_schedule_based_only": False,
                 "release_timestamp_utc": "2026-01-09T13:30:00+00:00",
                 "release_timezone": "America/New_York",
                 "release_date_local": "2026-01-09",
@@ -40,4 +46,3 @@ def test_publish_release_calendar_fails_before_upsert() -> None:
 
     assert publisher.upserts == []
     assert publisher.rpcs == []
-

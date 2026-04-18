@@ -76,6 +76,37 @@ def _load_legacy_rows(finance_repo_root: Path, registry_path: Path) -> pd.DataFr
     return frame.reset_index(drop=True)
 
 
+def _apply_placeholder_policy(
+    *,
+    frame: pd.DataFrame,
+    end_ts: pd.Timestamp,
+    timestamp_column: str,
+    include_schedule_only: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if frame.empty:
+        return frame.copy(), frame.copy()
+
+    local = frame.copy()
+    local["release_timestamp_utc_norm"] = local[timestamp_column].map(_normalize_ts)
+    parsed_release_ts = pd.to_datetime(local["release_timestamp_utc_norm"], errors="coerce", utc=True)
+    release_window_end_utc = pd.Timestamp(end_ts).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+    missing_ts_mask = parsed_release_ts.isna()
+    forward_mask = parsed_release_ts.notna() & (parsed_release_ts > release_window_end_utc)
+    schedule_only_mask = pd.Series(False, index=local.index)
+    if include_schedule_only and "is_schedule_based_only" in local.columns:
+        schedule_only_mask = local["is_schedule_based_only"].astype(str).str.strip().str.lower().isin({"true", "1"})
+    placeholder_mask = missing_ts_mask | forward_mask | schedule_only_mask
+
+    placeholders = local.loc[placeholder_mask].copy()
+    placeholders["placeholder_reason"] = "missing_release_timestamp"
+    placeholders.loc[forward_mask, "placeholder_reason"] = "forward_unrealized_release_timestamp"
+    placeholders.loc[schedule_only_mask, "placeholder_reason"] = "schedule_based_only_no_observation"
+
+    effective = local.loc[~placeholder_mask].copy()
+    return effective, placeholders
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check release-calendar parity against legacy Finance registry.")
     parser.add_argument("--start-date", required=True, help="YYYY-MM-DD")
@@ -114,24 +145,44 @@ def main(argv: list[str] | None = None) -> int:
     finance_root = Path(args.finance_repo_root).resolve()
     registry_path = Path(args.legacy_registry_path).resolve()
 
-    canonical = pd.read_parquet(canonical_path)
-    canonical["observation_date"] = pd.to_datetime(canonical["observation_date"], errors="coerce").dt.normalize()
-    canonical = canonical.loc[
-        (canonical["observation_date"] >= start_ts) & (canonical["observation_date"] <= end_ts)
+    canonical_raw = pd.read_parquet(canonical_path)
+    canonical_raw["observation_date"] = pd.to_datetime(canonical_raw["observation_date"], errors="coerce").dt.normalize()
+    canonical_raw = canonical_raw.loc[
+        (canonical_raw["observation_date"] >= start_ts) & (canonical_raw["observation_date"] <= end_ts)
     ].copy()
-    canonical["series_key"] = canonical["series_key"].astype(str)
-    canonical["observation_period"] = canonical["observation_period"].astype(str)
-    canonical["release_timestamp_utc_norm"] = canonical["release_timestamp_utc"].map(_normalize_ts)
-    canonical = canonical.sort_values(["series_key", "observation_period", "release_timestamp_utc_norm"]).drop_duplicates(
+    canonical_raw["series_key"] = canonical_raw["series_key"].astype(str)
+    canonical_raw["observation_period"] = canonical_raw["observation_period"].astype(str)
+    canonical_timestamp_col = (
+        "scheduled_release_timestamp_utc"
+        if "scheduled_release_timestamp_utc" in canonical_raw.columns
+        else "release_timestamp_utc"
+    )
+    canonical_raw["release_timestamp_utc_norm"] = canonical_raw[canonical_timestamp_col].map(_normalize_ts)
+    canonical_raw = canonical_raw.sort_values(
+        ["series_key", "observation_period", "release_timestamp_utc_norm"]
+    ).drop_duplicates(
         subset=["series_key", "observation_period"],
         keep="last",
     )
 
-    legacy = _load_legacy_rows(finance_root, registry_path)
-    if not legacy.empty:
-        legacy["observation_date"] = pd.to_datetime(legacy["observation_date"], errors="coerce").dt.normalize()
-        legacy = legacy.loc[(legacy["observation_date"] >= start_ts) & (legacy["observation_date"] <= end_ts)].copy()
-        legacy["release_timestamp_utc_norm"] = legacy["release_timestamp_utc"].map(_normalize_ts)
+    legacy_raw = _load_legacy_rows(finance_root, registry_path)
+    if not legacy_raw.empty:
+        legacy_raw["observation_date"] = pd.to_datetime(legacy_raw["observation_date"], errors="coerce").dt.normalize()
+        legacy_raw = legacy_raw.loc[(legacy_raw["observation_date"] >= start_ts) & (legacy_raw["observation_date"] <= end_ts)].copy()
+        legacy_raw["release_timestamp_utc_norm"] = legacy_raw["release_timestamp_utc"].map(_normalize_ts)
+
+    canonical, canonical_placeholders = _apply_placeholder_policy(
+        frame=canonical_raw,
+        end_ts=end_ts,
+        timestamp_column=canonical_timestamp_col,
+        include_schedule_only=True,
+    )
+    legacy, legacy_placeholders = _apply_placeholder_policy(
+        frame=legacy_raw,
+        end_ts=end_ts,
+        timestamp_column="release_timestamp_utc",
+        include_schedule_only=False,
+    )
 
     canonical_series = set(canonical["series_key"].astype(str))
     legacy_series = set(legacy["series_key"].astype(str)) if not legacy.empty else set()
@@ -170,6 +221,38 @@ def main(argv: list[str] | None = None) -> int:
             "finance_repo_root": str(finance_root),
             "legacy_registry_path": str(registry_path),
         },
+        "contract": {
+            "placeholder_policy": {
+                "canonical_rule": (
+                    "Rows without scheduled release timestamp, rows beyond parity-window end, or "
+                    "rows marked schedule-only without observed availability "
+                    "are treated as non-canonical placeholders and excluded from strict parity comparison."
+                ),
+                "excluded_placeholder_reasons": [
+                    "missing_release_timestamp",
+                    "forward_unrealized_release_timestamp",
+                    "schedule_based_only_no_observation",
+                ],
+            },
+            "timing": {
+                "fields": ["canonical.scheduled_release_timestamp_utc", "legacy.release_timestamp_utc"],
+                "key": ["series_key", "observation_period"],
+                "comparison": "exact_utc_timestamp_equality",
+            },
+            "coverage": {
+                "fields": ["series_key", "observation_period"],
+                "comparison": "exact_set_equality_after_placeholder_filter",
+            },
+            "counts": {
+                "comparison": "exact_total_and_per_series_count_equality_after_placeholder_filter",
+            },
+        },
+        "raw_counts": {
+            "canonical_total_events": int(len(canonical_raw.index)),
+            "legacy_total_events": int(len(legacy_raw.index)),
+            "canonical_placeholder_rows": int(len(canonical_placeholders.index)),
+            "legacy_placeholder_rows": int(len(legacy_placeholders.index)),
+        },
         "series": {
             "canonical_series": sorted(canonical_series),
             "legacy_series": sorted(legacy_series),
@@ -197,6 +280,11 @@ def main(argv: list[str] | None = None) -> int:
             .to_dict(orient="records"),
             "missing_keys_in_legacy": missing_in_legacy.head(25).to_dict(orient="records"),
             "missing_keys_in_canonical": missing_in_canonical.head(25).to_dict(orient="records"),
+            "legacy_placeholder_rows": legacy_placeholders[
+                ["series_key", "observation_period", "release_timestamp_utc", "source", "placeholder_reason"]
+            ]
+            .head(25)
+            .to_dict(orient="records"),
         },
     }
 

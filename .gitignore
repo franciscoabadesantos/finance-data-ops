@@ -21,3 +21,6 @@ data_cache/
 .vscode/
 
 .codex
+
+# Local credentials
+key.json

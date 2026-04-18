@@ -69,6 +69,12 @@ Data Ops writes five product-data domains: market, fundamentals, earnings, macro
 - `series_key`
 - `observation_period`
 - `observation_date`
+- `scheduled_release_timestamp_utc`
+- `observed_first_available_at_utc`
+- `availability_status`
+- `availability_source`
+- `delay_vs_schedule_seconds`
+- `is_schedule_based_only`
 - `release_timestamp_utc`
 - `release_timezone`
 - `release_date_local`
@@ -76,6 +82,10 @@ Data Ops writes five product-data domains: market, fundamentals, earnings, macro
 - `source`
 - `provenance_class`
 - `ingested_at`
+
+Compatibility note:
+
+- `release_timestamp_utc` is retained as a backward-compatible alias of `scheduled_release_timestamp_utc`.
 
 ## Operational surfaces
 
@@ -96,3 +106,4 @@ Migration files:
 - [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
 - [`sql/003_ticker_registry.sql`](/home/franciscosantos/finance-data-ops/sql/003_ticker_registry.sql)
 - [`sql/004_data_ops_v3_macro_release.sql`](/home/franciscosantos/finance-data-ops/sql/004_data_ops_v3_macro_release.sql)
+- [`sql/005_data_ops_v4_release_availability.sql`](/home/franciscosantos/finance-data-ops/sql/005_data_ops_v4_release_availability.sql)

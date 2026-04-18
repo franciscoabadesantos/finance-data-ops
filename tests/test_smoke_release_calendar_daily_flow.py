@@ -29,6 +29,12 @@ class FakeReleaseCalendarProvider:
         common = {
             "observation_period": base_period,
             "observation_date": base_period,
+            "scheduled_release_timestamp_utc": release_dt.isoformat(),
+            "observed_first_available_at_utc": release_dt.isoformat(),
+            "availability_status": "observed_available",
+            "availability_source": "fake_release_calendar_source_v1",
+            "delay_vs_schedule_seconds": 0,
+            "is_schedule_based_only": False,
             "release_timestamp_utc": release_dt.isoformat(),
             "release_timezone": "America/New_York",
             "release_date_local": start_date.isoformat(),
@@ -52,9 +58,12 @@ class FakeReleaseCalendarProvider:
 
 def test_smoke_release_calendar_refresh_publish_status(tmp_path) -> None:
     publisher = RecordingPublisher()
+    today = datetime.now(UTC).date()
+    start_date = today.isoformat()
+    end_date = today.isoformat()
     summary = run_dataops_release_calendar_daily(
-        start_date="2026-04-01",
-        end_date="2026-04-30",
+        start_date=start_date,
+        end_date=end_date,
         cache_root=str(tmp_path),
         publish_enabled=True,
         provider=FakeReleaseCalendarProvider(),
@@ -82,4 +91,4 @@ def test_smoke_release_calendar_refresh_publish_status(tmp_path) -> None:
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     orchestration = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_release_calendar_daily")
     assert orchestration["status"] == "fresh"
-    assert orchestration["scope"] == "2026-04-01:2026-04-30"
+    assert orchestration["scope"] == f"{start_date}:{end_date}"

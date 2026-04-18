@@ -16,6 +16,12 @@ def _frame() -> pd.DataFrame:
                 "series_key": "UNRATE",
                 "observation_period": "2025-12",
                 "observation_date": "2025-12-01",
+                "scheduled_release_timestamp_utc": "2026-01-09T13:30:00+00:00",
+                "observed_first_available_at_utc": "2026-01-09T13:31:30+00:00",
+                "availability_status": "observed_available",
+                "availability_source": "alfred_graph_revision_dates_v1",
+                "delay_vs_schedule_seconds": 90,
+                "is_schedule_based_only": False,
                 "release_timestamp_utc": "2026-01-09T13:30:00+00:00",
                 "release_timezone": "America/New_York",
                 "release_date_local": "2026-01-09",
@@ -28,6 +34,12 @@ def _frame() -> pd.DataFrame:
                 "series_key": "ICSA",
                 "observation_period": "2026-01-03",
                 "observation_date": "2026-01-03",
+                "scheduled_release_timestamp_utc": "2026-01-08T13:30:00+00:00",
+                "observed_first_available_at_utc": None,
+                "availability_status": "scheduled_provisional",
+                "availability_source": "dol_icsa_release_calendar_v1_scheduled_calendar_v1",
+                "delay_vs_schedule_seconds": None,
+                "is_schedule_based_only": True,
                 "release_timestamp_utc": "2026-01-08T13:30:00+00:00",
                 "release_timezone": "America/New_York",
                 "release_date_local": "2026-01-08",
@@ -49,7 +61,6 @@ def test_validate_release_calendar_rejects_duplicate_series_period() -> None:
 
 def test_validate_release_calendar_rejects_invalid_timestamp() -> None:
     frame = _frame()
-    frame.loc[0, "release_timestamp_utc"] = "not-a-timestamp"
-    with pytest.raises(ReleaseCalendarValidationError, match="release_timestamp_utc"):
+    frame.loc[0, "scheduled_release_timestamp_utc"] = "not-a-timestamp"
+    with pytest.raises(ReleaseCalendarValidationError, match="scheduled_release_timestamp_utc"):
         validate_release_calendar_publish_contract(economic_release_calendar=frame)
-

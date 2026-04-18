@@ -66,8 +66,14 @@ Those remain in the `Finance` repository.
 
 ### Economic release calendar
 
-- `economic_release_calendar` (canonical release timestamps/events)
+- `economic_release_calendar` (canonical schedule + observed availability semantics)
 - `mv_latest_economic_release_calendar` (latest timestamp per release calendar source/series)
+
+Release timing semantics:
+
+- `scheduled_release_timestamp_utc` is the expected release schedule.
+- `observed_first_available_at_utc` is first confirmed availability from authoritative source.
+- downstream macro alignment uses observed availability when present, and scheduled time only as provisional fallback.
 
 ### Operational
 
@@ -92,8 +98,15 @@ For macro and release-calendar domains, runtime source-of-truth is:
 - Earnings: `flows/dataops_earnings_daily.py` / `scripts/run_earnings_daily.py`
 - Macro: `flows/dataops_macro_daily.py` / `scripts/run_macro_daily.py`
 - Economic release calendar: `flows/dataops_release_calendar_daily.py` / `scripts/run_release_calendar_daily.py`
-- Ticker backfill orchestration: `flows/prefect_dataops_daily.py:dataops_ticker_backfill_flow`
-- Ticker validation orchestration: `flows/prefect_dataops_daily.py:dataops_ticker_validation_flow`
-- Ticker onboarding orchestration: `flows/prefect_dataops_daily.py:dataops_ticker_onboarding_flow`
 
 Production scheduler automation is domain-separated to match those entrypoints.
+
+## Request-driven jobs
+
+Ticker validation/backfill are request-driven jobs executed outside Prefect:
+
+- Queueing: Google Cloud Tasks
+- Execution: Cloud Run worker (`services/finance-jobs-worker`)
+- Logic source-of-truth: this repository (`run_single_ticker_validation`, `run_dataops_*`)
+
+The public backend only orchestrates and enqueues; it does not execute validation/backfill logic directly.

@@ -15,9 +15,6 @@ Wrapped domains:
 - `dataops_earnings_daily`
 - `dataops_macro_daily`
 - `dataops_release_calendar_daily`
-- `dataops_ticker_backfill`
-- `dataops_ticker_validation`
-- `dataops_ticker_onboarding`
 
 ## Deployments
 
@@ -32,9 +29,6 @@ Base deployments:
 - `earnings-daily`
 - `macro-daily`
 - `release-calendar-daily`
-- `ticker-onboarding`
-- `ticker-backfill`
-- `ticker-validation`
 
 Cadence strategy (weekday UTC):
 
@@ -43,7 +37,9 @@ Cadence strategy (weekday UTC):
 - Fundamentals (`fundamentals-daily`): `03:00`
 - Macro (`macro-daily`): `06:15`, `14:45`, `22:45`
 - Economic release calendar (`release-calendar-daily`): `05:00`, `15:00`
-- Ticker onboarding/validation/backfill: event-driven or on-demand
+
+Request-driven ticker validation/backfill are intentionally not deployed in Prefect.
+They are queued through Cloud Tasks and executed by Cloud Run worker endpoints.
 
 ## Publish safety gates
 
@@ -57,6 +53,10 @@ Macro gates:
 
 Release-calendar gates:
 
-- valid `release_timestamp_utc`
+- valid `scheduled_release_timestamp_utc`
+- valid `observed_first_available_at_utc` when present
+- valid `availability_status` / `availability_source`
+- valid `delay_vs_schedule_seconds` semantics
+- consistent `is_schedule_based_only` vs observed availability
 - non-empty `release_timezone`
 - no duplicate `(series_key, observation_period)` rows

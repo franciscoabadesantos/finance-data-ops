@@ -12,6 +12,8 @@ Apply in order:
 - [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
 - [`sql/003_ticker_registry.sql`](/home/franciscosantos/finance-data-ops/sql/003_ticker_registry.sql)
 - [`sql/004_data_ops_v3_macro_release.sql`](/home/franciscosantos/finance-data-ops/sql/004_data_ops_v3_macro_release.sql)
+- [`sql/005_data_ops_v4_release_availability.sql`](/home/franciscosantos/finance-data-ops/sql/005_data_ops_v4_release_availability.sql)
+- [`sql/006_async_job_runs.sql`](/home/franciscosantos/finance-data-ops/sql/006_async_job_runs.sql)
 
 All scripts are idempotent (`create ... if not exists`, `add column if not exists`, guarded compatibility updates).
 
@@ -36,11 +38,16 @@ All scripts are idempotent (`create ... if not exists`, `add column if not exist
   - `economic_release_calendar`
   - `mv_latest_macro_observations` + refresh RPC
   - `mv_latest_economic_release_calendar` + refresh RPC
+- v4:
+  - `economic_release_calendar` explicit scheduled vs observed availability fields
+  - rebuilt `mv_latest_economic_release_calendar` ordering by effective availability
+- v5:
+  - `async_job_runs` durable request-driven async job audit surface
 
 ## Apply steps
 
 1. Open Supabase SQL editor (or run via migration tool).
-2. Execute the four migration files in order.
+2. Execute the six migration files in order.
 3. Run dry flows:
    - `python scripts/run_market_daily.py --symbols SPY --no-publish`
    - `python scripts/run_fundamentals_daily.py --symbols SPY --no-publish`

@@ -99,6 +99,12 @@ def refresh_macro_daily(
                 "source_provider",
                 "source_code",
                 "release_timestamp_utc",
+                "scheduled_release_timestamp_utc",
+                "observed_first_available_at_utc",
+                "availability_status",
+                "availability_source",
+                "delay_vs_schedule_seconds",
+                "is_schedule_based_only",
                 "release_timezone",
                 "release_date_local",
                 "release_calendar_source",
@@ -196,6 +202,12 @@ def _series_to_observation_rows(*, spec: MacroSeriesSpec, series: pd.Series, ing
                 "source_provider": spec.source,
                 "source_code": spec.source_code,
                 "release_timestamp_utc": None,
+                "scheduled_release_timestamp_utc": None,
+                "observed_first_available_at_utc": None,
+                "availability_status": None,
+                "availability_source": None,
+                "delay_vs_schedule_seconds": None,
+                "is_schedule_based_only": None,
                 "release_timezone": None,
                 "release_date_local": None,
                 "release_calendar_source": _default_release_calendar_source(spec.key),
@@ -241,7 +253,18 @@ def _attach_release_calendar(
     if observations.empty:
         return observations
     out = observations.copy()
-    for col in ["release_timestamp_utc", "release_timezone", "release_date_local", "release_calendar_source"]:
+    for col in [
+        "release_timestamp_utc",
+        "scheduled_release_timestamp_utc",
+        "observed_first_available_at_utc",
+        "availability_status",
+        "availability_source",
+        "delay_vs_schedule_seconds",
+        "is_schedule_based_only",
+        "release_timezone",
+        "release_date_local",
+        "release_calendar_source",
+    ]:
         if col not in out.columns:
             out[col] = None
 
@@ -251,12 +274,50 @@ def _attach_release_calendar(
     required_cols = {
         "series_key",
         "observation_period",
-        "release_timestamp_utc",
+        "scheduled_release_timestamp_utc",
+        "observed_first_available_at_utc",
+        "availability_status",
+        "availability_source",
+        "delay_vs_schedule_seconds",
+        "is_schedule_based_only",
         "release_timezone",
         "release_date_local",
         "release_calendar_source",
     }
     if not required_cols.issubset(release_calendar_frame.columns):
+        # Backward-compatible fallback for older cached release calendar snapshots.
+        if "release_timestamp_utc" not in release_calendar_frame.columns:
+            return out
+        release_calendar_frame = release_calendar_frame.copy()
+        release_calendar_frame["scheduled_release_timestamp_utc"] = release_calendar_frame["release_timestamp_utc"]
+        release_calendar_frame["observed_first_available_at_utc"] = release_calendar_frame.get(
+            "observed_first_available_at_utc",
+            None,
+        )
+        release_calendar_frame["availability_status"] = release_calendar_frame.get(
+            "availability_status",
+            "scheduled_provisional",
+        )
+        release_calendar_frame["availability_source"] = release_calendar_frame.get(
+            "availability_source",
+            "legacy_release_timestamp_fallback_v1",
+        )
+        release_calendar_frame["delay_vs_schedule_seconds"] = release_calendar_frame.get(
+            "delay_vs_schedule_seconds",
+            None,
+        )
+        release_calendar_frame["is_schedule_based_only"] = release_calendar_frame.get(
+            "is_schedule_based_only",
+            True,
+        )
+        if not required_cols.issubset(release_calendar_frame.columns):
+            return out
+
+    if "release_timestamp_utc" not in release_calendar_frame.columns:
+        release_calendar_frame = release_calendar_frame.copy()
+        release_calendar_frame["release_timestamp_utc"] = release_calendar_frame["scheduled_release_timestamp_utc"]
+
+    if "scheduled_release_timestamp_utc" not in release_calendar_frame.columns:
         return out
 
     release = release_calendar_frame.copy()
@@ -272,6 +333,12 @@ def _attach_release_calendar(
             continue
         release_row = release_map.loc[key]
         out.at[idx, "release_timestamp_utc"] = release_row.get("release_timestamp_utc")
+        out.at[idx, "scheduled_release_timestamp_utc"] = release_row.get("scheduled_release_timestamp_utc")
+        out.at[idx, "observed_first_available_at_utc"] = release_row.get("observed_first_available_at_utc")
+        out.at[idx, "availability_status"] = release_row.get("availability_status")
+        out.at[idx, "availability_source"] = release_row.get("availability_source")
+        out.at[idx, "delay_vs_schedule_seconds"] = release_row.get("delay_vs_schedule_seconds")
+        out.at[idx, "is_schedule_based_only"] = release_row.get("is_schedule_based_only")
         out.at[idx, "release_timezone"] = release_row.get("release_timezone")
         out.at[idx, "release_date_local"] = release_row.get("release_date_local")
         out.at[idx, "release_calendar_source"] = release_row.get("release_calendar_source")
@@ -317,7 +384,13 @@ def _build_macro_daily_frame(
 
         effective_rows: list[dict[str, object]] = []
         for _, row in local.iterrows():
-            release_ts = pd.to_datetime(row.get("release_timestamp_utc"), utc=True, errors="coerce")
+            scheduled_release_ts = pd.to_datetime(
+                row.get("scheduled_release_timestamp_utc", row.get("release_timestamp_utc")),
+                utc=True,
+                errors="coerce",
+            )
+            observed_release_ts = pd.to_datetime(row.get("observed_first_available_at_utc"), utc=True, errors="coerce")
+            release_ts = observed_release_ts if pd.notna(observed_release_ts) else scheduled_release_ts
             release_tz = str(row.get("release_timezone") or _DEFAULT_RELEASE_TIMEZONE).strip() or _DEFAULT_RELEASE_TIMEZONE
             obs_date = pd.Timestamp(row["observation_date"]).normalize()
 

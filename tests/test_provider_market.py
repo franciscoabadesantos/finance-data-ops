@@ -99,3 +99,52 @@ def test_fetch_latest_quotes_normalizes_fields() -> None:
     assert row["symbol"] == "SPY"
     assert float(row["price"]) == 505.12
     assert pd.Timestamp(row["quote_ts"]).tzinfo is not None
+
+
+def test_fetch_daily_prices_uses_provider_symbol_candidates() -> None:
+    calls: list[str] = []
+
+    def fake_download(symbol: str, **_: object) -> pd.DataFrame:
+        calls.append(symbol)
+        if symbol == "BRK-B":
+            return pd.DataFrame(
+                [
+                    {
+                        "Date": "2026-04-08",
+                        "Open": 470.0,
+                        "High": 475.0,
+                        "Low": 468.0,
+                        "Close": 474.5,
+                        "Adj Close": 474.5,
+                        "Volume": 1_200_000,
+                    }
+                ]
+            )
+        return pd.DataFrame()
+
+    provider = MarketDataProvider(download_fn=fake_download, quote_fn=lambda _: {})
+    out = provider.fetch_daily_prices(["BRK.B"], start="2026-04-08", end="2026-04-08")
+
+    assert len(out.index) == 1
+    assert out.iloc[0]["symbol"] == "BRK.B"
+    assert "BRK-B" in calls
+
+
+def test_fetch_latest_quotes_skips_symbol_failures_without_raising() -> None:
+    def fake_quote(symbol: str) -> dict[str, object]:
+        if symbol == "BAD":
+            raise RuntimeError("simulated provider failure")
+        return {
+            "price": 100.0,
+            "previous_close": 99.0,
+            "open": 99.5,
+            "high": 101.0,
+            "low": 98.5,
+            "volume": 1_000_000,
+            "quote_ts": datetime(2026, 4, 10, 20, 0, tzinfo=UTC),
+        }
+
+    provider = MarketDataProvider(download_fn=lambda *_args, **_kwargs: pd.DataFrame(), quote_fn=fake_quote)
+    out = provider.fetch_latest_quotes(["GOOD", "BAD"])
+
+    assert sorted(out["symbol"].tolist()) == ["GOOD"]

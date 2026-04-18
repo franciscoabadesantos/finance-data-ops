@@ -29,6 +29,7 @@ DEFAULT_RETRY_SLEEP_SECONDS = 0.5
 RELEASE_TIMEZONE = "America/New_York"
 RELEASE_TIME_LOCAL = dtime(hour=8, minute=30)
 WEEKLY_RELEASE_WINDOW_MAX_DAYS = 14
+RELEASE_AVAILABILITY_GRACE_SECONDS = 4 * 60 * 60
 
 ICSA_RELEASE_SOURCE = "dol_icsa_release_calendar_v1"
 ICSA_LAPSE_BACKFILL_SOURCE = "dol_eta20251120_lapse_notice_backfill_v1"
@@ -45,6 +46,23 @@ ICSA_LAPSE_BACKFILL_OBSERVATIONS: tuple[date, ...] = (
 _FRED_CALENDAR_DATE_PATTERN = re.compile(
     r'<span style="font-weight: bold;">([A-Za-z]+ [A-Za-z]+ \d{2}, \d{4})</span>'
 )
+
+# Explicit CPI release-timestamp corrections required for parity with legacy official
+# calendar semantics on specific Jan observation periods.
+_CPI_RELEASE_DATE_OVERRIDES: dict[str, str] = {
+    "2020-01": "2020-02-13",
+    "2021-01": "2021-02-10",
+    "2022-01": "2022-02-10",
+    "2023-01": "2023-02-14",
+    "2024-01": "2024-02-13",
+}
+
+_CPI_RELEASE_OVERRIDE_SOURCE = "bls_cpi_manual_override_v1"
+
+AVAILABILITY_STATUS_OBSERVED = "observed_available"
+AVAILABILITY_STATUS_PROVISIONAL = "scheduled_provisional"
+AVAILABILITY_STATUS_LATE = "late_missing_observation"
+AVAILABILITY_STATUS_UNSUPPORTED = "schedule_only_unsupported_history"
 
 
 @dataclass(frozen=True)
@@ -108,7 +126,8 @@ class EconomicReleaseCalendarProvider:
         out = pd.concat([monthly, weekly], ignore_index=True)
         out["observation_date"] = pd.to_datetime(out["observation_date"], errors="coerce").dt.date
         out = out[(out["observation_date"] >= start_date) & (out["observation_date"] <= end_date)].copy()
-        out = out.sort_values(["series_key", "observation_period", "release_timestamp_utc"]).drop_duplicates(
+        sort_col = "scheduled_release_timestamp_utc" if "scheduled_release_timestamp_utc" in out.columns else "release_timestamp_utc"
+        out = out.sort_values(["series_key", "observation_period", sort_col]).drop_duplicates(
             subset=["series_key", "observation_period"],
             keep="last",
         )
@@ -123,38 +142,73 @@ class EconomicReleaseCalendarProvider:
     ) -> pd.DataFrame:
         rows: list[dict[str, object]] = []
         min_obs_iso = min_observation_date.isoformat()
+        now_utc = pd.Timestamp(datetime.now(UTC))
 
         for group in ANCHOR_GROUPS:
             if group.generation_method == "observation_first_appearance":
-                obs_to_release = _derive_first_release_mapping_from_first_appearance(
+                observed_release_by_obs = _derive_first_release_mapping_from_first_appearance(
                     anchor_series_id=group.anchor_series_id,
                     min_observation_date=min_obs_iso,
                     sleep_seconds=sleep_seconds,
                 )
+                schedule_release_by_obs = dict(observed_release_by_obs)
             else:
                 present_observation_dates = _load_latest_observation_presence(group.anchor_series_id)
-                obs_to_release = _derive_first_release_mapping(
+                schedule_release_by_obs, observed_release_by_obs = _derive_monthly_schedule_and_observed(
                     anchor_series_id=group.anchor_series_id,
                     min_observation_date=min_obs_iso,
                     sleep_seconds=sleep_seconds,
                     present_observation_dates=present_observation_dates,
                 )
 
-            for observation_date, release_date_local in sorted(obs_to_release.items()):
+            for observation_date, scheduled_release_date_local in sorted(schedule_release_by_obs.items()):
                 observation_period = observation_date[:7]
-                release_timestamp_utc = _release_timestamp_utc(date.fromisoformat(release_date_local))
-                provenance_class = _classify_provenance(group.source_label)
+                source_label = group.source_label
+                observed_release_date_local = observed_release_by_obs.get(observation_date)
+                if group.anchor_series_id == "CPIAUCSL":
+                    override_release_date = _CPI_RELEASE_DATE_OVERRIDES.get(observation_period)
+                    if override_release_date:
+                        scheduled_release_date_local = override_release_date
+                        if observed_release_date_local is not None:
+                            observed_release_date_local = override_release_date
+                        source_label = _CPI_RELEASE_OVERRIDE_SOURCE
+                scheduled_release_timestamp_utc = _release_timestamp_utc(date.fromisoformat(scheduled_release_date_local))
+                observed_first_available_at_utc = (
+                    _release_timestamp_utc(date.fromisoformat(observed_release_date_local))
+                    if observed_release_date_local
+                    else None
+                )
+                availability_source = (
+                    source_label
+                    if observed_first_available_at_utc is not None
+                    else f"{group.release_calendar_source}_scheduled_calendar_v1"
+                )
+                availability = _derive_availability_fields(
+                    scheduled_release_timestamp_utc=scheduled_release_timestamp_utc,
+                    observed_first_available_at_utc=observed_first_available_at_utc,
+                    availability_source=availability_source,
+                    now_utc=now_utc,
+                    authoritative_supported=True,
+                )
+                provenance_class = _classify_provenance(source_label)
                 for series_key in group.series_keys:
                     rows.append(
                         {
                             "series_key": series_key,
                             "observation_period": observation_period,
                             "observation_date": observation_date,
-                            "release_timestamp_utc": release_timestamp_utc,
+                            # Backward-compatible alias retained for existing readers.
+                            "release_timestamp_utc": scheduled_release_timestamp_utc,
+                            "scheduled_release_timestamp_utc": scheduled_release_timestamp_utc,
+                            "observed_first_available_at_utc": observed_first_available_at_utc,
+                            "availability_status": availability["availability_status"],
+                            "availability_source": availability["availability_source"],
+                            "delay_vs_schedule_seconds": availability["delay_vs_schedule_seconds"],
+                            "is_schedule_based_only": availability["is_schedule_based_only"],
                             "release_timezone": RELEASE_TIMEZONE,
-                            "release_date_local": release_date_local,
+                            "release_date_local": scheduled_release_date_local,
                             "release_calendar_source": group.release_calendar_source,
-                            "source": group.source_label,
+                            "source": source_label,
                             "provenance_class": provenance_class,
                             "ingested_at": datetime.now(UTC).isoformat(),
                         }
@@ -168,6 +222,12 @@ class EconomicReleaseCalendarProvider:
                     "observation_period",
                     "observation_date",
                     "release_timestamp_utc",
+                    "scheduled_release_timestamp_utc",
+                    "observed_first_available_at_utc",
+                    "availability_status",
+                    "availability_source",
+                    "delay_vs_schedule_seconds",
+                    "is_schedule_based_only",
                     "release_timezone",
                     "release_date_local",
                     "release_calendar_source",
@@ -176,7 +236,7 @@ class EconomicReleaseCalendarProvider:
                     "ingested_at",
                 ]
             )
-        out = out.sort_values(["series_key", "observation_period", "release_timestamp_utc"]).drop_duplicates(
+        out = out.sort_values(["series_key", "observation_period", "scheduled_release_timestamp_utc"]).drop_duplicates(
             subset=["series_key", "observation_period"],
             keep="last",
         )
@@ -190,6 +250,7 @@ class EconomicReleaseCalendarProvider:
         official_end_year: int,
     ) -> pd.DataFrame:
         observation_dates = _load_icsa_observation_weeks_from_dol(min_observation_date=min_observation_date)
+        latest_obs_raw: set[str] = set()
         # DOL ar539 can lag the newest weekly period; union with current ICSA observation
         # presence so frontier weeks still get official release timestamps.
         try:
@@ -214,6 +275,7 @@ class EconomicReleaseCalendarProvider:
 
         first_vendor_supported_obs = _previous_saturday(min(available_revision_dates))
         release_by_observation: dict[date, tuple[date, str]] = {}
+        observed_by_observation: dict[date, tuple[date, str]] = {}
 
         for obs in observation_dates:
             if obs < first_vendor_supported_obs:
@@ -233,6 +295,8 @@ class EconomicReleaseCalendarProvider:
             if lag_days > WEEKLY_RELEASE_WINDOW_MAX_DAYS:
                 continue
             release_by_observation[obs] = (candidate_release, "alfred_available_revision_dates_v1")
+            if obs.isoformat() in latest_obs_raw:
+                observed_by_observation[obs] = (candidate_release, "alfred_available_revision_dates_v1")
 
         for official_release in sorted(official_release_dates):
             obs = _previous_saturday(official_release)
@@ -243,16 +307,42 @@ class EconomicReleaseCalendarProvider:
             if obs not in observation_dates:
                 continue
             release_by_observation[obs] = (ICSA_LAPSE_BACKFILL_RELEASE_DATE, ICSA_LAPSE_BACKFILL_SOURCE)
+            observed_by_observation[obs] = (ICSA_LAPSE_BACKFILL_RELEASE_DATE, ICSA_LAPSE_BACKFILL_SOURCE)
 
         rows: list[dict[str, object]] = []
+        now_utc = pd.Timestamp(datetime.now(UTC))
         for obs in sorted(release_by_observation.keys()):
             release_date_local, source = release_by_observation[obs]
+            scheduled_release_timestamp_utc = _release_timestamp_utc(release_date_local)
+            observed_tuple = observed_by_observation.get(obs)
+            observed_first_available_at_utc = (
+                _release_timestamp_utc(observed_tuple[0]) if observed_tuple is not None else None
+            )
+            authoritative_supported = obs >= first_vendor_supported_obs or source == ICSA_LAPSE_BACKFILL_SOURCE
+            availability = _derive_availability_fields(
+                scheduled_release_timestamp_utc=scheduled_release_timestamp_utc,
+                observed_first_available_at_utc=observed_first_available_at_utc,
+                availability_source=(
+                    observed_tuple[1]
+                    if observed_tuple is not None
+                    else f"{ICSA_RELEASE_SOURCE}_scheduled_calendar_v1"
+                ),
+                now_utc=now_utc,
+                authoritative_supported=authoritative_supported,
+            )
             rows.append(
                 {
                     "series_key": "ICSA",
                     "observation_period": obs.isoformat(),
                     "observation_date": obs.isoformat(),
-                    "release_timestamp_utc": _release_timestamp_utc(release_date_local),
+                    # Backward-compatible alias retained for existing readers.
+                    "release_timestamp_utc": scheduled_release_timestamp_utc,
+                    "scheduled_release_timestamp_utc": scheduled_release_timestamp_utc,
+                    "observed_first_available_at_utc": observed_first_available_at_utc,
+                    "availability_status": availability["availability_status"],
+                    "availability_source": availability["availability_source"],
+                    "delay_vs_schedule_seconds": availability["delay_vs_schedule_seconds"],
+                    "is_schedule_based_only": availability["is_schedule_based_only"],
                     "release_timezone": RELEASE_TIMEZONE,
                     "release_date_local": release_date_local.isoformat(),
                     "release_calendar_source": ICSA_RELEASE_SOURCE,
@@ -270,6 +360,12 @@ class EconomicReleaseCalendarProvider:
                     "observation_period",
                     "observation_date",
                     "release_timestamp_utc",
+                    "scheduled_release_timestamp_utc",
+                    "observed_first_available_at_utc",
+                    "availability_status",
+                    "availability_source",
+                    "delay_vs_schedule_seconds",
+                    "is_schedule_based_only",
                     "release_timezone",
                     "release_date_local",
                     "release_calendar_source",
@@ -278,7 +374,7 @@ class EconomicReleaseCalendarProvider:
                     "ingested_at",
                 ]
             )
-        out = out.sort_values(["series_key", "observation_period", "release_timestamp_utc"]).drop_duplicates(
+        out = out.sort_values(["series_key", "observation_period", "scheduled_release_timestamp_utc"]).drop_duplicates(
             subset=["series_key", "observation_period"],
             keep="last",
         )
@@ -454,13 +550,13 @@ def _add_month(month_start: date) -> date:
     return date(month_start.year, month_start.month + 1, 1)
 
 
-def _derive_first_release_mapping(
+def _derive_monthly_schedule_and_observed(
     *,
     anchor_series_id: str,
     min_observation_date: str,
     sleep_seconds: float,
     present_observation_dates: set[str],
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, str]]:
     revision_dates = _load_available_revision_dates(anchor_series_id)
 
     monthly_first_release: dict[str, str] = {}
@@ -473,7 +569,8 @@ def _derive_first_release_mapping(
     release_dates = [monthly_first_release[k] for k in sorted(monthly_first_release.keys())]
     release_dates = [d for d in release_dates if d >= min_observation_date]
 
-    first_release_by_observation: dict[str, str] = {}
+    schedule_by_observation: dict[str, str] = {}
+    observed_by_observation: dict[str, str] = {}
     min_obs_date = date.fromisoformat(min_observation_date)
     latest_seen_obs_month: date | None = None
 
@@ -491,8 +588,10 @@ def _derive_first_release_mapping(
         current = first_obs_month
         while current <= max_obs_month_for_release:
             obs_iso = current.isoformat()
-            if current >= min_obs_date and obs_iso in present_observation_dates:
-                first_release_by_observation[obs_iso] = release_date
+            if current >= min_obs_date:
+                schedule_by_observation[obs_iso] = release_date
+                if obs_iso in present_observation_dates:
+                    observed_by_observation[obs_iso] = release_date
             current = _add_month(current)
 
         if max_obs_month_for_release >= first_obs_month:
@@ -501,7 +600,7 @@ def _derive_first_release_mapping(
         if sleep_seconds > 0:
             time.sleep(float(sleep_seconds))
 
-    return first_release_by_observation
+    return schedule_by_observation, observed_by_observation
 
 
 def _derive_first_release_mapping_from_first_appearance(
@@ -609,3 +708,45 @@ def _classify_provenance(source: str) -> str:
     if "missing" in token or "canceled" in token or "cancelled" in token:
         return "canceled/missing"
     return "unknown"
+
+
+def _derive_availability_fields(
+    *,
+    scheduled_release_timestamp_utc: str,
+    observed_first_available_at_utc: str | None,
+    availability_source: str,
+    now_utc: pd.Timestamp,
+    authoritative_supported: bool,
+) -> dict[str, object]:
+    scheduled_ts = pd.to_datetime(scheduled_release_timestamp_utc, utc=True, errors="coerce")
+    observed_ts = pd.to_datetime(observed_first_available_at_utc, utc=True, errors="coerce")
+    if pd.isna(scheduled_ts):
+        raise ReleaseCalendarProviderError(
+            f"Invalid scheduled_release_timestamp_utc={scheduled_release_timestamp_utc!r}."
+        )
+
+    if pd.notna(observed_ts):
+        delay_seconds = int((observed_ts - scheduled_ts).total_seconds())
+        return {
+            "availability_status": AVAILABILITY_STATUS_OBSERVED,
+            "availability_source": str(availability_source or "").strip() or "unknown",
+            "delay_vs_schedule_seconds": delay_seconds,
+            "is_schedule_based_only": False,
+        }
+
+    if not authoritative_supported:
+        return {
+            "availability_status": AVAILABILITY_STATUS_UNSUPPORTED,
+            "availability_source": "historical_schedule_inference_v1",
+            "delay_vs_schedule_seconds": None,
+            "is_schedule_based_only": True,
+        }
+
+    late_threshold = scheduled_ts + pd.Timedelta(seconds=RELEASE_AVAILABILITY_GRACE_SECONDS)
+    is_late = pd.Timestamp(now_utc).tz_convert("UTC") > late_threshold
+    return {
+        "availability_status": AVAILABILITY_STATUS_LATE if is_late else AVAILABILITY_STATUS_PROVISIONAL,
+        "availability_source": str(availability_source or "").strip() or "scheduled_calendar",
+        "delay_vs_schedule_seconds": None,
+        "is_schedule_based_only": True,
+    }

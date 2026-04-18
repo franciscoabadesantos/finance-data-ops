@@ -82,3 +82,9 @@ For macro and release calendar domains:
 - canonical source: `finance-data-ops` tables (`macro_*`, `economic_release_calendar`)
 - migration fallback only: legacy `Finance` read logic (feature-flag controlled)
 - `Finance/configs/release_calendars/*` is not part of post-cutover runtime logic
+
+## Request-driven async jobs
+
+Ticker validation/backfill deployment and cutover (Cloud Tasks + Cloud Run) runbook:
+
+- [`docs/cloud_tasks_cloud_run_deployment.md`](/home/franciscosantos/finance-data-ops/docs/cloud_tasks_cloud_run_deployment.md)
