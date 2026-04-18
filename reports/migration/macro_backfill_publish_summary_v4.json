@@ -1,0 +1,146 @@
+{
+  "flow_run_id": "run_dataops_macro_daily_46945b5d24eb",
+  "window": {
+    "start": "2020-01-01",
+    "end": "2026-04-13"
+  },
+  "macro_daily": {
+    "run_id": "run_macro_daily_39f4cf66071f",
+    "asset_name": "macro_daily",
+    "status": "fresh",
+    "started_at": "2026-04-13T22:02:58.336871+00:00",
+    "ended_at": "2026-04-13T22:03:10.264196+00:00",
+    "symbols_requested": [
+      "VIX",
+      "VIX3M",
+      "VVIX",
+      "10Y_Treasury_Yield",
+      "2Y_Treasury_Yield",
+      "High_Yield_Spread",
+      "TED_Spread",
+      "CPI_Headline",
+      "CPI_Core",
+      "UNRATE",
+      "U6RATE",
+      "ICSA",
+      "CIVPART",
+      "WTI",
+      "Gasoline_US_Regular",
+      "NatGas_HenryHub",
+      "DBC"
+    ],
+    "symbols_succeeded": [
+      "10Y_Treasury_Yield",
+      "2Y_Treasury_Yield",
+      "CIVPART",
+      "CPI_Core",
+      "CPI_Headline",
+      "DBC",
+      "Gasoline_US_Regular",
+      "High_Yield_Spread",
+      "ICSA",
+      "NatGas_HenryHub",
+      "TED_Spread",
+      "U6RATE",
+      "UNRATE",
+      "VIX",
+      "VIX3M",
+      "VVIX",
+      "WTI"
+    ],
+    "symbols_failed": [],
+    "retry_exhausted_symbols": [],
+    "rows_written": 43618,
+    "error_messages": []
+  },
+  "asset_status": [
+    {
+      "asset_key": "macro_observations",
+      "asset_type": "macro",
+      "provider": "yfinance",
+      "last_success_at": "2026-04-13T00:00:00+00:00",
+      "last_available_date": "2026-04-13",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows_written=15738; run_id=run_macro_daily_39f4cf66071f",
+      "updated_at": "2026-04-13T22:03:10.268602+00:00"
+    },
+    {
+      "asset_key": "macro_daily",
+      "asset_type": "macro",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-13T00:00:00+00:00",
+      "last_available_date": "2026-04-13",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows_written=27863; run_id=run_dataops_macro_daily_46945b5d24eb_macro_daily",
+      "updated_at": "2026-04-13T22:03:10.268602+00:00"
+    },
+    {
+      "asset_key": "data_ops_publish_pipeline_macro",
+      "asset_type": "pipeline",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-13T22:03:25.427783+00:00",
+      "last_available_date": "2026-04-13",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "success; run_id=run_dataops_macro_daily_46945b5d24eb",
+      "updated_at": "2026-04-13T22:03:25.427828+00:00"
+    }
+  ],
+  "published": {
+    "macro": {
+      "macro_series_catalog": {
+        "status_code": 200,
+        "data": null,
+        "table": "macro_series_catalog",
+        "rows": 17
+      },
+      "macro_observations": {
+        "status_code": 200,
+        "data": null,
+        "table": "macro_observations",
+        "rows": 15738
+      },
+      "macro_daily": {
+        "status_code": 200,
+        "data": null,
+        "table": "macro_daily",
+        "rows": 27705
+      },
+      "mv_latest_macro_observations": {
+        "status_code": 204,
+        "data": null
+      },
+      "mv_latest_economic_release_calendar": {
+        "status_code": 204,
+        "data": null
+      }
+    },
+    "status": {
+      "data_source_runs": {
+        "status_code": 201,
+        "data": null,
+        "table": "data_source_runs",
+        "rows": 2
+      },
+      "data_asset_status": {
+        "status_code": 200,
+        "data": null,
+        "table": "data_asset_status",
+        "rows": 3
+      },
+      "symbol_data_coverage": {
+        "table": "symbol_data_coverage",
+        "status": "skipped",
+        "rows": 0
+      }
+    }
+  },
+  "publish_failures": [],
+  "rows": {
+    "macro_series_catalog": 17,
+    "macro_observations": 15738,
+    "macro_daily": 27863
+  }
+}

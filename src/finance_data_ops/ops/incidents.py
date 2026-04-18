@@ -5,9 +5,11 @@ from __future__ import annotations
 import socket
 import time
 import urllib.error
+from json import JSONDecodeError
 from dataclasses import dataclass
 from typing import Callable, TypeVar
 
+import requests
 
 T = TypeVar("T")
 
@@ -35,8 +37,16 @@ def classify_failure(exc: Exception) -> FailureClassification:
             message=f"HTTP {exc.code}",
         )
 
-    if isinstance(exc, (TimeoutError, ConnectionError, socket.timeout, urllib.error.URLError)):
+    if isinstance(exc, (TimeoutError, ConnectionError, socket.timeout, urllib.error.URLError, requests.RequestException)):
         return FailureClassification(retryable=True, code="failed_retrying", message=str(exc))
+
+    if isinstance(exc, JSONDecodeError):
+        return FailureClassification(retryable=True, code="failed_retrying", message=str(exc))
+
+    if isinstance(exc, RuntimeError):
+        message = str(exc).lower()
+        if "curl fetch failed" in message or "timed out" in message or "timeout" in message:
+            return FailureClassification(retryable=True, code="failed_retrying", message=str(exc))
 
     if isinstance(exc, ValueError):
         return FailureClassification(retryable=False, code="failed_hard", message=str(exc))

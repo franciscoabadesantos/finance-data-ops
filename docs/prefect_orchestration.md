@@ -1,12 +1,6 @@
-# Prefect Cloud orchestration (Phase 1)
+# Prefect Cloud orchestration (Data Ops v3)
 
 This repository uses Prefect Cloud as the primary orchestration layer for daily Data Ops runs.
-
-Scope of this phase:
-
-- Lift-and-shift orchestration only
-- No provider, refresh, publish, or schema logic changes
-- Keep domain-separated flows/deployments for targeted runs and debugging
 
 ## Flow wrappers
 
@@ -19,35 +13,8 @@ Wrapped domains:
 - `dataops_market_daily`
 - `dataops_fundamentals_daily`
 - `dataops_earnings_daily`
-- `dataops_ticker_backfill`
-- `dataops_ticker_validation`
-- `dataops_ticker_onboarding`
-
-Default flow-level retries (orchestration only):
-
-- Market: `retries=2`, `retry_delay_seconds=300`
-- Fundamentals: `retries=1`, `retry_delay_seconds=900`
-- Earnings: `retries=2`, `retry_delay_seconds=600`
-- Ticker backfill: `retries=0` (step-level failures are surfaced immediately with alerts)
-- Ticker validation: `retries=0` (validation result should be explicit and deterministic per symbol input)
-- Ticker onboarding: `retries=0` (gate decision should be explicit per submission event)
-
-These wrappers delegate to existing orchestration functions:
-
-- `run_dataops_market_daily`
-- `run_dataops_fundamentals_daily`
-- `run_dataops_earnings_daily`
-
-Local execution examples:
-
-```bash
-python flows/prefect_dataops_daily.py market --region us --lookback-days 400
-python flows/prefect_dataops_daily.py fundamentals --region eu
-python flows/prefect_dataops_daily.py earnings --region apac --history-limit 12
-python flows/prefect_dataops_daily.py ticker-backfill --ticker AAPL
-python flows/prefect_dataops_daily.py ticker-validation --input-symbol ANZ --region apac --instrument-type-hint equity
-python flows/prefect_dataops_daily.py ticker-onboarding --input-symbol ANZ --region apac --instrument-type-hint equity
-```
+- `dataops_macro_daily`
+- `dataops_release_calendar_daily`
 
 ## Deployments
 
@@ -57,226 +24,39 @@ Deployment definitions are version-controlled in:
 
 Base deployments:
 
-- `market-daily` (args: `symbols`, `start`, `end`, `lookback_days`)
-- `fundamentals-daily` (args: `symbols`)
-- `earnings-daily` (args: `symbols`, `history_limit`)
-- `ticker-onboarding` (args: `input_symbol`, optional `region`, `exchange`, `instrument_type_hint`, `start`, `end`, `history_limit`)
-- `ticker-backfill` (args: `ticker`, optional `start`, `end`, `history_limit`)
-- `ticker-validation` (args: `input_symbol`, `region`, optional `exchange`, `instrument_type_hint`)
+- `market-daily`
+- `fundamentals-daily`
+- `earnings-daily`
+- `macro-daily`
+- `release-calendar-daily`
 
 Cadence strategy (weekday UTC):
 
 - Market (`market-daily`): `06:30`, `14:30`, `22:30`
 - Earnings (`earnings-daily`): `08:00`, `20:00`
 - Fundamentals (`fundamentals-daily`): `03:00`
-- Ticker onboarding (`ticker-onboarding`): event-driven only (`dataops.ticker.added`)
-- Ticker backfill (`ticker-backfill`): no schedule (only invoked after onboarding promotion decision)
-- Ticker validation (`ticker-validation`): onboarding webhook/API invoked (no schedule)
+- Macro (`macro-daily`): `06:15`, `14:45`, `22:45`
+- Economic release calendar (`release-calendar-daily`): `05:00`, `15:00`
 
-Rationale:
+Request-driven ticker validation/backfill are intentionally not deployed in Prefect.
+They are queued through Cloud Tasks and executed by Cloud Run worker endpoints.
 
-- Market is most time-sensitive, so it runs most frequently.
-- Earnings updates are less volatile than prices, so medium cadence is sufficient.
-- Fundamentals are slow-moving, so one daily run is enough.
+## Publish safety gates
 
-Region handling is parameterized:
+Each domain validates payloads before publish. Publish fails before DB write on validation failure.
 
-- pass `region` at run/deployment trigger time
-- flow logic resolves region-specific symbol universes when present
-- no separate per-region deployments
+Macro gates:
 
-## Ticker onboarding gate
+- no NULL required values
+- valid timestamps
+- no forward-dated release timestamps
 
-Ticker onboarding flow behavior:
+Release-calendar gates:
 
-1. create/refresh `ticker_registry` row as `pending_validation`
-2. run `ticker-validation` deployment
-3. if promotable (`status='active'` and `promotion_status in ('validated_market_only','validated_full')`) trigger `ticker-backfill`
-4. if rejected, persist rejection reason and stop without backfill
-
-Ticker backfill flow behavior (invoked by onboarding only after promotion, or manually for debugging):
-
-1. market backfill for one ticker (default window: last 5 years, override with `start`/`end`)
-2. earnings backfill for one ticker (default `history_limit=24`)
-3. fundamentals refresh for one ticker
-
-This flow is idempotent by relying on existing domain dedupe/upsert logic.
-
-Backfill status tracking:
-
-- local cache table: `ticker_backfill_status.parquet` (latest row per ticker)
-- fields include `ticker`, `status`, `failed_step`, `last_success_at`, and run metadata
-- durability note: this is local runtime storage for Phase 1; with managed execution,
-  move to a shared persistent operational surface in a follow-up for durable history
-
-Trigger options when a ticker is added:
-
-- Backend/API call that emits Prefect custom event `dataops.ticker.added`
-- DB-triggered integration (for example Supabase webhook) that emits the same event
-
-Helper script:
-
-```bash
-python scripts/emit_ticker_added_event.py AAPL --region us
-```
-
-Direct deployment submitter helper:
-
-```bash
-python scripts/submit_ticker_onboarding.py AAPL --region us
-```
-
-The `ticker-onboarding` deployment in `prefect.yaml` includes an event trigger:
-
-- expects: `dataops.ticker.added`
-- maps normalized payload values into parameters:
-  - `input_symbol <- event.payload.ticker`
-  - `region <- event.payload.region`
-  - `exchange <- event.payload.exchange`
-  - `instrument_type_hint <- event.payload.instrument_type_hint`
-  - `start <- event.payload.start`
-  - `end <- event.payload.end`
-  - `history_limit <- event.payload.history_limit`
-- `event.resource.id` is still emitted as plain uppercase ticker and used for event identity/tracing
-
-Ticker normalization contract:
-
-- accepted format: plain uppercase symbol (for example: `AAPL`, `BRK.B`, `RDS-A`)
-- rejected: prefixed or mixed-format identifiers (for example: `ticker:AAPL`, `us/AAPL`)
-
-## Ticker validation flow
-
-Ticker validation flow behavior:
-
-1. Generate ordered candidate symbols from [`config/symbol_normalization.yml`](/home/franciscosantos/finance-data-ops/config/symbol_normalization.yml)
-2. Validate market support (daily + latest quotes)
-3. Enforce market publish-safety precheck (`market_quotes` required fields `price`, `change`)
-4. Validate fundamentals support
-5. Validate earnings support
-6. Select best candidate by validation status/score
-7. Persist result in registry (`ticker_registry`)
-
-Validation status outputs:
-
-- `pending_validation`
-- `validated_market_only`
-- `validated_full`
-- `rejected`
-
-Instrument types and domain policy:
-
-- `equity` / `adr`: market required; fundamentals/earnings preferred
-- `etf` / `country_fund`: market required; fundamentals/earnings optional
-- `index_proxy`: market required; fundamentals/earnings optional
-- `unknown`: market required; fundamentals/earnings optional
-
-## Batch-add behavior and queueing
-
-High-volume ticker adds are buffered by Prefect queueing:
-
-- deployment: `ticker-onboarding`
-- deployment concurrency limit: `4` with `ENQUEUE` collision strategy
-
-When many `dataops.ticker.added` events arrive in a short interval, runs queue
-instead of executing all at once, which limits provider load.
-
-Backfill queueing:
-
-- deployment: `ticker-backfill`
-- deployment concurrency limit: `4` with `ENQUEUE` collision strategy
-- backfills are launched only after onboarding promotion decisions
-
-Validation queueing:
-
-- deployment: `ticker-validation`
-- deployment concurrency limit: `8` with `ENQUEUE` collision strategy
-- invoked by `ticker-onboarding` via deployment run API
-
-## Region symbol universes
-
-Flow wrappers resolve symbols in this order:
-
-1. Deployment parameter `symbols`
-2. Validated registry universe from `ticker_registry` (filtered by `region`, active promotion status, market support)
-3. Region-specific env var (`DATA_OPS_SYMBOLS_US`, `DATA_OPS_SYMBOLS_EU`, `DATA_OPS_SYMBOLS_APAC`)
-4. Default `DATA_OPS_SYMBOLS`
-
-This enables registry-driven production universes while keeping env-based fallback during rollout.
-
-APAC market exclusions are tracked explicitly during production-universe cleanup.
-These exclusions currently apply to the `market-daily` APAC symbol universe only:
-
-- `TTM`
-- `WOW`
-- `WBC`
-- `SAUD`
-- `ANZ`
-- `EGPT`
-- `GAF`
-
-## Work pool
-
-Default work pool name: `dataops-managed-pool` (`prefect:managed`).
-
-Bootstrap:
-
-```bash
-pip install -e ".[dev,orchestration]"
-./scripts/prefect_bootstrap.sh
-```
-
-No always-on worker VM is required. Runs execute through Prefect-managed infrastructure.
-
-## Environment and secrets
-
-Configure via deployment configuration and/or Prefect blocks:
-
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `DATA_OPS_SYMBOLS`
-- `DATA_OPS_MAX_ATTEMPTS`
-- `DATA_OPS_ALERT_WEBHOOK_URL`
-
-Optional region overrides:
-
-- `DATA_OPS_SYMBOLS_US`
-- `DATA_OPS_SYMBOLS_EU`
-- `DATA_OPS_SYMBOLS_APAC`
-
-## Automations
-
-Automation templates are in:
-
-- [`orchestration/prefect/automations.yaml`](/home/franciscosantos/finance-data-ops/orchestration/prefect/automations.yaml)
-
-Included templates:
-
-- flow failure alert
-- repeated failures escalation
-- missed schedule alert (`Late`)
-- long-running/stuck flow alert
-
-Apply:
-
-```bash
-prefect automation create --from-file orchestration/prefect/automations.yaml
-```
-
-If the Prefect workspace hosts non-Data Ops workflows, add resource filters
-to the automation definitions before applying.
-
-## GitHub Actions scope after migration
-
-GitHub Actions daily workflows remain for manual backfills/debug only (`workflow_dispatch`):
-
-- `.github/workflows/daily_market_refresh.yml`
-- `.github/workflows/daily_fundamentals_refresh.yml`
-- `.github/workflows/daily_earnings_refresh.yml`
-
-CI remains in `.github/workflows/ci.yml`.
-
-## Not included in this phase
-
-- Per-symbol/provider granular retries
-- Coverage-threshold alerting policy
-- 5-year historical backfill expansions for fundamentals/earnings
+- valid `scheduled_release_timestamp_utc`
+- valid `observed_first_available_at_utc` when present
+- valid `availability_status` / `availability_source`
+- valid `delay_vs_schedule_seconds` semantics
+- consistent `is_schedule_based_only` vs observed availability
+- non-empty `release_timezone`
+- no duplicate `(series_key, observation_period)` rows

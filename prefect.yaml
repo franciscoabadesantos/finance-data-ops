@@ -125,23 +125,29 @@ deployments:
           DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
           DATA_OPS_SYMBOLS_APAC: "TSM,BABA,JD,BIDU,EWJ,EWT,MCHI,NTES,SONY,KWEB,FXI,KORU,EWY,EWS,EWM,EPHE,VNM,IDX,THD,EIDO,ASEA,INDA,INFY,HDB,IBN,WIT,TTM,RDY,INDY,SMIN,EWA,BHP,RIO,CSL,WOW,WBC,ANZ,ASX,EZA,AFK,NGE,EGPT,GAF,EIS,ISRA,UAE,SAUD,QAT,KSA,EWZ,VALE,PBR,EWW,MELI,ILF,BAP,EC,CX,SBS,BBD,ARGT"
 
-  - name: ticker-backfill
+  - name: macro-daily
     version: null
     tags:
       - dataops
-      - backfill
-      - ticker
-      - onboarding
-    description: Targeted backfill orchestration for newly added tickers.
-    entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_backfill_flow
+      - macro
+      - daily
+    description: Data Ops macro daily orchestration.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_macro_daily_flow
     parameters:
       start: null
       end: null
-      history_limit: 24
-      region: null
-    concurrency_limit:
-      limit: 4
-      collision_strategy: ENQUEUE
+      lookback_days: 730
+      force_recompute: false
+    schedules:
+      - cron: "15 6 * * 1-5"
+        timezone: "UTC"
+        active: true
+      - cron: "45 14 * * 1-5"
+        timezone: "UTC"
+        active: true
+      - cron: "45 22 * * 1-5"
+        timezone: "UTC"
+        active: true
     work_pool:
       name: dataops-managed-pool
       work_queue_name: default
@@ -153,69 +159,36 @@ deployments:
           - "yfinance>=0.2"
           - "lxml>=4.9"
           - "PyYAML>=6.0"
-        env:
-          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
-          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
-          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK.B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
-          DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
-          DATA_OPS_SYMBOLS_APAC: "TSM,BABA,JD,BIDU,EWJ,EWT,MCHI,NTES,SONY,KWEB,FXI,KORU,EWY,EWS,EWM,EPHE,VNM,IDX,THD,EIDO,ASEA,INDA,INFY,HDB,IBN,WIT,TTM,RDY,INDY,SMIN,EWA,BHP,RIO,CSL,WOW,WBC,ANZ,ASX,EZA,AFK,NGE,EGPT,GAF,EIS,ISRA,UAE,SAUD,QAT,KSA,EWZ,VALE,PBR,EWW,MELI,ILF,BAP,EC,CX,SBS,BBD,ARGT"
-
-  - name: ticker-validation
-    version: null
-    tags:
-      - dataops
-      - validation
-      - ticker
-      - onboarding
-    description: Symbol normalization and domain validation before production promotion (API/webhook-invoked).
-    entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_validation_flow
-    parameters:
-      region: us
-      exchange: null
-      instrument_type_hint: null
-      history_limit: 12
-      publish_registry: true
-    concurrency_limit:
-      limit: 8
-      collision_strategy: ENQUEUE
-    work_pool:
-      name: dataops-managed-pool
-      work_queue_name: default
-      job_variables:
-        pip_packages:
-          - "numpy>=1.24"
-          - "pandas>=2.0"
-          - "pyarrow>=10.0"
-          - "yfinance>=0.2"
-          - "lxml>=4.9"
-          - "PyYAML>=6.0"
+          - "pandas-datareader>=0.10"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
           SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
 
-  - name: ticker-onboarding
+  - name: release-calendar-daily
     version: null
     tags:
       - dataops
-      - onboarding
-      - ticker
-      - orchestration
-      - event-driven
-    description: Validation-gated ticker onboarding orchestration (pending -> validate -> conditional backfill).
-    entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_onboarding_flow
+      - macro
+      - release-calendar
+      - daily
+    description: Data Ops economic release-calendar daily orchestration.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_release_calendar_daily_flow
     parameters:
-      region: us
-      exchange: null
-      instrument_type_hint: null
-      start: null
-      end: null
-      history_limit: 24
-      publish_enabled: true
-    concurrency_limit:
-      limit: 4
-      collision_strategy: ENQUEUE
+      start_date: null
+      end_date: null
+      lookback_days: 730
+      force_recompute: false
+      sleep_seconds: 0.0
+      official_start_year: null
+      official_end_year: null
+    schedules:
+      - cron: "0 5 * * 1-5"
+        timezone: "UTC"
+        active: true
+      - cron: "0 15 * * 1-5"
+        timezone: "UTC"
+        active: true
     work_pool:
       name: dataops-managed-pool
       work_queue_name: default
@@ -227,22 +200,8 @@ deployments:
           - "yfinance>=0.2"
           - "lxml>=4.9"
           - "PyYAML>=6.0"
+          - "pandas-datareader>=0.10"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
           SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
-    triggers:
-      - type: event
-        enabled: true
-        match:
-          prefect.resource.role: ticker
-        expect:
-          - dataops.ticker.added
-        parameters:
-          input_symbol: "{{ event.payload.ticker }}"
-          region: "{{ event.payload.region }}"
-          exchange: "{{ event.payload.exchange }}"
-          instrument_type_hint: "{{ event.payload.instrument_type_hint }}"
-          start: "{{ event.payload.start }}"
-          end: "{{ event.payload.end }}"
-          history_limit: "{{ event.payload.history_limit }}"

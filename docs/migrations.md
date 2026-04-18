@@ -1,8 +1,8 @@
-# Migration runbook (Data Ops v2)
+# Migration runbook (Data Ops v3)
 
 ## Purpose
 
-Prepare Supabase for Data Ops-owned market/fundamentals/earnings surfaces and operational metadata.
+Prepare Supabase for Data Ops-owned market/fundamentals/earnings/macro/release surfaces and operational metadata.
 
 ## SQL sources
 
@@ -11,15 +11,11 @@ Apply in order:
 - [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
 - [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
 - [`sql/003_ticker_registry.sql`](/home/franciscosantos/finance-data-ops/sql/003_ticker_registry.sql)
+- [`sql/004_data_ops_v3_macro_release.sql`](/home/franciscosantos/finance-data-ops/sql/004_data_ops_v3_macro_release.sql)
+- [`sql/005_data_ops_v4_release_availability.sql`](/home/franciscosantos/finance-data-ops/sql/005_data_ops_v4_release_availability.sql)
+- [`sql/006_async_job_runs.sql`](/home/franciscosantos/finance-data-ops/sql/006_async_job_runs.sql)
 
-Both scripts are idempotent (`create ... if not exists`, `add column if not exists`, guarded compatibility updates).
-
-## Existing surfaces expected before first run
-
-- `market_price_daily`
-- `market_quotes`
-- `market_quotes_history`
-- RPC/function `refresh_mv_latest_prices`
+All scripts are idempotent (`create ... if not exists`, `add column if not exists`, guarded compatibility updates).
 
 ## Surfaces created/owned by migrations
 
@@ -35,16 +31,60 @@ Both scripts are idempotent (`create ... if not exists`, `add column if not exis
   - `market_earnings_events`
   - `market_earnings_history`
   - `mv_next_earnings` + `refresh_mv_next_earnings`
+- v3:
+  - `macro_series_catalog`
+  - `macro_observations`
+  - `macro_daily`
+  - `economic_release_calendar`
+  - `mv_latest_macro_observations` + refresh RPC
+  - `mv_latest_economic_release_calendar` + refresh RPC
+- v4:
+  - `economic_release_calendar` explicit scheduled vs observed availability fields
+  - rebuilt `mv_latest_economic_release_calendar` ordering by effective availability
+- v5:
+  - `async_job_runs` durable request-driven async job audit surface
 
 ## Apply steps
 
 1. Open Supabase SQL editor (or run via migration tool).
-2. Execute `001_data_ops_v1_surfaces.sql`.
-3. Execute `002_data_ops_v2_fundamentals_earnings.sql`.
-4. Execute `003_ticker_registry.sql`.
-5. Run dry flows:
+2. Execute the six migration files in order.
+3. Run dry flows:
    - `python scripts/run_market_daily.py --symbols SPY --no-publish`
    - `python scripts/run_fundamentals_daily.py --symbols SPY --no-publish`
    - `python scripts/run_earnings_daily.py --symbols SPY --no-publish`
-   - `python flows/prefect_dataops_daily.py ticker-validation --input-symbol SPY --region us --no-publish`
-6. Verify status rows update in `data_source_runs`, `data_asset_status`, `symbol_data_coverage` and `ticker_registry`.
+   - `python scripts/run_macro_daily.py --start 2000-01-01 --end 2020-12-31 --no-publish`
+   - `python scripts/run_release_calendar_daily.py --start-date 2000-01-01 --end-date 2020-12-31 --no-publish`
+4. Verify status rows update in `data_source_runs` and `data_asset_status` for macro/release assets.
+
+## Historical backfill (idempotent)
+
+All backfill commands support:
+
+- `--start-date`
+- `--end-date`
+- `--force-recompute`
+
+Backfill commands:
+
+- macro only:
+  - `python scripts/run_macro_backfill.py --start-date 2000-01-01 --end-date 2026-04-13`
+- release calendar only:
+  - `python scripts/run_release_calendar_backfill.py --start-date 2000-01-01 --end-date 2026-04-13`
+- macro + release together:
+  - `python scripts/run_macro_release_backfill.py --start-date 2000-01-01 --end-date 2026-04-13`
+
+Write behavior:
+
+- deterministic upserts (`on_conflict`) to canonical tables
+- no duplicate keys on re-run
+
+## Parity gate before Finance cutover
+
+Run both parity checks and require `status=ok`:
+
+- `python scripts/check_macro_parity.py --start-date 2020-01-01 --end-date 2026-04-13`
+- `python scripts/check_release_calendar_parity.py --start-date 2020-01-01 --end-date 2026-04-13`
+
+Tolerance contract is documented in:
+
+- [`docs/parity_rules.md`](/home/franciscosantos/finance-data-ops/docs/parity_rules.md)

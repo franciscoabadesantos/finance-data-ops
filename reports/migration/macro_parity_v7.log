@@ -1,0 +1,441 @@
+{
+  "window": {
+    "start_date": "2020-01-01",
+    "end_date": "2026-04-13"
+  },
+  "inputs": {
+    "canonical_macro_daily_path": "/home/franciscosantos/finance-data-ops/data_cache/macro_daily.parquet",
+    "canonical_series_catalog_path": "/home/franciscosantos/finance-data-ops/data_cache/macro_series_catalog.parquet",
+    "legacy_macro_processed_path": "/home/franciscosantos/Finance/data_cache/macro_data_processed.parquet",
+    "legacy_release_timing_audit_path": "/home/franciscosantos/Finance/data_cache/audits/macro_release_timing_audit.parquet",
+    "value_tolerance": 1e-05
+  },
+  "contract": {
+    "value": {
+      "fields": [
+        "canonical.value",
+        "legacy.value"
+      ],
+      "comparison": "absolute_difference <= value_tolerance",
+      "value_tolerance": 1e-05
+    },
+    "availability_timing": {
+      "scope_series": [
+        "CIVPART",
+        "CPI_Core",
+        "CPI_Headline",
+        "ICSA",
+        "U6RATE",
+        "UNRATE"
+      ],
+      "fields": [
+        "canonical.available_at_utc",
+        "legacy.first_known_at_timestamp_utc"
+      ],
+      "key": [
+        "series_key",
+        "source_observation_period"
+      ],
+      "comparison": "exact_utc_timestamp_equality"
+    },
+    "staleness": {
+      "fields": [
+        "canonical.is_stale",
+        "legacy_is_stale_true"
+      ],
+      "legacy_computation": "release_timed: audit(first_eligible_trading_date -> observation_date) replay; non_release: last_non_null_observation_date ffill; stale when source_observation_date missing or busday_count(source_observation_date, as_of_date) > staleness_max_bdays",
+      "staleness_limits_by_series": {
+        "VIX": 5,
+        "VIX3M": 5,
+        "VVIX": 5,
+        "10Y_Treasury_Yield": 5,
+        "2Y_Treasury_Yield": 5,
+        "High_Yield_Spread": 5,
+        "TED_Spread": 5,
+        "CPI_Headline": 45,
+        "CPI_Core": 45,
+        "UNRATE": 45,
+        "U6RATE": 45,
+        "ICSA": 10,
+        "CIVPART": 45,
+        "WTI": 5,
+        "Gasoline_US_Regular": 10,
+        "NatGas_HenryHub": 5,
+        "DBC": 5
+      }
+    }
+  },
+  "series": {
+    "canonical_count": 17,
+    "legacy_count": 82,
+    "shared_count": 17,
+    "missing_in_legacy": [],
+    "missing_in_canonical": [
+      "10Y_Yield_Daily_Diff",
+      "CIVPART_63d_change",
+      "CPI_3m_annualized",
+      "CPI_YoY",
+      "CoreCPI_YoY",
+      "DBC_z_252",
+      "Gasoline_z_252",
+      "HighYieldSpread_21d_change",
+      "HighYieldSpread_z_252",
+      "ICSA_YoY",
+      "NatGas_z_252",
+      "RealRate_10Y_minus_CPI",
+      "U6RATE_63d_change",
+      "UNRATE_63d_change",
+      "Unemp_Rate_Lagged",
+      "Unemp_Rate_Monthly_Diff_Lagged",
+      "VIX_1Y_Rank",
+      "VIX_Daily_Chg",
+      "VIX_z_252",
+      "VVIX_z_252",
+      "WTI_63d_return",
+      "WTI_z_252",
+      "YieldCurve_10Y2Y",
+      "YieldCurve_Inverted",
+      "credit_stress_component_count",
+      "credit_stress_component_total",
+      "credit_stress_partial_coverage",
+      "credit_stress_score",
+      "energy_stress_component_count",
+      "energy_stress_component_total",
+      "energy_stress_partial_coverage",
+      "energy_stress_score",
+      "inflation_stress_component_count",
+      "inflation_stress_component_total",
+      "inflation_stress_partial_coverage",
+      "inflation_stress_score",
+      "labor_stress_component_count",
+      "labor_stress_component_total",
+      "labor_stress_partial_coverage",
+      "labor_stress_score",
+      "macro_stress_family_count",
+      "macro_stress_family_total",
+      "macro_stress_high",
+      "macro_stress_market_only_family_count",
+      "macro_stress_market_only_family_total",
+      "macro_stress_market_only_high",
+      "macro_stress_market_only_partial_coverage",
+      "macro_stress_market_only_quantile",
+      "macro_stress_market_only_regime",
+      "macro_stress_market_only_score",
+      "macro_stress_partial_coverage",
+      "macro_stress_quantile",
+      "macro_stress_regime",
+      "macro_stress_release_only_family_count",
+      "macro_stress_release_only_family_total",
+      "macro_stress_release_only_high",
+      "macro_stress_release_only_partial_coverage",
+      "macro_stress_release_only_quantile",
+      "macro_stress_release_only_regime",
+      "macro_stress_release_only_score",
+      "macro_stress_score",
+      "market_stress_component_count",
+      "market_stress_component_total",
+      "market_stress_partial_coverage",
+      "market_stress_score"
+    ]
+  },
+  "value_parity": {
+    "rows_compared": 27863,
+    "both_present_rows": 23210,
+    "value_mismatch_rows": 4,
+    "canonical_present_legacy_missing_rows": 2137,
+    "legacy_present_canonical_missing_rows": 1238,
+    "max_abs_diff": 5.540000915527344
+  },
+  "availability_parity": {
+    "rows_compared": 9834,
+    "missing_legacy_timing_rows": 0,
+    "timing_mismatch_rows": 0
+  },
+  "staleness_parity": {
+    "rows_compared": 27863,
+    "mismatch_rows": 788,
+    "legacy_method": "computed_legacy_is_stale_true"
+  },
+  "samples": {
+    "value_mismatch": [
+      {
+        "as_of_date": "2025-12-31",
+        "series_key": "DBC",
+        "canonical_value": 22.360000610351562,
+        "legacy_value": 22.639999389648438
+      },
+      {
+        "as_of_date": "2025-12-31",
+        "series_key": "VIX",
+        "canonical_value": 14.949999809265137,
+        "legacy_value": 14.329999923706055
+      },
+      {
+        "as_of_date": "2025-12-31",
+        "series_key": "VIX3M",
+        "canonical_value": 18.18000030517578,
+        "legacy_value": 17.770000457763672
+      },
+      {
+        "as_of_date": "2025-12-31",
+        "series_key": "VVIX",
+        "canonical_value": 92.66999816894531,
+        "legacy_value": 87.12999725341797
+      }
+    ],
+    "availability_mismatch": [],
+    "staleness_mismatch": [
+      {
+        "as_of_date": "2020-01-01",
+        "series_key": "CIVPART",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 43,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-01",
+        "series_key": "CPI_Core",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 43,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-01",
+        "series_key": "CPI_Headline",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 43,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-01",
+        "series_key": "ICSA",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 7,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-12-21"
+      },
+      {
+        "as_of_date": "2020-01-01",
+        "series_key": "U6RATE",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 43,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-01",
+        "series_key": "UNRATE",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 43,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-02",
+        "series_key": "CIVPART",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 44,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-02",
+        "series_key": "CPI_Core",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 44,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-02",
+        "series_key": "CPI_Headline",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 44,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-02",
+        "series_key": "Gasoline_US_Regular",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 0,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2020-01-02"
+      },
+      {
+        "as_of_date": "2020-01-02",
+        "series_key": "ICSA",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 3,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-12-28"
+      },
+      {
+        "as_of_date": "2020-01-02",
+        "series_key": "U6RATE",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 44,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-02",
+        "series_key": "UNRATE",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 44,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-03",
+        "series_key": "CIVPART",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 45,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-03",
+        "series_key": "CPI_Core",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 45,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-03",
+        "series_key": "CPI_Headline",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 45,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-03",
+        "series_key": "Gasoline_US_Regular",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 0,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2020-01-03"
+      },
+      {
+        "as_of_date": "2020-01-03",
+        "series_key": "ICSA",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 4,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-12-28"
+      },
+      {
+        "as_of_date": "2020-01-03",
+        "series_key": "U6RATE",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 45,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-03",
+        "series_key": "UNRATE",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 45,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-11-01"
+      },
+      {
+        "as_of_date": "2020-01-06",
+        "series_key": "ICSA",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 5,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-12-28"
+      },
+      {
+        "as_of_date": "2020-01-07",
+        "series_key": "ICSA",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 6,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-12-28"
+      },
+      {
+        "as_of_date": "2020-01-08",
+        "series_key": "ICSA",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 7,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-12-28"
+      },
+      {
+        "as_of_date": "2020-01-10",
+        "series_key": "CIVPART",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 29,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-12-01"
+      },
+      {
+        "as_of_date": "2020-01-10",
+        "series_key": "U6RATE",
+        "canonical_is_stale": true,
+        "legacy_is_stale_true": false,
+        "canonical_staleness_bdays": null,
+        "legacy_staleness_bdays": 29,
+        "canonical_source_observation_date": "NaT",
+        "legacy_source_observation_date": "2019-12-01"
+      }
+    ]
+  },
+  "status": "fail"
+}

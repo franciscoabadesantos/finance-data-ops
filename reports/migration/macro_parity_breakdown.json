@@ -1,0 +1,45 @@
+{
+  "window": {
+    "start": "2020-01-01",
+    "end": "2026-04-13"
+  },
+  "top_value_mismatch_series": {
+    "CPI_Core": 1494,
+    "CPI_Headline": 1494,
+    "DBC": 1494,
+    "U6RATE": 1207,
+    "CIVPART": 1128,
+    "UNRATE": 1120,
+    "ICSA": 824,
+    "VIX": 1,
+    "VIX3M": 1,
+    "VVIX": 1
+  },
+  "canonical_present_legacy_missing_by_series": {
+    "ICSA": 165,
+    "U6RATE": 146,
+    "CIVPART": 146,
+    "UNRATE": 146,
+    "WTI": 144,
+    "NatGas_HenryHub": 144,
+    "High_Yield_Spread": 140,
+    "CPI_Headline": 139,
+    "CPI_Core": 139,
+    "10Y_Treasury_Yield": 138,
+    "DBC": 138,
+    "2Y_Treasury_Yield": 138,
+    "Gasoline_US_Regular": 138,
+    "VIX3M": 138,
+    "VIX": 138,
+    "VVIX": 138,
+    "TED_Spread": 32
+  },
+  "availability_mismatch_by_series": {
+    "CIVPART": 1639,
+    "CPI_Core": 1639,
+    "CPI_Headline": 1639,
+    "U6RATE": 1639,
+    "UNRATE": 1639,
+    "ICSA": 1636
+  }
+}

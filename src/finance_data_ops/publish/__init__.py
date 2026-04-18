@@ -3,7 +3,9 @@
 from finance_data_ops.publish.client import RecordingPublisher, SupabaseRestPublisher
 from finance_data_ops.publish.earnings import publish_earnings_surfaces
 from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
+from finance_data_ops.publish.macro import publish_macro_surfaces
 from finance_data_ops.publish.prices import publish_prices_surfaces
+from finance_data_ops.publish.release_calendar import publish_release_calendar_surfaces
 from finance_data_ops.publish.product_metrics import publish_product_metrics
 from finance_data_ops.publish.status import publish_status_surfaces
 from finance_data_ops.publish.ticker_registry import publish_ticker_registry
@@ -15,6 +17,8 @@ __all__ = [
     "publish_product_metrics",
     "publish_fundamentals_surfaces",
     "publish_earnings_surfaces",
+    "publish_macro_surfaces",
+    "publish_release_calendar_surfaces",
     "publish_status_surfaces",
     "publish_ticker_registry",
 ]

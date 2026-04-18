@@ -1,0 +1,51 @@
+{
+  "CPI_Core": {
+    "value_mismatch_rows": 10,
+    "availability_mismatch_rows": 109,
+    "staleness_mismatch_rows": 494,
+    "canonical_present_legacy_missing_rows": 103,
+    "legacy_present_canonical_missing_rows": 391
+  },
+  "CPI_Headline": {
+    "value_mismatch_rows": 10,
+    "availability_mismatch_rows": 109,
+    "staleness_mismatch_rows": 494,
+    "canonical_present_legacy_missing_rows": 103,
+    "legacy_present_canonical_missing_rows": 391
+  },
+  "DBC": {
+    "value_mismatch_rows": 441,
+    "availability_mismatch_rows": 0,
+    "staleness_mismatch_rows": 138,
+    "canonical_present_legacy_missing_rows": 138,
+    "legacy_present_canonical_missing_rows": 0
+  },
+  "U6RATE": {
+    "value_mismatch_rows": 0,
+    "availability_mismatch_rows": 0,
+    "staleness_mismatch_rows": 265,
+    "canonical_present_legacy_missing_rows": 123,
+    "legacy_present_canonical_missing_rows": 142
+  },
+  "CIVPART": {
+    "value_mismatch_rows": 0,
+    "availability_mismatch_rows": 0,
+    "staleness_mismatch_rows": 265,
+    "canonical_present_legacy_missing_rows": 123,
+    "legacy_present_canonical_missing_rows": 142
+  },
+  "UNRATE": {
+    "value_mismatch_rows": 0,
+    "availability_mismatch_rows": 0,
+    "staleness_mismatch_rows": 265,
+    "canonical_present_legacy_missing_rows": 123,
+    "legacy_present_canonical_missing_rows": 142
+  },
+  "ICSA": {
+    "value_mismatch_rows": 0,
+    "availability_mismatch_rows": 6,
+    "staleness_mismatch_rows": 148,
+    "canonical_present_legacy_missing_rows": 136,
+    "legacy_present_canonical_missing_rows": 12
+  }
+}

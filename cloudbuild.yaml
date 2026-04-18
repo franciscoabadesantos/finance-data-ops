@@ -1,0 +1,12 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t',
+      'gcr.io/finance-data-ops/finance-jobs-worker',
+      '-f',
+      'services/finance-jobs-worker/Dockerfile',
+      '.'
+    ]
+images:
+  - 'gcr.io/finance-data-ops/finance-jobs-worker'
