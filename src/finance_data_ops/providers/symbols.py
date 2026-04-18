@@ -90,9 +90,6 @@ def normalize_symbol_for_provider(raw_symbol: str, region: str | None, exchange:
     if not normalized:
         return []
 
-    if "." in normalized:
-        return [normalized]
-
     cfg = load_symbol_normalization_config()
     suffix_by_exchange = {
         str(key).strip().upper(): str(value).strip()
@@ -107,6 +104,10 @@ def normalize_symbol_for_provider(raw_symbol: str, region: str | None, exchange:
 
     candidates: list[str] = []
     _extend_candidates(candidates, explicit_overrides.get(normalized))
+    if "." in normalized:
+        if normalized not in candidates:
+            candidates.append(normalized)
+        return _dedupe_candidates(candidates)
 
     region_key = str(region or "").strip().lower()
     region_defaults = dict(cfg.get("region_defaults") or {})
@@ -130,15 +131,7 @@ def normalize_symbol_for_provider(raw_symbol: str, region: str | None, exchange:
     if normalized not in candidates:
         candidates.append(normalized)
 
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in candidates:
-        token = normalize_input_symbol(item)
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        deduped.append(token)
-    return deduped
+    return _dedupe_candidates(candidates)
 
 
 @lru_cache(maxsize=1)
@@ -162,6 +155,18 @@ def _extend_candidates(target: list[str], raw_value: Any) -> None:
     token = normalize_input_symbol(str(raw_value))
     if token and token not in target:
         target.append(token)
+
+
+def _dedupe_candidates(candidates: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        token = normalize_input_symbol(item)
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        deduped.append(token)
+    return deduped
 
 
 def _read_yaml_dict(path: Path) -> dict[str, Any]:
