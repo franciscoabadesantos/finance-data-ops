@@ -1,9 +1,21 @@
 from __future__ import annotations
 
-from datetime import UTC, date, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
+
+DATASET_LABELS: dict[str, str] = {
+    "market_price_daily": "Market price history",
+    "market_fundamentals_v2": "Fundamentals",
+    "market_earnings_history": "Earnings history",
+}
+
+DATASET_KEYS: tuple[str, ...] = (
+    "market_price_daily",
+    "market_fundamentals_v2",
+    "market_earnings_history",
+)
 
 DATE_KEYS_MARKET = ("date", "as_of_date")
 DATE_KEYS_FUNDAMENTALS = ("period_end", "latest_period_end")
@@ -36,19 +48,164 @@ def build_data_window_items(
     fundamentals_rows: list[dict[str, Any]] | None,
     earnings_rows: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
+    stats_by_domain = build_data_window_stats(
+        market_price_rows=market_price_rows,
+        fundamentals_rows=fundamentals_rows,
+        earnings_rows=earnings_rows,
+    )
     items: list[dict[str, Any]] = []
-    market_stats = _compute_daily_window_stats(rows=market_price_rows or [], date_keys=DATE_KEYS_MARKET)
-    fundamentals_stats = _compute_periodic_window_stats(rows=fundamentals_rows or [], date_keys=DATE_KEYS_FUNDAMENTALS)
-    earnings_stats = _compute_quarterly_window_stats(rows=earnings_rows or [], date_keys=DATE_KEYS_EARNINGS)
-
-    for domain, stats in (
-        ("market_price_daily", market_stats),
-        ("market_fundamentals_v2", fundamentals_stats),
-        ("market_earnings_history", earnings_stats),
-    ):
+    for domain in DATASET_KEYS:
+        label = DATASET_LABELS.get(domain, domain)
+        stats = stats_by_domain.get(domain, {})
         for field in WINDOW_FIELDS:
-            items.append({"key": f"{domain}.{field}", "value": stats.get(field)})
+            items.append({"key": f"{label}.{field}", "value": stats.get(field)})
     return items
+
+
+def build_data_window_stats(
+    *,
+    market_price_rows: list[dict[str, Any]] | None,
+    fundamentals_rows: list[dict[str, Any]] | None,
+    earnings_rows: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    return {
+        "market_price_daily": _compute_daily_window_stats(rows=market_price_rows or [], date_keys=DATE_KEYS_MARKET),
+        "market_fundamentals_v2": _compute_periodic_window_stats(
+            rows=fundamentals_rows or [],
+            date_keys=DATE_KEYS_FUNDAMENTALS,
+        ),
+        "market_earnings_history": _compute_quarterly_window_stats(rows=earnings_rows or [], date_keys=DATE_KEYS_EARNINGS),
+    }
+
+
+def build_completeness_summary_lines(
+    *,
+    stats_by_domain: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    market_stats = stats_by_domain.get("market_price_daily", {})
+    fundamentals_stats = stats_by_domain.get("market_fundamentals_v2", {})
+    earnings_stats = stats_by_domain.get("market_earnings_history", {})
+    return [
+        {"key": DATASET_LABELS["market_price_daily"], "value": _format_market_completeness_summary(market_stats)},
+        {"key": DATASET_LABELS["market_earnings_history"], "value": _format_earnings_completeness_summary(earnings_stats)},
+        {"key": DATASET_LABELS["market_fundamentals_v2"], "value": _format_fundamentals_completeness_summary(fundamentals_stats)},
+    ]
+
+
+def coverage_summary_text(*, ticker: str, coverage: dict[str, Any] | None) -> str:
+    coverage_row = coverage or {}
+    available_labels = []
+    if bool(coverage_row.get("market_data_available", False)):
+        available_labels.append("market")
+    if bool(coverage_row.get("fundamentals_available", False)):
+        available_labels.append("fundamentals")
+    if bool(coverage_row.get("earnings_available", False)):
+        available_labels.append("earnings")
+    if not available_labels:
+        return f"{ticker} has no canonical market/fundamentals/earnings coverage currently available."
+    if len(available_labels) == 1:
+        joined = available_labels[0]
+    elif len(available_labels) == 2:
+        joined = f"{available_labels[0]} and {available_labels[1]}"
+    else:
+        joined = f"{available_labels[0]}, {available_labels[1]}, and {available_labels[2]}"
+    return f"{ticker} has canonical {joined} data available."
+
+
+def registry_summary_text(*, ticker: str, registry_row: dict[str, Any] | None) -> str:
+    if registry_row is None:
+        return f"{ticker} is available canonically but is not onboarded in ticker_registry for this scope."
+    status = str(registry_row.get("status") or "unknown")
+    validation = str(registry_row.get("validation_status") or "unknown")
+    promotion = str(registry_row.get("promotion_status") or "unknown")
+    return (
+        f"{ticker} is onboarded in ticker_registry "
+        f"(status={status}, validation={validation}, promotion={promotion})."
+    )
+
+
+def _format_market_completeness_summary(stats: dict[str, Any]) -> str:
+    actual = _to_int(stats.get("actual_rows"))
+    first_date = stats.get("first_available_date")
+    last_date = stats.get("last_available_date")
+    if actual <= 0 or not first_date or not last_date:
+        return "Market price history is not available in canonical tables for the requested scope."
+
+    expected_rows = _to_int(stats.get("expected_rows"))
+    missing_days = _to_int(stats.get("missing_days_count"))
+    completeness = _format_pct(stats.get("completeness_pct"))
+    window = f"from {first_date} to {last_date}"
+    if expected_rows > 0:
+        sentence = (
+            f"Market price history is {completeness} complete {window}, "
+            f"with {missing_days} missing business days."
+        )
+    else:
+        sentence = f"Market price history window is {window}."
+    return f"{sentence} {_completeness_assessment_text(completeness_pct=stats.get('completeness_pct'), missing_count=missing_days)}"
+
+
+def _format_earnings_completeness_summary(stats: dict[str, Any]) -> str:
+    actual = _to_int(stats.get("actual_rows"))
+    first_date = stats.get("first_available_date")
+    last_date = stats.get("last_available_date")
+    if actual <= 0 or not first_date or not last_date:
+        return "Earnings history is not available in canonical tables for the requested scope."
+
+    expected_rows = _to_int(stats.get("expected_rows"))
+    missing_periods = _to_int(stats.get("missing_periods_count"))
+    if expected_rows > 0:
+        if missing_periods == 0:
+            return f"Earnings history is complete: {actual} of {expected_rows} expected periods."
+        return f"Earnings history has {actual} of {expected_rows} expected periods, with {missing_periods} missing periods."
+    return f"Earnings history is present from {first_date} to {last_date}, but expected-period scoring is unavailable."
+
+
+def _format_fundamentals_completeness_summary(stats: dict[str, Any]) -> str:
+    actual = _to_int(stats.get("actual_rows"))
+    first_date = stats.get("first_available_date")
+    last_date = stats.get("last_available_date")
+    if actual <= 0 or not first_date or not last_date:
+        return "Fundamentals are not available in canonical tables for the requested scope."
+    return f"Fundamentals are present from {first_date} to {last_date}, but completeness is not currently scored."
+
+
+def _completeness_assessment_text(*, completeness_pct: Any, missing_count: int) -> str:
+    pct = _to_float(completeness_pct)
+    if missing_count == 0:
+        return "Assessment: acceptable (no missing business days in range)."
+    if pct is None:
+        return "Assessment: needs review (completeness percentage unavailable)."
+    if pct >= 99.0 and missing_count <= 3:
+        return "Assessment: generally acceptable with minor gaps."
+    if pct >= 95.0:
+        return "Assessment: usable but gaps should be reviewed before strict analyses."
+    return "Assessment: not acceptable for strict analyses until gaps are resolved."
+
+
+def _to_int(value: Any) -> int:
+    try:
+        if value is None:
+            return 0
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_pct(value: Any) -> str:
+    parsed = _to_float(value)
+    if parsed is None:
+        return "unknown"
+    return f"{parsed:.2f}%"
 
 
 def _compute_daily_window_stats(*, rows: list[dict[str, Any]], date_keys: tuple[str, ...]) -> dict[str, Any]:

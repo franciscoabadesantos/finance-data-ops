@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from finance_data_ops.analysis.windows import build_data_window_items
+from finance_data_ops.analysis.windows import (
+    build_completeness_summary_lines,
+    build_data_window_items,
+    build_data_window_stats,
+    coverage_summary_text,
+    registry_summary_text,
+)
 
 
 def now_iso() -> str:
@@ -29,37 +35,62 @@ def build_ticker_snapshot_report(
     normalized_region = str(region or "").strip().lower() or "us"
     normalized_exchange = (str(exchange).strip().upper() if exchange else None)
     assets = asset_status_by_key or {}
+    coverage_row = coverage or {}
+    stats_by_domain = build_data_window_stats(
+        market_price_rows=market_price_rows,
+        fundamentals_rows=fundamentals_rows,
+        earnings_rows=earnings_rows,
+    )
+    coverage_summary = coverage_summary_text(ticker=normalized_ticker, coverage=coverage_row)
+    registry_summary = registry_summary_text(ticker=normalized_ticker, registry_row=registry_row)
+    completeness_lines = build_completeness_summary_lines(stats_by_domain=stats_by_domain)
 
     sections: list[dict[str, Any]] = [
         {
+            "title": "Coverage Summary",
+            "items": [
+                {"key": "Summary", "value": coverage_summary},
+            ],
+        },
+        {
+            "title": "Completeness Summary",
+            "items": completeness_lines,
+        },
+        {
+            "title": "Registry / Onboarding Summary",
+            "items": [
+                {"key": "Summary", "value": registry_summary},
+            ],
+        },
+        {
             "title": "Canonical Availability",
             "items": [
-                {"key": "market_data_available", "value": bool((coverage or {}).get("market_data_available", False))},
-                {"key": "fundamentals_available", "value": bool((coverage or {}).get("fundamentals_available", False))},
-                {"key": "earnings_available", "value": bool((coverage or {}).get("earnings_available", False))},
-                {"key": "coverage_status", "value": str((coverage or {}).get("coverage_status") or "unknown")},
-                {"key": "market_price_rows_present", "value": bool(market_price_rows)},
-                {"key": "fundamentals_rows_present", "value": bool(fundamentals_rows)},
-                {"key": "earnings_rows_present", "value": bool(earnings_rows)},
+                {"key": "Market data available", "value": bool(coverage_row.get("market_data_available", False))},
+                {"key": "Fundamentals available", "value": bool(coverage_row.get("fundamentals_available", False))},
+                {"key": "Earnings available", "value": bool(coverage_row.get("earnings_available", False))},
+                {"key": "Coverage status", "value": str(coverage_row.get("coverage_status") or "unknown")},
+                {"key": "Market price history rows present", "value": bool(market_price_rows)},
+                {"key": "Fundamentals rows present", "value": bool(fundamentals_rows)},
+                {"key": "Earnings history rows present", "value": bool(earnings_rows)},
             ],
         },
         {
             "title": "Freshness",
             "items": [
-                {"key": "market_price_daily", "value": str((assets.get("market_price_daily") or {}).get("freshness_status") or "unknown")},
-                {"key": "market_quotes", "value": str((assets.get("market_quotes") or {}).get("freshness_status") or "unknown")},
-                {"key": "fundamentals_daily", "value": str((assets.get("fundamentals_daily") or {}).get("freshness_status") or "unknown")},
-                {"key": "earnings_daily", "value": str((assets.get("earnings_daily") or {}).get("freshness_status") or "unknown")},
+                {"key": "Market price history", "value": str((assets.get("market_price_daily") or {}).get("freshness_status") or "unknown")},
+                {"key": "Market quotes", "value": str((assets.get("market_quotes") or {}).get("freshness_status") or "unknown")},
+                {"key": "Fundamentals", "value": str((assets.get("fundamentals_daily") or {}).get("freshness_status") or "unknown")},
+                {"key": "Earnings history", "value": str((assets.get("earnings_daily") or {}).get("freshness_status") or "unknown")},
             ],
         },
         {
             "title": "Snapshot",
             "items": [
-                {"key": "last_price", "value": (market_snapshot or {}).get("last_price")},
-                {"key": "return_1d_pct", "value": (market_snapshot or {}).get("return_1d_pct")},
-                {"key": "return_1m_pct", "value": (market_snapshot or {}).get("return_1m_pct")},
-                {"key": "return_1y_pct", "value": (market_snapshot or {}).get("return_1y_pct")},
-                {"key": "as_of_date", "value": (market_snapshot or {}).get("as_of_date")},
+                {"key": "Last price", "value": (market_snapshot or {}).get("last_price")},
+                {"key": "Return 1D %", "value": (market_snapshot or {}).get("return_1d_pct")},
+                {"key": "Return 1M %", "value": (market_snapshot or {}).get("return_1m_pct")},
+                {"key": "Return 1Y %", "value": (market_snapshot or {}).get("return_1y_pct")},
+                {"key": "As-of date", "value": (market_snapshot or {}).get("as_of_date")},
             ],
         },
         {
@@ -73,11 +104,11 @@ def build_ticker_snapshot_report(
         {
             "title": "Registry / Onboarding",
             "items": [
-                {"key": "registry_row_present", "value": registry_row is not None},
-                {"key": "registry_key", "value": (registry_row or {}).get("registry_key")},
-                {"key": "registry_status", "value": str((registry_row or {}).get("status") or "unknown")},
-                {"key": "validation_status", "value": str((registry_row or {}).get("validation_status") or "unknown")},
-                {"key": "promotion_status", "value": str((registry_row or {}).get("promotion_status") or "unknown")},
+                {"key": "Registry row present", "value": registry_row is not None},
+                {"key": "Registry key", "value": (registry_row or {}).get("registry_key")},
+                {"key": "Registry status", "value": str((registry_row or {}).get("status") or "unknown")},
+                {"key": "Validation status", "value": str((registry_row or {}).get("validation_status") or "unknown")},
+                {"key": "Promotion status", "value": str((registry_row or {}).get("promotion_status") or "unknown")},
             ],
         },
     ]
@@ -97,13 +128,10 @@ def build_ticker_snapshot_report(
     if not earnings_rows:
         warnings.append("No market_earnings_history rows found for ticker.")
 
-    coverage_status = str((coverage or {}).get("coverage_status") or "unknown")
+    coverage_status = str(coverage_row.get("coverage_status") or "unknown")
     summary = (
-        f"{normalized_ticker} snapshot generated with coverage_status={coverage_status}; "
-        f"market_data_available={bool((coverage or {}).get('market_data_available', False))}, "
-        f"fundamentals_available={bool((coverage or {}).get('fundamentals_available', False))}, "
-        f"earnings_available={bool((coverage or {}).get('earnings_available', False))}; "
-        f"registry_row_present={registry_row is not None}."
+        f"{coverage_summary} {completeness_lines[0]['value']} {registry_summary} "
+        f"(coverage_status={coverage_status})."
     )
 
     return {

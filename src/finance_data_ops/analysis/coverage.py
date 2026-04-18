@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from finance_data_ops.analysis.windows import build_data_window_items
+from finance_data_ops.analysis.windows import (
+    build_completeness_summary_lines,
+    build_data_window_items,
+    build_data_window_stats,
+    coverage_summary_text,
+    registry_summary_text,
+)
 
 
 def now_iso() -> str:
@@ -30,31 +36,51 @@ def build_coverage_report(
     assets = asset_status_by_key or {}
     coverage_row = coverage or {}
     registry = registry_row or {}
+    stats_by_domain = build_data_window_stats(
+        market_price_rows=market_price_rows,
+        fundamentals_rows=fundamentals_rows,
+        earnings_rows=earnings_rows,
+    )
+    coverage_summary = coverage_summary_text(ticker=normalized_ticker, coverage=coverage_row)
+    registry_summary = registry_summary_text(ticker=normalized_ticker, registry_row=registry_row)
+    completeness_lines = build_completeness_summary_lines(stats_by_domain=stats_by_domain)
 
     sections: list[dict[str, Any]] = [
         {
+            "title": "Coverage Summary",
+            "items": [{"key": "Summary", "value": coverage_summary}],
+        },
+        {
+            "title": "Completeness Summary",
+            "items": completeness_lines,
+        },
+        {
+            "title": "Registry / Onboarding Summary",
+            "items": [{"key": "Summary", "value": registry_summary}],
+        },
+        {
             "title": "Domain Coverage",
             "items": [
-                {"key": "coverage_status", "value": str(coverage_row.get("coverage_status") or "unknown")},
-                {"key": "market_data_available", "value": bool(coverage_row.get("market_data_available", False))},
-                {"key": "fundamentals_available", "value": bool(coverage_row.get("fundamentals_available", False))},
-                {"key": "earnings_available", "value": bool(coverage_row.get("earnings_available", False))},
-                {"key": "coverage_ratio", "value": coverage_row.get("coverage_ratio")},
-                {"key": "canonical_market_price_rows_present", "value": bool(market_price_rows)},
-                {"key": "canonical_fundamentals_rows_present", "value": bool(fundamentals_rows)},
-                {"key": "canonical_earnings_rows_present", "value": bool(earnings_rows)},
+                {"key": "Coverage status", "value": str(coverage_row.get("coverage_status") or "unknown")},
+                {"key": "Market data available", "value": bool(coverage_row.get("market_data_available", False))},
+                {"key": "Fundamentals available", "value": bool(coverage_row.get("fundamentals_available", False))},
+                {"key": "Earnings available", "value": bool(coverage_row.get("earnings_available", False))},
+                {"key": "Coverage ratio", "value": coverage_row.get("coverage_ratio")},
+                {"key": "Canonical market price rows present", "value": bool(market_price_rows)},
+                {"key": "Canonical fundamentals rows present", "value": bool(fundamentals_rows)},
+                {"key": "Canonical earnings rows present", "value": bool(earnings_rows)},
             ],
         },
         {
             "title": "Asset Freshness",
             "items": [
-                {"key": "market_price_daily", "value": str((assets.get("market_price_daily") or {}).get("freshness_status") or "unknown")},
-                {"key": "market_quotes", "value": str((assets.get("market_quotes") or {}).get("freshness_status") or "unknown")},
-                {"key": "fundamentals_daily", "value": str((assets.get("fundamentals_daily") or {}).get("freshness_status") or "unknown")},
-                {"key": "earnings_daily", "value": str((assets.get("earnings_daily") or {}).get("freshness_status") or "unknown")},
-                {"key": "macro_observations", "value": str((assets.get("macro_observations") or {}).get("freshness_status") or "unknown")},
+                {"key": "Market price history", "value": str((assets.get("market_price_daily") or {}).get("freshness_status") or "unknown")},
+                {"key": "Market quotes", "value": str((assets.get("market_quotes") or {}).get("freshness_status") or "unknown")},
+                {"key": "Fundamentals", "value": str((assets.get("fundamentals_daily") or {}).get("freshness_status") or "unknown")},
+                {"key": "Earnings history", "value": str((assets.get("earnings_daily") or {}).get("freshness_status") or "unknown")},
+                {"key": "Macro observations", "value": str((assets.get("macro_observations") or {}).get("freshness_status") or "unknown")},
                 {
-                    "key": "economic_release_calendar",
+                    "key": "Economic release calendar",
                     "value": str((assets.get("economic_release_calendar") or {}).get("freshness_status") or "unknown"),
                 },
             ],
@@ -70,12 +96,12 @@ def build_coverage_report(
         {
             "title": "Registry / Onboarding",
             "items": [
-                {"key": "registry_row_present", "value": registry_row is not None},
-                {"key": "registry_key", "value": registry.get("registry_key")},
-                {"key": "registry_status", "value": str(registry.get("status") or "unknown")},
-                {"key": "validation_status", "value": str(registry.get("validation_status") or "unknown")},
-                {"key": "promotion_status", "value": str(registry.get("promotion_status") or "unknown")},
-                {"key": "validation_reason", "value": registry.get("validation_reason")},
+                {"key": "Registry row present", "value": registry_row is not None},
+                {"key": "Registry key", "value": registry.get("registry_key")},
+                {"key": "Registry status", "value": str(registry.get("status") or "unknown")},
+                {"key": "Validation status", "value": str(registry.get("validation_status") or "unknown")},
+                {"key": "Promotion status", "value": str(registry.get("promotion_status") or "unknown")},
+                {"key": "Validation reason", "value": registry.get("validation_reason")},
             ],
         },
     ]
@@ -104,11 +130,8 @@ def build_coverage_report(
 
     coverage_status = str(coverage_row.get("coverage_status") or "unknown")
     summary = (
-        f"{normalized_ticker} coverage report generated with coverage_status={coverage_status}; "
-        f"market_data_available={bool(coverage_row.get('market_data_available', False))}, "
-        f"fundamentals_available={bool(coverage_row.get('fundamentals_available', False))}, "
-        f"earnings_available={bool(coverage_row.get('earnings_available', False))}; "
-        f"registry_row_present={registry_row is not None}."
+        f"{coverage_summary} {completeness_lines[0]['value']} {registry_summary} "
+        f"(coverage_status={coverage_status})."
     )
 
     return {

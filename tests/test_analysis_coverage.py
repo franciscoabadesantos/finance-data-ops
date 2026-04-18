@@ -47,6 +47,17 @@ def test_build_coverage_report_contract_shape() -> None:
     assert payload["summary"]
     assert isinstance(payload["sections"], list)
     assert isinstance(payload["warnings"], list)
+    assert payload["sections"][0]["title"] == "Coverage Summary"
+    assert payload["sections"][1]["title"] == "Completeness Summary"
+    assert payload["sections"][2]["title"] == "Registry / Onboarding Summary"
+    assert payload["sections"][0]["items"][0]["value"] == "AAPL has canonical market and fundamentals data available."
+    completeness_items = payload["sections"][1]["items"]
+    market_line = next(item["value"] for item in completeness_items if item["key"] == "Market price history")
+    assert "with 0 missing business days." in market_line
+    earnings_line = next(item["value"] for item in completeness_items if item["key"] == "Earnings history")
+    assert "complete: 1 of 1 expected periods" in earnings_line
+    onboarding_line = payload["sections"][2]["items"][0]["value"]
+    assert onboarding_line.startswith("AAPL is onboarded in ticker_registry")
     assert payload["metadata"] == {
         "ticker": "AAPL",
         "region": "us",
@@ -56,6 +67,10 @@ def test_build_coverage_report_contract_shape() -> None:
     }
     assert any(section.get("title") == "Domain Coverage" for section in payload["sections"])
     assert any(section.get("title") == "Data Window / Completeness" for section in payload["sections"])
+    detail_keys = [item["key"] for section in payload["sections"] if section["title"] == "Data Window / Completeness" for item in section["items"]]
+    assert any(key.startswith("Market price history.") for key in detail_keys)
+    assert any(key.startswith("Fundamentals.") for key in detail_keys)
+    assert any(key.startswith("Earnings history.") for key in detail_keys)
     assert any("Freshness alerts" in warning for warning in payload["warnings"])
 
 
@@ -75,4 +90,7 @@ def test_build_coverage_report_missing_inputs_emit_warnings() -> None:
     assert (
         "No ticker_registry onboarding row found for requested scope; canonical data availability is assessed independently."
         in warnings
+    )
+    assert payload["sections"][2]["items"][0]["value"].endswith(
+        "not onboarded in ticker_registry for this scope."
     )
