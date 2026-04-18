@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from finance_data_ops.providers.symbols import normalize_symbol_for_provider
+
 
 DAILY_PRICE_COLUMNS = [
     "symbol",
@@ -72,20 +74,25 @@ class MarketDataProvider:
             symbol = str(raw_symbol).strip().upper()
             if not symbol:
                 continue
-            raw = self._download_fn(
-                symbol,
-                start=start_ts.date().isoformat(),
-                end=(end_ts + pd.Timedelta(days=1)).date().isoformat(),
-                interval="1d",
-                auto_adjust=False,
-                progress=False,
-                threads=False,
-            )
-            if raw is None or raw.empty:
-                continue
-            normalized_frames.append(
-                self._normalize_daily_prices(raw=raw, symbol=symbol, ingested_at=ingested_at)
-            )
+            for provider_symbol in _provider_symbol_candidates(symbol):
+                try:
+                    raw = self._download_fn(
+                        provider_symbol,
+                        start=start_ts.date().isoformat(),
+                        end=(end_ts + pd.Timedelta(days=1)).date().isoformat(),
+                        interval="1d",
+                        auto_adjust=False,
+                        progress=False,
+                        threads=False,
+                    )
+                except Exception:
+                    continue
+                if raw is None or raw.empty:
+                    continue
+                normalized_frames.append(
+                    self._normalize_daily_prices(raw=raw, symbol=symbol, ingested_at=ingested_at)
+                )
+                break
 
         if not normalized_frames:
             return pd.DataFrame(columns=DAILY_PRICE_COLUMNS)
@@ -100,10 +107,15 @@ class MarketDataProvider:
             symbol = str(raw_symbol).strip().upper()
             if not symbol:
                 continue
-            payload = self._quote_fn(symbol)
-            if payload is None:
-                continue
-            rows.append(self._normalize_quote(payload=payload, symbol=symbol, ingested_at=ingested_at))
+            for provider_symbol in _provider_symbol_candidates(symbol):
+                try:
+                    payload = self._quote_fn(provider_symbol)
+                except Exception:
+                    continue
+                if payload is None:
+                    continue
+                rows.append(self._normalize_quote(payload=payload, symbol=symbol, ingested_at=ingested_at))
+                break
         if not rows:
             return pd.DataFrame(columns=LATEST_QUOTE_COLUMNS)
         out = pd.DataFrame(rows, columns=LATEST_QUOTE_COLUMNS)
@@ -127,18 +139,69 @@ class MarketDataProvider:
             raise RuntimeError("yfinance is required for live provider calls.") from exc
 
         ticker = yf.Ticker(symbol)
-        fast = dict(getattr(ticker, "fast_info", {}) or {})
+        fast = _safe_fast_info_payload(ticker)
+        info = _safe_info_payload(ticker)
+        history = _safe_quote_history(ticker)
+
+        latest_row: pd.Series | None = history.iloc[-1] if not history.empty else None
+        previous_row: pd.Series | None = history.iloc[-2] if len(history.index) >= 2 else None
+
         quote_time = fast.get("lastTradeTime") or fast.get("last_trade_time")
         parsed_quote_ts = pd.to_datetime(quote_time, utc=True, errors="coerce")
+        if pd.isna(parsed_quote_ts) and latest_row is not None:
+            parsed_quote_ts = pd.to_datetime(latest_row.name, utc=True, errors="coerce")
         if pd.isna(parsed_quote_ts):
             parsed_quote_ts = pd.Timestamp.utcnow()
+
+        history_close = _coerce_float(latest_row.get("Close")) if latest_row is not None else None
+        previous_history_close = (
+            _coerce_float(previous_row.get("Close")) if previous_row is not None else None
+        )
+
         return {
-            "price": fast.get("lastPrice") or fast.get("last_price"),
-            "previous_close": fast.get("previousClose") or fast.get("previous_close"),
-            "open": fast.get("open"),
-            "high": fast.get("dayHigh") or fast.get("day_high"),
-            "low": fast.get("dayLow") or fast.get("day_low"),
-            "volume": fast.get("lastVolume") or fast.get("last_volume") or fast.get("volume"),
+            "price": _first_float(
+                fast.get("lastPrice"),
+                fast.get("last_price"),
+                fast.get("regularMarketPrice"),
+                history_close,
+                info.get("currentPrice"),
+                info.get("regularMarketPrice"),
+            ),
+            "previous_close": _first_float(
+                fast.get("previousClose"),
+                fast.get("previous_close"),
+                previous_history_close,
+                info.get("previousClose"),
+                info.get("regularMarketPreviousClose"),
+            ),
+            "open": _first_float(
+                fast.get("open"),
+                _coerce_float(latest_row.get("Open")) if latest_row is not None else None,
+                info.get("open"),
+                info.get("regularMarketOpen"),
+            ),
+            "high": _first_float(
+                fast.get("dayHigh"),
+                fast.get("day_high"),
+                _coerce_float(latest_row.get("High")) if latest_row is not None else None,
+                info.get("dayHigh"),
+                info.get("regularMarketDayHigh"),
+            ),
+            "low": _first_float(
+                fast.get("dayLow"),
+                fast.get("day_low"),
+                _coerce_float(latest_row.get("Low")) if latest_row is not None else None,
+                info.get("dayLow"),
+                info.get("regularMarketDayLow"),
+            ),
+            "volume": _first_float(
+                fast.get("lastVolume"),
+                fast.get("last_volume"),
+                fast.get("volume"),
+                _coerce_float(latest_row.get("Volume")) if latest_row is not None else None,
+                info.get("volume"),
+                info.get("regularMarketVolume"),
+            ),
             "quote_ts": parsed_quote_ts,
         }
 
@@ -229,6 +292,14 @@ def _coerce_float(value: Any) -> float | None:
     return float(casted)
 
 
+def _first_float(*values: Any) -> float | None:
+    for raw in values:
+        casted = _coerce_float(raw)
+        if casted is not None:
+            return casted
+    return None
+
+
 def _normalize_column_name(column: Any) -> str:
     if isinstance(column, tuple):
         parts = [str(part).strip() for part in column if str(part).strip()]
@@ -239,3 +310,48 @@ def _normalize_column_name(column: Any) -> str:
     else:
         raw = str(column).strip()
     return raw.lower().replace(" ", "_")
+
+
+def _provider_symbol_candidates(symbol: str) -> list[str]:
+    candidates = normalize_symbol_for_provider(symbol, region=None, exchange=None)
+    if symbol not in candidates:
+        candidates.append(symbol)
+    return candidates
+
+
+def _safe_fast_info_payload(ticker: Any) -> dict[str, Any]:
+    try:
+        payload = getattr(ticker, "fast_info", {})
+    except Exception:
+        return {}
+    try:
+        return dict(payload or {})
+    except Exception:
+        return {}
+
+
+def _safe_info_payload(ticker: Any) -> dict[str, Any]:
+    try:
+        payload = getattr(ticker, "info", {})
+    except Exception:
+        return {}
+    try:
+        return dict(payload or {})
+    except Exception:
+        return {}
+
+
+def _safe_quote_history(ticker: Any) -> pd.DataFrame:
+    history_payload: Any
+    try:
+        history_payload = ticker.history(period="5d", interval="1d", auto_adjust=False, actions=False)
+    except TypeError:
+        try:
+            history_payload = ticker.history(period="5d", interval="1d", auto_adjust=False)
+        except Exception:
+            return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+    if isinstance(history_payload, pd.DataFrame):
+        return history_payload
+    return pd.DataFrame(history_payload)
