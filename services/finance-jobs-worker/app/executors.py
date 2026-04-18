@@ -6,6 +6,7 @@ from typing import Any
 from flows.dataops_earnings_daily import run_dataops_earnings_daily
 from flows.dataops_fundamentals_daily import run_dataops_fundamentals_daily
 from flows.dataops_market_daily import run_dataops_market_daily
+from finance_data_ops.analysis.snapshots import build_ticker_snapshot_report
 from finance_data_ops.validation.ticker_validation import run_single_ticker_validation
 
 from app.config import WorkerSettings
@@ -52,19 +53,32 @@ class JobExecutor:
         try:
             if request.job_type == "ticker_validation":
                 result = self._execute_validation(request, job_id=job_id, idempotency_key=idem_key)
-            else:
+            elif request.job_type == "ticker_backfill":
                 result = self._execute_backfill(request, job_id=job_id, idempotency_key=idem_key)
+            else:
+                result = self._execute_analysis(request, worker_job_id=job_id)
         except Exception as exc:
-            self._set_job_state(
-                registry_key=request.registry_key,
-                stage=("validation" if request.job_type == "ticker_validation" else "backfill"),
-                state="FAILED",
-                job_id=job_id,
-                idempotency_key=idem_key,
-                error=str(exc),
-            )
             if request.job_type == "ticker_validation":
-                self.registry.reject(request.registry_key, f"validation_job_failed:{exc}")
+                self._set_job_state(
+                    registry_key=request.registry_key or "",
+                    stage="validation",
+                    state="FAILED",
+                    job_id=job_id,
+                    idempotency_key=idem_key,
+                    error=str(exc),
+                )
+                self.registry.reject(request.registry_key or "", f"validation_job_failed:{exc}")
+            elif request.job_type == "ticker_backfill":
+                self._set_job_state(
+                    registry_key=request.registry_key or "",
+                    stage="backfill",
+                    state="FAILED",
+                    job_id=job_id,
+                    idempotency_key=idem_key,
+                    error=str(exc),
+                )
+            else:
+                self._set_analysis_job_failed(request=request, worker_job_id=job_id, error=str(exc))
             self._record_run(
                 job_id=job_id,
                 request=request,
@@ -93,14 +107,14 @@ class JobExecutor:
         return result
 
     def _execute_validation(self, request: ExecuteJobRequest, *, job_id: str, idempotency_key: str) -> dict[str, Any]:
-        row = self.registry.get_by_key(request.registry_key)
+        row = self.registry.get_by_key(request.registry_key or "")
         if row is None:
-            raise RuntimeError(f"ticker_registry row not found for {request.registry_key}")
+            raise RuntimeError(f"ticker_registry row not found for {request.registry_key or ''}")
         if str(row.get("status") or "").strip().lower() == "rejected":
             return {"status": "ignored", "reason": "already_rejected"}
 
         self._set_job_state(
-            registry_key=request.registry_key,
+            registry_key=request.registry_key or "",
             stage="validation",
             state="RUNNING",
             job_id=job_id,
@@ -123,7 +137,7 @@ class JobExecutor:
         notes["data_ops_validation_notes"] = str(registry_row.get("notes") or "")
 
         patched = self.registry.patch_row(
-            request.registry_key,
+            request.registry_key or "",
             {
                 "normalized_symbol": registry_row.get("normalized_symbol"),
                 "instrument_type": registry_row.get("instrument_type"),
@@ -139,7 +153,7 @@ class JobExecutor:
             },
         )
         self._set_job_state(
-            registry_key=request.registry_key,
+            registry_key=request.registry_key or "",
             stage="validation",
             state="COMPLETED",
             job_id=job_id,
@@ -168,17 +182,17 @@ class JobExecutor:
             "start": request.start,
             "end": request.end,
             "requested_at": now_iso(),
-            "idempotency_key": f"backfill:{request.registry_key}",
+            "idempotency_key": f"backfill:{request.registry_key or ''}",
         }
-        enqueue = self.tasks.enqueue_backfill(backfill_payload, idempotency_key=f"backfill:{request.registry_key}")
-        refreshed = self.registry.get_by_key(request.registry_key)
+        enqueue = self.tasks.enqueue_backfill(backfill_payload, idempotency_key=f"backfill:{request.registry_key or ''}")
+        refreshed = self.registry.get_by_key(request.registry_key or "")
         if refreshed is not None:
             refreshed_notes = parse_notes(refreshed.get("notes"))
             refreshed_notes["backfill_job_id"] = enqueue.job_id
             refreshed_notes["backfill_flow_run_id"] = enqueue.job_id
             refreshed_notes["backfill_job_state"] = enqueue.state
-            refreshed_notes["backfill_idempotency_key"] = f"backfill:{request.registry_key}"
-            self.registry.patch_row(request.registry_key, {"notes": refreshed_notes})
+            refreshed_notes["backfill_idempotency_key"] = f"backfill:{request.registry_key or ''}"
+            self.registry.patch_row(request.registry_key or "", {"notes": refreshed_notes})
 
         return {
             "status": "completed",
@@ -188,9 +202,9 @@ class JobExecutor:
         }
 
     def _execute_backfill(self, request: ExecuteJobRequest, *, job_id: str, idempotency_key: str) -> dict[str, Any]:
-        row = self.registry.get_by_key(request.registry_key)
+        row = self.registry.get_by_key(request.registry_key or "")
         if row is None:
-            raise RuntimeError(f"ticker_registry row not found for {request.registry_key}")
+            raise RuntimeError(f"ticker_registry row not found for {request.registry_key or ''}")
         if str(row.get("status") or "").strip().lower() == "rejected":
             return {"status": "ignored", "reason": "already_rejected"}
 
@@ -199,7 +213,7 @@ class JobExecutor:
             raise RuntimeError("Backfill ticker is missing.")
 
         self._set_job_state(
-            registry_key=request.registry_key,
+            registry_key=request.registry_key or "",
             stage="backfill",
             state="RUNNING",
             job_id=job_id,
@@ -241,7 +255,7 @@ class JobExecutor:
             "history_limit": history_limit,
         }
         patched = self.registry.patch_row(
-            request.registry_key,
+            request.registry_key or "",
             {
                 "status": "active",
                 "promotion_status": str(current.get("promotion_status") or "validated_full"),
@@ -249,10 +263,10 @@ class JobExecutor:
             },
         )
         if str(patched.get("promotion_status") or "").strip().lower() not in PROMOTABLE:
-            self.registry.patch_row(request.registry_key, {"promotion_status": "validated_full"})
+            self.registry.patch_row(request.registry_key or "", {"promotion_status": "validated_full"})
 
         self._set_job_state(
-            registry_key=request.registry_key,
+            registry_key=request.registry_key or "",
             stage="backfill",
             state="COMPLETED",
             job_id=job_id,
@@ -267,6 +281,76 @@ class JobExecutor:
                 "fundamentals": fundamentals.get("run_id") if isinstance(fundamentals, dict) else None,
             },
         }
+
+    def _execute_analysis(self, request: ExecuteJobRequest, *, worker_job_id: str) -> dict[str, Any]:
+        analysis_job_id = str(request.job_id or "").strip()
+        if not analysis_job_id:
+            raise RuntimeError("analysis job_id is required")
+        row = self.registry.get_analysis_job(analysis_job_id)
+        if row is None:
+            raise RuntimeError(f"analysis_jobs row not found for {analysis_job_id}")
+
+        self.registry.patch_analysis_job(
+            analysis_job_id,
+            {
+                "status": "running",
+                "started_at": now_iso(),
+                "finished_at": None,
+                "error_message": None,
+                "worker_job_id": worker_job_id,
+            },
+        )
+        result_json = build_ticker_snapshot_report(
+            ticker=request.ticker,
+            region=request.region,
+            exchange=request.exchange,
+            analysis_type=request.analysis_type or "ticker_snapshot",
+            market_snapshot=self.registry.fetch_market_snapshot(str(request.ticker).strip().upper()),
+            coverage=self.registry.fetch_symbol_coverage(str(request.ticker).strip().upper()),
+            asset_status_by_key=self.registry.fetch_data_asset_status(),
+            registry_row=self.registry.resolve_registry_row(
+                ticker=request.ticker,
+                region=str(request.region or "us").strip().lower() or "us",
+                exchange=request.exchange,
+            ),
+        )
+        self.registry.upsert_analysis_result(
+            job_id=analysis_job_id,
+            analysis_type=request.analysis_type or "ticker_snapshot",
+            result_json=result_json,
+            summary_text=str(result_json.get("summary") or ""),
+        )
+        self.registry.patch_analysis_job(
+            analysis_job_id,
+            {
+                "status": "completed",
+                "finished_at": now_iso(),
+                "error_message": None,
+                "worker_job_id": worker_job_id,
+                "result_ref": analysis_job_id,
+            },
+        )
+        return {
+            "status": "completed",
+            "job_id": analysis_job_id,
+            "analysis_type": request.analysis_type or "ticker_snapshot",
+        }
+
+    def _set_analysis_job_failed(self, *, request: ExecuteJobRequest, worker_job_id: str, error: str) -> None:
+        analysis_job_id = str(request.job_id or "").strip()
+        if not analysis_job_id:
+            return
+        if self.registry.get_analysis_job(analysis_job_id) is None:
+            return
+        self.registry.patch_analysis_job(
+            analysis_job_id,
+            {
+                "status": "failed",
+                "finished_at": now_iso(),
+                "error_message": str(error),
+                "worker_job_id": worker_job_id,
+            },
+        )
 
     def _set_job_state(
         self,
@@ -305,6 +389,8 @@ class JobExecutor:
         task_name: str | None = None,
         error_message: str | None = None,
     ) -> None:
+        if request.job_type not in {"ticker_validation", "ticker_backfill"}:
+            return
         metadata = {"task_name": task_name}
         self.registry.record_async_job_run(
             job_id=job_id,
@@ -334,4 +420,3 @@ def _subtract_years(value: date, *, years: int) -> date:
         return value.replace(year=value.year - int(years))
     except ValueError:
         return value.replace(month=2, day=28, year=value.year - int(years))
-
