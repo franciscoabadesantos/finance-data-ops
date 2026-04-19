@@ -8,6 +8,8 @@ job payloads delivered by Cloud Tasks and calls `finance-data-ops` logic for:
 - ticker validation
 - ticker backfill
 - analyst snapshot job execution (`analysis_job`)
+- admin data-ops rebuild jobs (`analysis_job` with `analysis_type=data_ops_rebuild`)
+- admin series upsert jobs (`analysis_job` with `analysis_type=data_ops_series_upsert`)
 
 ## Endpoints
 

@@ -21,6 +21,7 @@ if str(SRC_PATH) not in sys.path:
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.ops.incidents import classify_failure
 from finance_data_ops.providers.macro import DEFAULT_REQUIRED_SERIES_KEYS, MacroDataProvider
+from finance_data_ops.providers.macro import MacroSeriesSpec
 from finance_data_ops.publish.client import Publisher, RecordingPublisher, SupabaseRestPublisher
 from finance_data_ops.publish.macro import publish_macro_surfaces
 from finance_data_ops.publish.status import publish_status_surfaces
@@ -44,6 +45,7 @@ def run_dataops_macro_daily(
     max_attempts: int = 3,
     raise_on_failed_hard: bool = True,
     force_recompute: bool = False,
+    series_catalog: tuple[MacroSeriesSpec, ...] | None = None,
 ) -> dict[str, Any]:
     flow_started_at = datetime.now(UTC)
     flow_run_id = f"run_dataops_macro_daily_{uuid4().hex[:12]}"
@@ -71,6 +73,7 @@ def run_dataops_macro_daily(
         provider=provider_impl,
         cache_root=str(settings.cache_root),
         release_calendar_frame=(release_calendar if not release_calendar.empty else None),
+        series_catalog=series_catalog,
         max_attempts=max_attempts,
         force_recompute=bool(force_recompute),
     )
@@ -107,6 +110,12 @@ def run_dataops_macro_daily(
     publish_failures: list[dict[str, Any]] = []
     publish_results: dict[str, Any] = {}
 
+    required_series_keys = (
+        tuple(spec.key for spec in tuple(series_catalog or ()) if bool(spec.required_by_default))
+        if series_catalog is not None
+        else DEFAULT_REQUIRED_SERIES_KEYS
+    )
+
     if publish_enabled or isinstance(publisher_impl, RecordingPublisher):
         macro_result = _execute_publish_step(
             "macro",
@@ -115,7 +124,7 @@ def run_dataops_macro_daily(
                 series_catalog=catalog_frame,
                 macro_observations=observations_frame,
                 macro_daily=daily_frame,
-                required_series_keys=DEFAULT_REQUIRED_SERIES_KEYS,
+                required_series_keys=required_series_keys,
             ),
             failures=publish_failures,
         )

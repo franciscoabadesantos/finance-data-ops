@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
 JobType = Literal["ticker_validation", "ticker_backfill", "analysis_job"]
-AnalysisType = Literal["ticker_snapshot", "coverage_report"]
+AnalysisType = Literal[
+    "ticker_snapshot",
+    "coverage_report",
+    "data_ops_rebuild",
+    "data_ops_series_upsert",
+]
 
 
 class ExecuteJobRequest(BaseModel):
@@ -15,6 +20,7 @@ class ExecuteJobRequest(BaseModel):
     registry_key: str | None = Field(default=None, min_length=3)
     job_id: str | None = Field(default=None, min_length=3)
     analysis_type: AnalysisType | None = None
+    job_params: dict[str, Any] | None = None
     ticker: str = Field(..., min_length=1)
     region: str | None = Field(default="us")
     exchange: str | None = None
@@ -58,8 +64,15 @@ class ExecuteJobRequest(BaseModel):
         if self.job_type == "analysis_job":
             if not self.job_id or not str(self.job_id).strip():
                 raise ValueError("job_id is required for analysis jobs")
-            if self.analysis_type not in {"ticker_snapshot", "coverage_report"}:
-                raise ValueError("analysis_type must be ticker_snapshot or coverage_report")
+            if self.analysis_type not in {
+                "ticker_snapshot",
+                "coverage_report",
+                "data_ops_rebuild",
+                "data_ops_series_upsert",
+            }:
+                raise ValueError(
+                    "analysis_type must be one of: ticker_snapshot, coverage_report, data_ops_rebuild, data_ops_series_upsert"
+                )
         return self
 
     def resolved_idempotency_key(self) -> str:
