@@ -35,6 +35,7 @@ from flows.dataops_release_calendar_daily import run_dataops_release_calendar_da
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.publish.client import SupabaseRestPublisher
 from finance_data_ops.publish.ticker_registry import publish_ticker_registry
+from finance_data_ops.refresh.gap_repair import resolve_gap_aware_window, resolve_watermark_execution
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.settings import DataOpsSettings, load_settings
 from finance_data_ops.validation.ticker_registry import (
@@ -110,6 +111,14 @@ def _resolve_ticker_backfill_window(
     if start_date > end_date:
         raise ValueError(f"Invalid window: start ({start_date.isoformat()}) is after end ({end_date.isoformat()}).")
     return start_date.isoformat(), end_date.isoformat()
+
+
+def _quarters_between(start_date: str, end_date: str) -> int:
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
+    start_period = start_ts.to_period("Q")
+    end_period = end_ts.to_period("Q")
+    return int(max((end_period - start_period).n, 0))
 
 
 def _normalize_ticker(raw: str) -> str:
@@ -232,23 +241,37 @@ def dataops_market_daily_flow(
             "No symbols configured. Pass `symbols` or set DATA_OPS_SYMBOLS / DATA_OPS_SYMBOLS_<REGION>."
         )
 
-    resolved_start, resolved_end = _resolve_market_window(
-        start=start,
-        end=end,
-        lookback_days=lookback_days,
-        settings=settings,
+    execution_plan = resolve_gap_aware_window(
+        domain="market",
+        table_name="market_price_daily",
+        date_column="date",
+        cadence="business",
+        lookback_days=int(lookback_days if lookback_days is not None else settings.default_lookback_days),
+        explicit_start=start,
+        explicit_end=end,
+        safety_overlap_days=2,
+        cache_root=settings.cache_root,
+        supabase_url=settings.supabase_url,
+        service_role_key=settings.supabase_service_role_key,
     )
+    resolved_start, resolved_end = execution_plan.start_date, execution_plan.end_date
 
     logger = get_run_logger()
     logger.info(
-        "Running market flow (region=%s, symbols=%s, start=%s, end=%s).",
+        (
+            "Running market flow (region=%s, symbols=%s, start=%s, end=%s, mode=%s, "
+            "latest_complete=%s, gap_exists=%s)."
+        ),
         str(region or "default"),
         len(resolved_symbols),
         resolved_start,
         resolved_end,
+        execution_plan.mode,
+        execution_plan.latest_complete_canonical_date,
+        execution_plan.gap_exists,
     )
 
-    return run_dataops_market_daily(
+    summary = run_dataops_market_daily(
         symbols=resolved_symbols,
         start=resolved_start,
         end=resolved_end,
@@ -258,6 +281,8 @@ def dataops_market_daily_flow(
         raise_on_failed_hard=not bool(allow_unhealthy),
         symbol_batch_size=symbol_batch_size,
     )
+    summary["execution"] = execution_plan.as_dict()
+    return summary
 
 
 @flow(
@@ -283,15 +308,36 @@ def dataops_fundamentals_daily_flow(
         )
 
     logger = get_run_logger()
-    logger.info("Running fundamentals flow (region=%s, symbols=%s).", str(region or "default"), len(resolved_symbols))
+    execution_plan = resolve_watermark_execution(
+        domain="fundamentals",
+        table_name="market_fundamentals_v2",
+        date_column="period_end",
+        lookback_days=3650,
+        grace_days=180,
+        safety_overlap_days=14,
+        explicit_end=None,
+        cache_root=settings.cache_root,
+        supabase_url=settings.supabase_url,
+        service_role_key=settings.supabase_service_role_key,
+    )
+    logger.info(
+        "Running fundamentals flow (region=%s, symbols=%s, mode=%s, latest_complete=%s, gap_exists=%s).",
+        str(region or "default"),
+        len(resolved_symbols),
+        execution_plan.mode,
+        execution_plan.latest_complete_canonical_date,
+        execution_plan.gap_exists,
+    )
 
-    return run_dataops_fundamentals_daily(
+    summary = run_dataops_fundamentals_daily(
         symbols=resolved_symbols,
         cache_root=cache_root,
         publish_enabled=bool(publish_enabled),
         max_attempts=int(max_attempts or settings.default_max_attempts),
         raise_on_failed_hard=not bool(allow_unhealthy),
     )
+    summary["execution"] = execution_plan.as_dict()
+    return summary
 
 
 @flow(
@@ -317,22 +363,51 @@ def dataops_earnings_daily_flow(
             "No symbols configured. Pass `symbols` or set DATA_OPS_SYMBOLS / DATA_OPS_SYMBOLS_<REGION>."
         )
 
+    execution_plan = resolve_watermark_execution(
+        domain="earnings",
+        table_name="market_earnings_history",
+        date_column="earnings_date",
+        lookback_days=3650,
+        grace_days=180,
+        safety_overlap_days=14,
+        explicit_end=None,
+        cache_root=settings.cache_root,
+        supabase_url=settings.supabase_url,
+        service_role_key=settings.supabase_service_role_key,
+    )
+    resolved_history_limit = int(history_limit)
+    if execution_plan.gap_exists and execution_plan.earliest_missing_date:
+        quarters_back = _quarters_between(
+            execution_plan.earliest_missing_date,
+            execution_plan.expected_end_date,
+        )
+        resolved_history_limit = max(resolved_history_limit, quarters_back + 2)
+
     logger = get_run_logger()
     logger.info(
-        "Running earnings flow (region=%s, symbols=%s, history_limit=%s).",
+        (
+            "Running earnings flow (region=%s, symbols=%s, history_limit=%s, mode=%s, "
+            "latest_complete=%s, gap_exists=%s)."
+        ),
         str(region or "default"),
         len(resolved_symbols),
-        int(history_limit),
+        int(resolved_history_limit),
+        execution_plan.mode,
+        execution_plan.latest_complete_canonical_date,
+        execution_plan.gap_exists,
     )
 
-    return run_dataops_earnings_daily(
+    summary = run_dataops_earnings_daily(
         symbols=resolved_symbols,
         cache_root=cache_root,
         publish_enabled=bool(publish_enabled),
         max_attempts=int(max_attempts or settings.default_max_attempts),
-        history_limit=int(history_limit),
+        history_limit=int(resolved_history_limit),
         raise_on_failed_hard=not bool(allow_unhealthy),
     )
+    summary["execution"] = execution_plan.as_dict()
+    summary["execution"]["resolved_history_limit"] = int(resolved_history_limit)
+    return summary
 
 
 @flow(
@@ -353,22 +428,36 @@ def dataops_macro_daily_flow(
     force_recompute: bool = False,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
-    resolved_start, resolved_end = _resolve_date_window(
-        start=start,
-        end=end,
-        lookback_days=lookback_days,
-        default_lookback_days=settings.default_lookback_days,
+    execution_plan = resolve_gap_aware_window(
+        domain="macro",
+        table_name="macro_daily",
+        date_column="as_of_date",
+        cadence="business",
+        lookback_days=int(lookback_days if lookback_days is not None else settings.default_lookback_days),
+        explicit_start=start,
+        explicit_end=end,
+        safety_overlap_days=2,
+        cache_root=settings.cache_root,
+        supabase_url=settings.supabase_url,
+        service_role_key=settings.supabase_service_role_key,
     )
+    resolved_start, resolved_end = execution_plan.start_date, execution_plan.end_date
 
     logger = get_run_logger()
     logger.info(
-        "Running macro flow (start=%s, end=%s, force_recompute=%s).",
+        (
+            "Running macro flow (start=%s, end=%s, force_recompute=%s, mode=%s, "
+            "latest_complete=%s, gap_exists=%s)."
+        ),
         resolved_start,
         resolved_end,
         bool(force_recompute),
+        execution_plan.mode,
+        execution_plan.latest_complete_canonical_date,
+        execution_plan.gap_exists,
     )
 
-    return run_dataops_macro_daily(
+    summary = run_dataops_macro_daily(
         start=resolved_start,
         end=resolved_end,
         cache_root=cache_root,
@@ -377,6 +466,8 @@ def dataops_macro_daily_flow(
         raise_on_failed_hard=not bool(allow_unhealthy),
         force_recompute=bool(force_recompute),
     )
+    summary["execution"] = execution_plan.as_dict()
+    return summary
 
 
 @flow(
@@ -400,22 +491,36 @@ def dataops_release_calendar_daily_flow(
     official_end_year: int | None = None,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
-    resolved_start, resolved_end = _resolve_date_window(
-        start=start_date,
-        end=end_date,
-        lookback_days=lookback_days,
-        default_lookback_days=settings.default_lookback_days,
+    execution_plan = resolve_watermark_execution(
+        domain="release-calendar",
+        table_name="economic_release_calendar",
+        date_column="release_date_local",
+        lookback_days=int(lookback_days if lookback_days is not None else settings.default_lookback_days),
+        grace_days=5,
+        safety_overlap_days=3,
+        explicit_end=end_date,
+        cache_root=settings.cache_root,
+        supabase_url=settings.supabase_url,
+        service_role_key=settings.supabase_service_role_key,
     )
+    resolved_start = str(start_date).strip() if start_date else execution_plan.start_date
+    resolved_end = execution_plan.end_date
 
     logger = get_run_logger()
     logger.info(
-        "Running release-calendar flow (start_date=%s, end_date=%s, force_recompute=%s).",
+        (
+            "Running release-calendar flow (start_date=%s, end_date=%s, force_recompute=%s, mode=%s, "
+            "latest_complete=%s, gap_exists=%s)."
+        ),
         resolved_start,
         resolved_end,
         bool(force_recompute),
+        execution_plan.mode,
+        execution_plan.latest_complete_canonical_date,
+        execution_plan.gap_exists,
     )
 
-    return run_dataops_release_calendar_daily(
+    summary = run_dataops_release_calendar_daily(
         start_date=resolved_start,
         end_date=resolved_end,
         cache_root=cache_root,
@@ -427,6 +532,8 @@ def dataops_release_calendar_daily_flow(
         official_start_year=official_start_year,
         official_end_year=official_end_year,
     )
+    summary["execution"] = execution_plan.as_dict()
+    return summary
 
 
 @flow(

@@ -8,6 +8,8 @@ job payloads delivered by Cloud Tasks and calls `finance-data-ops` logic for:
 - ticker validation
 - ticker backfill
 - analyst snapshot job execution (`analysis_job`)
+- admin data-ops rebuild jobs (`analysis_job` with `analysis_type=data_ops_rebuild`)
+- admin series upsert jobs (`analysis_job` with `analysis_type=data_ops_series_upsert`)
 
 ## Endpoints
 
@@ -16,14 +18,13 @@ job payloads delivered by Cloud Tasks and calls `finance-data-ops` logic for:
 
 ## Security
 
-Set `WORKER_SHARED_TOKEN` and require `Authorization: Bearer <token>` from the
-Cloud Tasks HTTP target.
+Prefer Cloud Tasks OIDC + Cloud Run IAM auth. `WORKER_SHARED_TOKEN` is optional
+defense-in-depth for app-layer bearer verification.
 
 ## Required env vars
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `WORKER_SHARED_TOKEN`
 
 ## Optional env vars
 
@@ -34,6 +35,7 @@ Cloud Tasks HTTP target.
 - `GCP_TASKS_QUEUE` (default: `ticker-jobs`)
 - `WORKER_BASE_URL` (used for enqueueing chained backfill jobs)
 - `TASKS_INVOKER_SERVICE_ACCOUNT_EMAIL`
+- `WORKER_SHARED_TOKEN` (optional, if app-layer bearer auth is enabled)
 
 ## Local run
 

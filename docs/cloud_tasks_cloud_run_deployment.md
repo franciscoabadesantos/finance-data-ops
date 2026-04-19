@@ -1,5 +1,10 @@
 # Cloud Tasks + Cloud Run Deployment Runbook
 
+> Secret-handling baseline:
+> - Google Secret Manager is the source of truth for GCP runtime secrets.
+> - Vercel Shared Environment Variables are the source of truth for shared Vercel-side secrets/config.
+> - Prefer Cloud Tasks OIDC + Cloud Run IAM over static worker bearer tokens.
+
 This runbook deploys request-driven ticker jobs to Google Cloud while keeping Prefect for recurring schedules only.
 
 ## Scope
@@ -28,7 +33,8 @@ export WORKER_RUNTIME_SA="finance-jobs-worker@${PROJECT_ID}.iam.gserviceaccount.
 export TASKS_INVOKER_SA="finance-tasks-invoker@${PROJECT_ID}.iam.gserviceaccount.com"
 export BACKEND_ENQUEUER_SA="finance-backend-enqueuer@${PROJECT_ID}.iam.gserviceaccount.com"
 
-export WORKER_SHARED_TOKEN="$(openssl rand -hex 32)"
+export SECRET_SUPABASE_SERVICE_ROLE_KEY="supabase-service-role-key"
+export SECRET_WORKER_SHARED_TOKEN="worker-shared-token" # optional
 ```
 
 ## 1. Enable required APIs
@@ -132,6 +138,37 @@ gcloud builds submit . \
   --file services/finance-jobs-worker/Dockerfile
 ```
 
+Create/update Secret Manager secrets (first time + rotations):
+
+```bash
+gcloud secrets describe "${SECRET_SUPABASE_SERVICE_ROLE_KEY}" \
+  --project "${PROJECT_ID}" >/dev/null 2>&1 || \
+  gcloud secrets create "${SECRET_SUPABASE_SERVICE_ROLE_KEY}" \
+    --project "${PROJECT_ID}" \
+    --replication-policy="automatic"
+
+printf '%s' "${SUPABASE_SERVICE_ROLE_KEY}" | \
+  gcloud secrets versions add "${SECRET_SUPABASE_SERVICE_ROLE_KEY}" \
+    --project "${PROJECT_ID}" \
+    --data-file=-
+```
+
+Optional worker shared token (only if you want app-layer bearer auth in addition to IAM):
+
+```bash
+export WORKER_SHARED_TOKEN="$(openssl rand -hex 32)"
+gcloud secrets describe "${SECRET_WORKER_SHARED_TOKEN}" \
+  --project "${PROJECT_ID}" >/dev/null 2>&1 || \
+  gcloud secrets create "${SECRET_WORKER_SHARED_TOKEN}" \
+    --project "${PROJECT_ID}" \
+    --replication-policy="automatic"
+
+printf '%s' "${WORKER_SHARED_TOKEN}" | \
+  gcloud secrets versions add "${SECRET_WORKER_SHARED_TOKEN}" \
+    --project "${PROJECT_ID}" \
+    --data-file=-
+```
+
 Deploy worker service:
 
 ```bash
@@ -142,14 +179,22 @@ gcloud run deploy "${WORKER_SERVICE}" \
   --service-account "${WORKER_RUNTIME_SA}" \
   --no-allow-unauthenticated \
   --set-env-vars "SUPABASE_URL=${SUPABASE_URL}" \
-  --set-env-vars "SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}" \
-  --set-env-vars "WORKER_SHARED_TOKEN=${WORKER_SHARED_TOKEN}" \
+  --set-secrets "SUPABASE_SERVICE_ROLE_KEY=${SECRET_SUPABASE_SERVICE_ROLE_KEY}:latest" \
   --set-env-vars "FINANCE_DATA_OPS_ROOT=/app" \
   --set-env-vars "CLOUD_TASKS_ENABLED=true" \
   --set-env-vars "GCP_PROJECT_ID=${PROJECT_ID}" \
   --set-env-vars "GCP_LOCATION=${REGION}" \
   --set-env-vars "GCP_TASKS_QUEUE=${QUEUE_NAME}" \
   --set-env-vars "TASKS_INVOKER_SERVICE_ACCOUNT_EMAIL=${TASKS_INVOKER_SA}"
+```
+
+Optional if using app-layer worker bearer auth:
+
+```bash
+gcloud run services update "${WORKER_SERVICE}" \
+  --project "${PROJECT_ID}" \
+  --region "${REGION}" \
+  --set-secrets "WORKER_SHARED_TOKEN=${SECRET_WORKER_SHARED_TOKEN}:latest"
 ```
 
 Fetch deployed URL and update env:
@@ -178,7 +223,7 @@ gcloud run services add-iam-policy-binding "${WORKER_SERVICE}" \
 
 ## 6. Backend environment configuration (Vercel)
 
-Create backend enqueuer key (store securely):
+Create backend enqueuer key only if backend runtime cannot use ADC/workload identity:
 
 ```bash
 gcloud iam service-accounts keys create /tmp/finance-backend-enqueuer.json \
@@ -186,7 +231,7 @@ gcloud iam service-accounts keys create /tmp/finance-backend-enqueuer.json \
   --iam-account "${BACKEND_ENQUEUER_SA}"
 ```
 
-Set backend env vars (production scope shown):
+Set backend env vars in Vercel Shared Environment Variables (not per-project duplicates):
 
 ```bash
 vercel env add USE_CLOUD_TASKS production <<< "true"
@@ -194,10 +239,12 @@ vercel env add GCP_PROJECT_ID production <<< "${PROJECT_ID}"
 vercel env add GCP_LOCATION production <<< "${REGION}"
 vercel env add GCP_TASKS_QUEUE production <<< "${QUEUE_NAME}"
 vercel env add CLOUD_TASKS_WORKER_URL production <<< "${WORKER_URL}"
-vercel env add CLOUD_TASKS_WORKER_AUTH_TOKEN production <<< "${WORKER_SHARED_TOKEN}"
 vercel env add CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL production <<< "${TASKS_INVOKER_SA}"
 vercel env add GCP_SERVICE_ACCOUNT_JSON production < /tmp/finance-backend-enqueuer.json
 ```
+
+If Cloud Tasks OIDC + Cloud Run IAM is configured correctly, omit
+`CLOUD_TASKS_WORKER_AUTH_TOKEN` entirely.
 
 Redeploy backend after env updates:
 

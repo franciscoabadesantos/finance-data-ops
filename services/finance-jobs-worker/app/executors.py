@@ -11,6 +11,7 @@ from finance_data_ops.analysis.snapshots import build_ticker_snapshot_report
 from finance_data_ops.validation.ticker_validation import run_single_ticker_validation
 
 from app.config import WorkerSettings
+from app.data_ops_jobs import run_data_ops_rebuild_job, run_data_ops_series_upsert_job
 from app.models import ExecuteJobRequest
 from app.registry import WorkerRegistryStore, now_iso, parse_notes
 from app.tasks import CloudTasksEnqueuer
@@ -329,7 +330,7 @@ class JobExecutor:
                 fundamentals_rows=fundamentals_rows,
                 earnings_rows=earnings_rows,
             )
-        else:
+        elif resolved_analysis_type == "coverage_report":
             result_json = build_coverage_report(
                 ticker=ticker,
                 region=region,
@@ -342,11 +343,47 @@ class JobExecutor:
                 fundamentals_rows=fundamentals_rows,
                 earnings_rows=earnings_rows,
             )
+        elif resolved_analysis_type == "data_ops_rebuild":
+            output = run_data_ops_rebuild_job(
+                settings=self.settings,
+                registry=self.registry,
+                params=dict(request.job_params or {}),
+            )
+            result_json = {
+                "summary": f"Data ops rebuild {str((output or {}).get('status') or 'completed')}.",
+                "input": dict(request.job_params or {}),
+                "output": output,
+                "metadata": {
+                    "analysis_type": resolved_analysis_type,
+                    "generated_at": now_iso(),
+                },
+            }
+        elif resolved_analysis_type == "data_ops_series_upsert":
+            output = run_data_ops_series_upsert_job(
+                settings=self.settings,
+                registry=self.registry,
+                params=dict(request.job_params or {}),
+            )
+            result_json = {
+                "summary": f"Data ops series upsert {str((output or {}).get('status') or 'completed')}.",
+                "input": dict(request.job_params or {}),
+                "output": output,
+                "metadata": {
+                    "analysis_type": resolved_analysis_type,
+                    "generated_at": now_iso(),
+                },
+            }
+        else:
+            raise RuntimeError(f"Unsupported analysis_type={resolved_analysis_type!r}")
         self.registry.upsert_analysis_result(
             job_id=analysis_job_id,
             analysis_type=resolved_analysis_type,
-            result_json=result_json,
-            summary_text=str(result_json.get("summary") or ""),
+            result_json=(dict(result_json) if isinstance(result_json, dict) else {"result": result_json}),
+            summary_text=(
+                str(result_json.get("summary") or "")
+                if isinstance(result_json, dict)
+                else ""
+            ),
         )
         self.registry.patch_analysis_job(
             analysis_job_id,

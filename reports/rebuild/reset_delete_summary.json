@@ -1,0 +1,103 @@
+{
+  "domains": [
+    "market",
+    "fundamentals",
+    "earnings",
+    "macro",
+    "release-calendar"
+  ],
+  "include_status": true,
+  "dry_run": false,
+  "tables": [
+    {
+      "table": "ticker_market_stats_snapshot",
+      "key_column": "ticker",
+      "rows_before": 104,
+      "rows_deleted": 104
+    },
+    {
+      "table": "market_quotes_history",
+      "key_column": "ticker",
+      "rows_before": 128,
+      "rows_deleted": 128
+    },
+    {
+      "table": "market_quotes",
+      "key_column": "ticker",
+      "rows_before": 66,
+      "rows_deleted": 66
+    },
+    {
+      "table": "market_price_daily",
+      "key_column": "ticker",
+      "rows_before": 32919,
+      "rows_deleted": 32919
+    },
+    {
+      "table": "ticker_fundamental_summary",
+      "key_column": "ticker",
+      "rows_before": 104,
+      "rows_deleted": 104
+    },
+    {
+      "table": "market_fundamentals_v2",
+      "key_column": "ticker",
+      "rows_before": 6188,
+      "rows_deleted": 6188
+    },
+    {
+      "table": "market_earnings_events",
+      "key_column": "ticker",
+      "rows_before": 68,
+      "rows_deleted": 68
+    },
+    {
+      "table": "market_earnings_history",
+      "key_column": "ticker",
+      "rows_before": 1419,
+      "rows_deleted": 1419
+    },
+    {
+      "table": "macro_daily",
+      "key_column": "series_key",
+      "rows_before": 27847,
+      "rows_deleted": 27847
+    },
+    {
+      "table": "macro_observations",
+      "key_column": "series_key",
+      "rows_before": 15753,
+      "rows_deleted": 15753
+    },
+    {
+      "table": "macro_series_catalog",
+      "key_column": "series_key",
+      "rows_before": 17,
+      "rows_deleted": 17
+    },
+    {
+      "table": "economic_release_calendar",
+      "key_column": "series_key",
+      "rows_before": 703,
+      "rows_deleted": 703
+    },
+    {
+      "table": "data_source_runs",
+      "key_column": "run_id",
+      "rows_before": 422,
+      "rows_deleted": 422
+    },
+    {
+      "table": "data_asset_status",
+      "key_column": "asset_key",
+      "rows_before": 18,
+      "rows_deleted": 18
+    },
+    {
+      "table": "symbol_data_coverage",
+      "key_column": "ticker",
+      "rows_before": 112,
+      "rows_deleted": 112
+    }
+  ]
+}
