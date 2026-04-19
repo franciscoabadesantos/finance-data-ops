@@ -1,8 +1,13 @@
-# Supabase schema contract (Data Ops v3)
+# Supabase schema contract
 
-Data Ops writes five product-data domains: market, fundamentals, earnings, macro, and economic release calendar.
+Data Ops writes five product-data domains: market, fundamentals, earnings, macro, and economic release calendar. Fresh projects should bootstrap from the definitive runtime baseline:
 
-## Existing market surfaces
+- [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
+- [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
+
+Historical numbered SQL files remain in the repo for older-instance archaeology, not for fresh installs.
+
+## Market surfaces
 
 - `market_price_daily`
 - `market_quotes`
@@ -100,10 +105,7 @@ Macro/release asset keys in `data_asset_status` are required:
 - `macro_daily`
 - `economic_release_calendar`
 
-Migration files:
+Runtime baseline files:
 
-- [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
-- [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
-- [`sql/003_ticker_registry.sql`](/home/franciscosantos/finance-data-ops/sql/003_ticker_registry.sql)
-- [`sql/004_data_ops_v3_macro_release.sql`](/home/franciscosantos/finance-data-ops/sql/004_data_ops_v3_macro_release.sql)
-- [`sql/005_data_ops_v4_release_availability.sql`](/home/franciscosantos/finance-data-ops/sql/005_data_ops_v4_release_availability.sql)
+- [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
+- [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)

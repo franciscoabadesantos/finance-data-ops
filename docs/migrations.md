@@ -1,60 +1,64 @@
-# Migration runbook (Data Ops v3)
+# Runtime baseline runbook
 
 ## Purpose
 
-Prepare Supabase for Data Ops-owned market/fundamentals/earnings/macro/release surfaces and operational metadata.
+Prepare a fresh Supabase project for current Data Ops-owned runtime surfaces without replaying historical compatibility migrations.
 
 ## SQL sources
 
-Apply in order:
+Apply in order on an empty project:
 
-- [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
-- [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
-- [`sql/003_ticker_registry.sql`](/home/franciscosantos/finance-data-ops/sql/003_ticker_registry.sql)
-- [`sql/004_data_ops_v3_macro_release.sql`](/home/franciscosantos/finance-data-ops/sql/004_data_ops_v3_macro_release.sql)
-- [`sql/005_data_ops_v4_release_availability.sql`](/home/franciscosantos/finance-data-ops/sql/005_data_ops_v4_release_availability.sql)
-- [`sql/006_async_job_runs.sql`](/home/franciscosantos/finance-data-ops/sql/006_async_job_runs.sql)
+- [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
+- [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
 
-All scripts are idempotent (`create ... if not exists`, `add column if not exists`, guarded compatibility updates).
+Historical numbered SQL files (`001..007`) are retained only for older-instance archaeology and should not be used as the bootstrap path for new environments.
 
 ## Surfaces created/owned by migrations
 
-- v1:
+- Runtime schema:
+  - `market_price_daily`
+  - `market_quotes`
+  - `market_quotes_history`
   - `ticker_market_stats_snapshot`
   - `data_source_runs`
   - `data_asset_status`
   - `symbol_data_coverage`
-- v2:
   - `market_fundamentals_v2`
   - `mv_latest_fundamentals` + `refresh_mv_latest_fundamentals`
   - `ticker_fundamental_summary`
   - `market_earnings_events`
   - `market_earnings_history`
   - `mv_next_earnings` + `refresh_mv_next_earnings`
-- v3:
+  - `ticker_registry`
   - `macro_series_catalog`
   - `macro_observations`
   - `macro_daily`
   - `economic_release_calendar`
   - `mv_latest_macro_observations` + refresh RPC
   - `mv_latest_economic_release_calendar` + refresh RPC
-- v4:
-  - `economic_release_calendar` explicit scheduled vs observed availability fields
-  - rebuilt `mv_latest_economic_release_calendar` ordering by effective availability
-- v5:
   - `async_job_runs` durable request-driven async job audit surface
+  - `analysis_jobs`
+  - `analysis_results`
+- Runtime seed:
+  - default `macro_series_catalog` rows required by daily macro/release refreshes
 
 ## Apply steps
 
-1. Open Supabase SQL editor (or run via migration tool).
-2. Execute the six migration files in order.
+1. Open Supabase SQL editor for a new project.
+2. Execute the two runtime baseline files in order.
 3. Run dry flows:
    - `python scripts/run_market_daily.py --symbols SPY --no-publish`
    - `python scripts/run_fundamentals_daily.py --symbols SPY --no-publish`
    - `python scripts/run_earnings_daily.py --symbols SPY --no-publish`
    - `python scripts/run_macro_daily.py --start 2000-01-01 --end 2020-12-31 --no-publish`
    - `python scripts/run_release_calendar_daily.py --start-date 2000-01-01 --end-date 2020-12-31 --no-publish`
-4. Verify status rows update in `data_source_runs` and `data_asset_status` for macro/release assets.
+4. Verify required runtime relations exist:
+   - `analysis_jobs`
+   - `analysis_results`
+   - `async_job_runs`
+   - `ticker_registry`
+   - `macro_series_catalog`
+5. Verify status rows update in `data_source_runs` and `data_asset_status` for macro/release assets.
 
 ## Historical backfill (idempotent)
 
