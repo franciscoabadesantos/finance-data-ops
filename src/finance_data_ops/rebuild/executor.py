@@ -37,6 +37,7 @@ def execute_rebuild_plan(
     progress_store = progress or NullRebuildProgressStore()
     health_gate = RebuildHealthGate(client=client, policy=plan.policy)
     health_checks: list[dict[str, Any]] = []
+    batch_results: list[dict[str, Any]] = []
     rows_written_total = 0
     touched_symbols: list[str] = []
     touched_series: list[str] = []
@@ -187,6 +188,8 @@ def execute_rebuild_plan(
                     provider=FundamentalsDataProvider(),
                     cache_root=cache_root,
                     tickers=chunk.ticker_batch,
+                    start_date=str(chunk.start_date),
+                    end_date=str(chunk.end_date),
                     max_attempts=max_attempts,
                 )
             elif plan.domain == "earnings":
@@ -195,6 +198,8 @@ def execute_rebuild_plan(
                     provider=EarningsDataProvider(),
                     cache_root=cache_root,
                     tickers=chunk.ticker_batch,
+                    start_date=str(chunk.start_date),
+                    end_date=str(chunk.end_date),
                     max_attempts=max_attempts,
                     history_limit=history_limit,
                 )
@@ -237,6 +242,20 @@ def execute_rebuild_plan(
         rows_written_total += int(batch_result.get("rows_written", 0))
         touched_symbols.extend(str(v).strip().upper() for v in batch_result.get("touched_symbols", []))
         touched_series.extend(str(v).strip() for v in batch_result.get("touched_series", []))
+        batch_results.append(
+            {
+                "batch_index": idx,
+                "current_window": batch_result.get("current_window") or chunk.as_dict(),
+                "refresh_status": refresh_status,
+                "provider_rows": batch_result.get("provider_rows"),
+                "filtered_rows": batch_result.get("filtered_rows"),
+                "window_filter_field": batch_result.get("window_filter_field"),
+                "rows_written": int(batch_result.get("rows_written", 0)),
+                "publish_result": batch_result.get("publish_result"),
+                "touched_symbols": list(batch_result.get("touched_symbols", [])),
+                "touched_series": list(batch_result.get("touched_series", [])),
+            }
+        )
 
         progress_store.update(
             job_status="running",
@@ -316,12 +335,14 @@ def execute_rebuild_plan(
             "rows_deleted_total": 0,
             "health_checks": health_checks,
             "finalization_status": "completed",
+            "batch_results": batch_results,
             "finalization": finalization,
         },
     )
     return {
         "rows_written_total": rows_written_total,
         "health_checks": health_checks,
+        "batch_results": batch_results,
         "finalization": finalization,
         "touched_symbols": sorted(set(touched_symbols)),
         "touched_series": sorted(set(touched_series)),
