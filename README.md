@@ -183,12 +183,14 @@ Project aggregation (same pattern as `Finance` repo):
 python scripts/run_project_aggregation.py --mode no-tests --ext .py .toml .md
 ```
 
-## SQL migrations
+## SQL baseline
 
-- v1: [`sql/001_data_ops_v1_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/001_data_ops_v1_surfaces.sql)
-- v2: [`sql/002_data_ops_v2_fundamentals_earnings.sql`](/home/franciscosantos/finance-data-ops/sql/002_data_ops_v2_fundamentals_earnings.sql)
-- v3: [`sql/003_ticker_registry.sql`](/home/franciscosantos/finance-data-ops/sql/003_ticker_registry.sql)
-- v4: [`sql/004_data_ops_v3_macro_release.sql`](/home/franciscosantos/finance-data-ops/sql/004_data_ops_v3_macro_release.sql)
+Fresh Supabase projects should use the definitive runtime baseline:
+
+- Schema: [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
+- Seed: [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
+
+Historical numbered SQL files (`001..007`) remain in the repo as migration archaeology for older instances, but they are not the supported bootstrap path for new projects anymore.
 
 ## Additional docs
 

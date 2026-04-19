@@ -348,16 +348,21 @@ class JobExecutor:
                 settings=self.settings,
                 registry=self.registry,
                 params=dict(request.job_params or {}),
+                job_id=analysis_job_id,
             )
-            result_json = {
-                "summary": f"Data ops rebuild {str((output or {}).get('status') or 'completed')}.",
-                "input": dict(request.job_params or {}),
-                "output": output,
-                "metadata": {
+            existing_result = self.registry.client.table("analysis_results").select("*").eq("job_id", analysis_job_id).limit(1).execute()
+            existing_rows = existing_result.data or []
+            result_json = dict(existing_rows[0].get("result_json") or {}) if existing_rows else {}
+            result_json.setdefault("input", dict(request.job_params or {}))
+            result_json["output"] = output
+            result_json.setdefault("summary", f"Data ops rebuild {str((output or {}).get('status') or 'completed')}.")
+            result_json.setdefault("metadata", {})
+            result_json["metadata"].update(
+                {
                     "analysis_type": resolved_analysis_type,
                     "generated_at": now_iso(),
-                },
-            }
+                }
+            )
         elif resolved_analysis_type == "data_ops_series_upsert":
             output = run_data_ops_series_upsert_job(
                 settings=self.settings,

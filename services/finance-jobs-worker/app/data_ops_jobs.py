@@ -14,6 +14,10 @@ from flows.dataops_release_calendar_daily import run_dataops_release_calendar_da
 from finance_data_ops.providers.macro import MacroSeriesSpec
 from finance_data_ops.publish.client import SupabaseRestPublisher
 from finance_data_ops.publish.release_calendar import publish_release_calendar_surfaces
+from finance_data_ops.rebuild.executor import execute_rebuild_plan
+from finance_data_ops.rebuild.planner import build_rebuild_plan
+from finance_data_ops.rebuild.progress import RebuildProgressStore
+from finance_data_ops.settings import load_settings
 
 from app.config import WorkerSettings
 from app.registry import WorkerRegistryStore
@@ -27,6 +31,7 @@ def run_data_ops_rebuild_job(
     settings: WorkerSettings,
     registry: WorkerRegistryStore,
     params: dict[str, Any],
+    job_id: str | None = None,
 ) -> dict[str, Any]:
     domain = str(params.get("domain") or "").strip().lower()
     if domain not in _VALID_DOMAINS:
@@ -50,8 +55,8 @@ def run_data_ops_rebuild_job(
                 f"Destructive whole-domain wipe requires confirm_phrase={required_phrase!r}."
             )
 
-    preview = _build_rebuild_preview(
-        registry=registry,
+    plan = build_rebuild_plan(
+        client=registry.client,
         domain=domain,
         mode=mode,
         scope=scope,
@@ -59,6 +64,7 @@ def run_data_ops_rebuild_job(
         start_date=start_date,
         end_date=end_date,
     )
+    preview = plan.dry_run_summary
     if dry_run:
         return {
             "status": "completed",
@@ -68,8 +74,35 @@ def run_data_ops_rebuild_job(
             "preview": preview,
         }
 
+    data_ops_settings = load_settings()
+    publisher = SupabaseRestPublisher(
+        supabase_url=settings.supabase_url,
+        service_role_key=settings.supabase_service_role_key,
+    )
+    progress = None
+    if job_id:
+        progress = RebuildProgressStore(
+            registry=registry,
+            job_id=str(job_id),
+            analysis_type="data_ops_rebuild",
+            domain=domain,
+        )
+
     delete_summary: dict[str, Any] | None = None
     if mode == "wipe_rebuild":
+        if progress is not None:
+            progress.update(
+                job_status="running",
+                step="deleting",
+                step_status="running",
+                payload={
+                    "summary": "Deleting scoped rows before rebuild.",
+                    "preview": preview,
+                    "rows_written_total": 0,
+                    "rows_deleted_total": 0,
+                    "finalization_status": "pending",
+                },
+            )
         delete_summary = _execute_wipe(
             registry=registry,
             domain=domain,
@@ -77,14 +110,34 @@ def run_data_ops_rebuild_job(
             start_date=start_date,
             end_date=end_date,
         )
+        if progress is not None:
+            progress.update(
+                job_status="running",
+                step="deleting",
+                step_status="completed",
+                payload={
+                    "summary": "Scoped rows deleted.",
+                    "preview": preview,
+                    "delete_summary": delete_summary,
+                    "rows_written_total": 0,
+                    "rows_deleted_total": sum(
+                        int((value or {}).get("deleted_rows_estimate") or 0)
+                        for value in (delete_summary or {}).values()
+                        if isinstance(value, dict)
+                    ),
+                    "finalization_status": "pending",
+                },
+            )
 
-    force_recompute = mode in {"rebuild_from_start_date", "wipe_rebuild"}
-    run_summary = _execute_rebuild(
-        domain=domain,
-        symbols=symbols,
-        start_date=start_date,
-        end_date=end_date,
-        force_recompute=force_recompute,
+    run_summary = execute_rebuild_plan(
+        client=registry.client,
+        publisher=publisher,
+        cache_root=str(data_ops_settings.cache_root),
+        plan=plan,
+        progress=progress,
+        max_attempts=3,
+        history_limit=120,
+        symbol_batch_size=data_ops_settings.symbol_batch_size,
     )
 
     return {
@@ -391,6 +444,7 @@ def _execute_rebuild(
     end_date: str,
     force_recompute: bool,
 ) -> dict[str, Any]:
+    # Legacy fallback retained only for non-rebuild paths while the new executor rolls out.
     if domain == "market":
         return run_dataops_market_daily(
             symbols=symbols,

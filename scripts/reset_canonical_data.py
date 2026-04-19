@@ -42,7 +42,6 @@ DOMAIN_TABLES: dict[str, list[TableResetTarget]] = {
     "macro": [
         TableResetTarget("macro_daily", "series_key"),
         TableResetTarget("macro_observations", "series_key"),
-        TableResetTarget("macro_series_catalog", "series_key"),
     ],
     "release-calendar": [
         TableResetTarget("economic_release_calendar", "series_key"),
