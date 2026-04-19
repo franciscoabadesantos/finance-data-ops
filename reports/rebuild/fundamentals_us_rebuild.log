@@ -1,0 +1,148 @@
+{
+  "run_id": "run_dataops_fundamentals_daily_11f0771318d6",
+  "cache_root": "/home/franciscosantos/finance-data-ops/data_cache",
+  "symbols": [
+    "ADBE",
+    "PANW",
+    "ORCL",
+    "SPY"
+  ],
+  "refresh": {
+    "fundamentals_daily": {
+      "run_id": "run_fundamentals_daily_bde78c582d17",
+      "asset_name": "market_fundamentals_v2",
+      "status": "fresh",
+      "started_at": "2026-04-18T21:37:00.889030+00:00",
+      "ended_at": "2026-04-18T21:37:15.892747+00:00",
+      "symbols_requested": [
+        "ADBE",
+        "PANW",
+        "ORCL",
+        "SPY"
+      ],
+      "symbols_succeeded": [
+        "ADBE",
+        "PANW",
+        "ORCL",
+        "SPY"
+      ],
+      "symbols_failed": [],
+      "retry_exhausted_symbols": [],
+      "rows_written": 292,
+      "error_messages": []
+    }
+  },
+  "coverage": {
+    "status": "fresh",
+    "required_count": 4,
+    "present_count": 4,
+    "coverage_ratio": 1.0,
+    "missing_symbols": []
+  },
+  "asset_status": [
+    {
+      "asset_key": "market_fundamentals_v2",
+      "asset_type": "fundamentals",
+      "provider": "yahoo_finance",
+      "last_success_at": "2026-04-18T00:00:00",
+      "last_available_date": "2026-04-18",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows=580; run_id=run_fundamentals_daily_bde78c582d17",
+      "updated_at": "2026-04-18T21:37:16.306741+00:00"
+    },
+    {
+      "asset_key": "ticker_fundamental_summary",
+      "asset_type": "derived",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-18T21:37:15.905791+00:00",
+      "last_available_date": "2026-04-18",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows=7; run_id=ticker_fundamental_summary_build",
+      "updated_at": "2026-04-18T21:37:16.306741+00:00"
+    },
+    {
+      "asset_key": "mv_latest_fundamentals",
+      "asset_type": "derived",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-18T21:37:16.306741+00:00",
+      "last_available_date": "2026-04-18",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows=7; run_id=run_dataops_fundamentals_daily_11f0771318d6_mv_latest_fundamentals",
+      "updated_at": "2026-04-18T21:37:16.306741+00:00"
+    },
+    {
+      "asset_key": "data_ops_publish_pipeline_fundamentals",
+      "asset_type": "pipeline",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-18T21:37:17.482785+00:00",
+      "last_available_date": "2026-04-18",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "success; run_id=run_dataops_fundamentals_daily_11f0771318d6",
+      "updated_at": "2026-04-18T21:37:17.482785+00:00"
+    }
+  ],
+  "published": {
+    "fundamentals": {
+      "market_fundamentals_v2": {
+        "status_code": 201,
+        "data": null,
+        "table": "market_fundamentals_v2",
+        "rows": 580
+      },
+      "ticker_fundamental_summary": {
+        "status_code": 201,
+        "data": null,
+        "table": "ticker_fundamental_summary",
+        "rows": 7
+      },
+      "mv_latest_fundamentals": {
+        "status_code": 204,
+        "data": null
+      }
+    },
+    "status": {
+      "data_source_runs": {
+        "status_code": 201,
+        "data": null,
+        "table": "data_source_runs",
+        "rows": 2
+      },
+      "data_asset_status": {
+        "status_code": 201,
+        "data": null,
+        "table": "data_asset_status",
+        "rows": 4
+      },
+      "symbol_data_coverage": {
+        "status_code": 200,
+        "data": null,
+        "table": "symbol_data_coverage",
+        "rows": 4
+      }
+    }
+  },
+  "publish_failures": [],
+  "rows": {
+    "market_fundamentals_v2": 580,
+    "ticker_fundamental_summary": 7
+  },
+  "execution": {
+    "domain": "fundamentals",
+    "mode": "catch-up",
+    "start_date": "2016-04-20",
+    "end_date": "2026-04-18",
+    "expected_end_date": "2026-04-18",
+    "latest_complete_canonical_date": null,
+    "gap_exists": true,
+    "missing_dates_count": 3651,
+    "earliest_missing_date": "2016-04-20",
+    "safety_overlap_days": 14,
+    "canonical_source": "supabase",
+    "table_name": "market_fundamentals_v2",
+    "date_column": "period_end"
+  }
+}

@@ -1,0 +1,501 @@
+{
+  "window": {
+    "start_date": "1990-01-01",
+    "end_date": "2026-04-18"
+  },
+  "inputs": {
+    "canonical_release_path": "/home/franciscosantos/finance-data-ops/data_cache/economic_release_calendar.parquet",
+    "finance_repo_root": "/home/franciscosantos/Finance",
+    "legacy_registry_path": "/home/franciscosantos/Finance/configs/release_calendars/registry.json"
+  },
+  "contract": {
+    "placeholder_policy": {
+      "canonical_rule": "Rows without scheduled release timestamp, rows beyond parity-window end, or rows marked schedule-only without observed availability are treated as non-canonical placeholders and excluded from strict parity comparison.",
+      "excluded_placeholder_reasons": [
+        "missing_release_timestamp",
+        "forward_unrealized_release_timestamp",
+        "schedule_based_only_no_observation"
+      ]
+    },
+    "timing": {
+      "fields": [
+        "canonical.scheduled_release_timestamp_utc",
+        "legacy.release_timestamp_utc"
+      ],
+      "key": [
+        "series_key",
+        "observation_period"
+      ],
+      "comparison": "exact_utc_timestamp_equality"
+    },
+    "coverage": {
+      "fields": [
+        "series_key",
+        "observation_period"
+      ],
+      "comparison": "exact_set_equality_after_placeholder_filter"
+    },
+    "counts": {
+      "comparison": "exact_total_and_per_series_count_equality_after_placeholder_filter"
+    }
+  },
+  "raw_counts": {
+    "canonical_total_events": 4068,
+    "legacy_total_events": 2941,
+    "canonical_placeholder_rows": 1016,
+    "legacy_placeholder_rows": 4
+  },
+  "series": {
+    "canonical_series": [
+      "CIVPART",
+      "CPI_Core",
+      "CPI_Headline",
+      "ICSA",
+      "U6RATE",
+      "UNRATE"
+    ],
+    "legacy_series": [
+      "CIVPART",
+      "CPI_Core",
+      "CPI_Headline",
+      "ICSA",
+      "U6RATE",
+      "UNRATE"
+    ],
+    "missing_in_legacy": [],
+    "missing_in_canonical": []
+  },
+  "counts": {
+    "canonical_total_events": 3052,
+    "legacy_total_events": 2937,
+    "per_series_count_delta": {
+      "CIVPART": {
+        "canonical": 434,
+        "legacy": 313,
+        "delta": 121
+      },
+      "CPI_Core": {
+        "canonical": 434,
+        "legacy": 313,
+        "delta": 121
+      },
+      "CPI_Headline": {
+        "canonical": 434,
+        "legacy": 313,
+        "delta": 121
+      },
+      "ICSA": {
+        "canonical": 882,
+        "legacy": 1372,
+        "delta": -490
+      },
+      "U6RATE": {
+        "canonical": 434,
+        "legacy": 313,
+        "delta": 121
+      },
+      "UNRATE": {
+        "canonical": 434,
+        "legacy": 313,
+        "delta": 121
+      }
+    }
+  },
+  "timestamp_parity": {
+    "shared_rows": 2447,
+    "timestamp_mismatch_rows": 26
+  },
+  "key_parity": {
+    "missing_keys_in_legacy": 605,
+    "missing_keys_in_canonical": 490
+  },
+  "samples": {
+    "timestamp_mismatch": [
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2005-01",
+        "release_timestamp_utc_norm_canonical": "2005-02-18T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2005-02-23T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2006-01",
+        "release_timestamp_utc_norm_canonical": "2006-02-17T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2006-02-22T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2007-01",
+        "release_timestamp_utc_norm_canonical": "2007-02-16T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2007-02-21T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2008-01",
+        "release_timestamp_utc_norm_canonical": "2008-02-15T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2008-02-20T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2009-01",
+        "release_timestamp_utc_norm_canonical": "2009-02-18T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2009-02-20T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2010-01",
+        "release_timestamp_utc_norm_canonical": "2010-02-17T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2010-02-19T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2011-01",
+        "release_timestamp_utc_norm_canonical": "2011-02-15T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2011-02-17T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2012-01",
+        "release_timestamp_utc_norm_canonical": "2012-02-15T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2012-02-17T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2013-01",
+        "release_timestamp_utc_norm_canonical": "2013-02-19T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2013-02-21T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2014-01",
+        "release_timestamp_utc_norm_canonical": "2014-02-18T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2014-02-20T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2015-01",
+        "release_timestamp_utc_norm_canonical": "2015-02-20T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2015-02-26T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2017-01",
+        "release_timestamp_utc_norm_canonical": "2017-02-13T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2017-02-15T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Core",
+        "observation_period": "2019-01",
+        "release_timestamp_utc_norm_canonical": "2019-02-11T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2019-02-13T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2005-01",
+        "release_timestamp_utc_norm_canonical": "2005-02-18T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2005-02-23T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2006-01",
+        "release_timestamp_utc_norm_canonical": "2006-02-17T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2006-02-22T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2007-01",
+        "release_timestamp_utc_norm_canonical": "2007-02-16T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2007-02-21T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2008-01",
+        "release_timestamp_utc_norm_canonical": "2008-02-15T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2008-02-20T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2009-01",
+        "release_timestamp_utc_norm_canonical": "2009-02-18T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2009-02-20T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2010-01",
+        "release_timestamp_utc_norm_canonical": "2010-02-17T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2010-02-19T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2011-01",
+        "release_timestamp_utc_norm_canonical": "2011-02-15T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2011-02-17T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2012-01",
+        "release_timestamp_utc_norm_canonical": "2012-02-15T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2012-02-17T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2013-01",
+        "release_timestamp_utc_norm_canonical": "2013-02-19T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2013-02-21T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2014-01",
+        "release_timestamp_utc_norm_canonical": "2014-02-18T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2014-02-20T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2015-01",
+        "release_timestamp_utc_norm_canonical": "2015-02-20T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2015-02-26T13:30:00+00:00"
+      },
+      {
+        "series_key": "CPI_Headline",
+        "observation_period": "2017-01",
+        "release_timestamp_utc_norm_canonical": "2017-02-13T13:30:00+00:00",
+        "release_timestamp_utc_norm_legacy": "2017-02-15T13:30:00+00:00"
+      }
+    ],
+    "missing_keys_in_legacy": [
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-01"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-02"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-03"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-04"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-05"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-06"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-07"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-08"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-09"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-10"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-11"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1990-12"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-01"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-02"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-03"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-04"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-05"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-06"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-07"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-08"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-09"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-10"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-11"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1991-12"
+      },
+      {
+        "series_key": "CIVPART",
+        "observation_period": "1992-01"
+      }
+    ],
+    "missing_keys_in_canonical": [
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-01-01"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-01-08"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-01-15"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-01-22"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-01-29"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-02-05"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-02-12"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-02-19"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-02-26"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-03-04"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-03-11"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-03-18"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-03-25"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-04-01"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-04-08"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-04-15"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-04-22"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-04-29"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-05-06"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-05-13"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-05-20"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-05-27"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-06-03"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-06-10"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2000-06-17"
+      }
+    ],
+    "legacy_placeholder_rows": [
+      {
+        "series_key": "CIVPART",
+        "observation_period": "2025-10",
+        "release_timestamp_utc": NaN,
+        "source": "bls_unrate_canceled_observation_v1",
+        "placeholder_reason": "missing_release_timestamp"
+      },
+      {
+        "series_key": "ICSA",
+        "observation_period": "2026-04-18",
+        "release_timestamp_utc": "2026-04-23T12:30:00+00:00",
+        "source": "fred_release_calendar_rid180_v1",
+        "placeholder_reason": "forward_unrealized_release_timestamp"
+      },
+      {
+        "series_key": "U6RATE",
+        "observation_period": "2025-10",
+        "release_timestamp_utc": NaN,
+        "source": "bls_unrate_canceled_observation_v1",
+        "placeholder_reason": "missing_release_timestamp"
+      },
+      {
+        "series_key": "UNRATE",
+        "observation_period": "2025-10",
+        "release_timestamp_utc": NaN,
+        "source": "bls_unrate_canceled_observation_v1",
+        "placeholder_reason": "missing_release_timestamp"
+      }
+    ]
+  },
+  "status": "fail"
+}

@@ -134,3 +134,72 @@ def test_validate_macro_publish_contract_rejects_null_required_latest_value() ->
             now_utc=now,
         )
 
+
+def test_validate_macro_publish_contract_allows_pre_activation_missing_required_series() -> None:
+    now = datetime.now(UTC)
+    catalog = pd.DataFrame(
+        [
+            {
+                "series_key": "VIX",
+                "source_provider": "yfinance",
+                "source_code": "^VIX",
+                "frequency": "daily",
+                "required_by_default": True,
+                "required_from_date": "1990-01-02",
+                "staleness_max_bdays": 5,
+            },
+            {
+                "series_key": "VVIX",
+                "source_provider": "yfinance",
+                "source_code": "^VVIX",
+                "frequency": "daily",
+                "required_by_default": True,
+                "required_from_date": "2007-01-03",
+                "staleness_max_bdays": 5,
+            },
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {
+                "series_key": "VIX",
+                "observation_period": "2006-12-29",
+                "observation_date": "2006-12-29",
+                "frequency": "daily",
+                "value": 12.0,
+                "source_provider": "yfinance",
+                "source_code": "^VIX",
+                "release_timestamp_utc": None,
+                "release_timezone": None,
+                "release_date_local": None,
+                "release_calendar_source": None,
+                "source": "yfinance_api_v1",
+                "fetched_at": now.isoformat(),
+                "ingested_at": now.isoformat(),
+            }
+        ]
+    )
+    daily = pd.DataFrame(
+        [
+            {
+                "as_of_date": "2006-12-29",
+                "series_key": "VIX",
+                "value": 12.0,
+                "source_observation_period": "2006-12-29",
+                "source_observation_date": "2006-12-29",
+                "available_at_utc": "2006-12-29T00:00:00+00:00",
+                "staleness_bdays": 0,
+                "is_stale": False,
+                "alignment_mode": "release_timed",
+                "ingested_at": now.isoformat(),
+            }
+        ]
+    )
+
+    # Before VVIX activation date, VVIX is not required on latest as_of_date.
+    validate_macro_publish_contract(
+        series_catalog=catalog,
+        macro_observations=observations,
+        macro_daily=daily,
+        now_utc=now,
+    )

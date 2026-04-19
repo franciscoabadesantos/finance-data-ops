@@ -1,0 +1,150 @@
+{
+  "run_id": "run_dataops_earnings_daily_90f96653638b",
+  "cache_root": "/home/franciscosantos/finance-data-ops/data_cache",
+  "symbols": [
+    "WBC.AX",
+    "WOW.AX",
+    "NTES",
+    "ANZ.AX"
+  ],
+  "refresh": {
+    "earnings_daily": {
+      "run_id": "run_earnings_daily_e72a6c3efcd7",
+      "asset_name": "market_earnings",
+      "status": "fresh",
+      "started_at": "2026-04-18T21:48:26.881802+00:00",
+      "ended_at": "2026-04-18T21:48:32.726066+00:00",
+      "symbols_requested": [
+        "WBC.AX",
+        "WOW.AX",
+        "NTES",
+        "ANZ.AX"
+      ],
+      "symbols_succeeded": [
+        "WBC.AX",
+        "WOW.AX",
+        "NTES",
+        "ANZ.AX"
+      ],
+      "symbols_failed": [],
+      "retry_exhausted_symbols": [],
+      "rows_written": 99,
+      "error_messages": []
+    }
+  },
+  "coverage": {
+    "status": "fresh",
+    "required_count": 4,
+    "present_count": 4,
+    "coverage_ratio": 1.0,
+    "missing_symbols": []
+  },
+  "asset_status": [
+    {
+      "asset_key": "market_earnings_events",
+      "asset_type": "earnings",
+      "provider": "yahoo_finance",
+      "last_success_at": "2026-04-18T21:48:31.427505+00:00",
+      "last_available_date": "2026-08-25",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows=5; run_id=run_earnings_daily_e72a6c3efcd7",
+      "updated_at": "2026-04-18T21:48:33.048373+00:00"
+    },
+    {
+      "asset_key": "market_earnings_history",
+      "asset_type": "earnings",
+      "provider": "yahoo_finance",
+      "last_success_at": "2026-03-12T00:00:00",
+      "last_available_date": "2026-03-12",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows=417; run_id=market_earnings_history_build",
+      "updated_at": "2026-04-18T21:48:33.048373+00:00"
+    },
+    {
+      "asset_key": "mv_next_earnings",
+      "asset_type": "derived",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-18T21:48:32.748312+00:00",
+      "last_available_date": "2026-08-25",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows=4; run_id=run_dataops_earnings_daily_90f96653638b_mv_next_earnings",
+      "updated_at": "2026-04-18T21:48:33.048373+00:00"
+    },
+    {
+      "asset_key": "data_ops_publish_pipeline_earnings",
+      "asset_type": "pipeline",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-18T21:48:34.327388+00:00",
+      "last_available_date": "2026-08-25",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "success; run_id=run_dataops_earnings_daily_90f96653638b",
+      "updated_at": "2026-04-18T21:48:34.327388+00:00"
+    }
+  ],
+  "published": {
+    "earnings": {
+      "market_earnings_events": {
+        "status_code": 201,
+        "data": null,
+        "table": "market_earnings_events",
+        "rows": 5
+      },
+      "market_earnings_history": {
+        "status_code": 201,
+        "data": null,
+        "table": "market_earnings_history",
+        "rows": 417
+      },
+      "mv_next_earnings": {
+        "status_code": 204,
+        "data": null
+      }
+    },
+    "status": {
+      "data_source_runs": {
+        "status_code": 201,
+        "data": null,
+        "table": "data_source_runs",
+        "rows": 2
+      },
+      "data_asset_status": {
+        "status_code": 200,
+        "data": null,
+        "table": "data_asset_status",
+        "rows": 4
+      },
+      "symbol_data_coverage": {
+        "status_code": 200,
+        "data": null,
+        "table": "symbol_data_coverage",
+        "rows": 4
+      }
+    }
+  },
+  "publish_failures": [],
+  "rows": {
+    "market_earnings_events": 5,
+    "market_earnings_history": 417,
+    "mv_next_earnings": 4
+  },
+  "execution": {
+    "domain": "earnings",
+    "mode": "normal",
+    "start_date": "2026-04-04",
+    "end_date": "2026-04-18",
+    "expected_end_date": "2026-04-18",
+    "latest_complete_canonical_date": "2026-03-12",
+    "gap_exists": false,
+    "missing_dates_count": 0,
+    "earliest_missing_date": null,
+    "safety_overlap_days": 14,
+    "canonical_source": "supabase",
+    "table_name": "market_earnings_history",
+    "date_column": "earnings_date",
+    "resolved_history_limit": 100
+  }
+}

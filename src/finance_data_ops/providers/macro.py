@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -20,6 +21,7 @@ class MacroSeriesSpec:
     source_code: str
     frequency: MacroFrequency
     required_by_default: bool
+    required_from_date: date | None = None
     optional: bool = False
     description: str = ""
 
@@ -32,9 +34,9 @@ STALENESS_MAX_BDAYS_BY_FREQUENCY: dict[MacroFrequency, int] = {
 
 
 MACRO_SERIES_CATALOG: tuple[MacroSeriesSpec, ...] = (
-    MacroSeriesSpec("VIX", "yfinance", "^VIX", "daily", True, description="CBOE Volatility Index close."),
-    MacroSeriesSpec("VIX3M", "yfinance", "^VIX3M", "daily", True, description="CBOE 3M volatility index close."),
-    MacroSeriesSpec("VVIX", "yfinance", "^VVIX", "daily", True, description="CBOE VVIX close."),
+    MacroSeriesSpec("VIX", "yfinance", "^VIX", "daily", True, required_from_date=date(1990, 1, 2), description="CBOE Volatility Index close."),
+    MacroSeriesSpec("VIX3M", "yfinance", "^VIX3M", "daily", True, required_from_date=date(2006, 7, 17), description="CBOE 3M volatility index close."),
+    MacroSeriesSpec("VVIX", "yfinance", "^VVIX", "daily", True, required_from_date=date(2007, 1, 3), description="CBOE VVIX close."),
     MacroSeriesSpec("10Y_Treasury_Yield", "fred", "DGS10", "daily", True, description="10Y treasury yield."),
     MacroSeriesSpec("2Y_Treasury_Yield", "fred", "DGS2", "daily", True, description="2Y treasury yield."),
     MacroSeriesSpec("High_Yield_Spread", "fred", "BAMLH0A0HYM2", "daily", True, description="US high yield OAS."),
@@ -54,6 +56,9 @@ MACRO_SERIES_CATALOG: tuple[MacroSeriesSpec, ...] = (
 
 SERIES_BY_KEY: dict[str, MacroSeriesSpec] = {spec.key: spec for spec in MACRO_SERIES_CATALOG}
 DEFAULT_REQUIRED_SERIES_KEYS: tuple[str, ...] = tuple(spec.key for spec in MACRO_SERIES_CATALOG if spec.required_by_default)
+DEFAULT_REQUIRED_FROM_DATE_BY_SERIES: dict[str, date] = {
+    spec.key: spec.required_from_date for spec in MACRO_SERIES_CATALOG if bool(spec.required_by_default) and spec.required_from_date is not None
+}
 RELEASE_TIMED_SERIES: frozenset[str] = frozenset({"CPI_Headline", "CPI_Core", "UNRATE", "U6RATE", "CIVPART", "ICSA"})
 
 
@@ -170,6 +175,7 @@ def catalog_frame(catalog: Iterable[MacroSeriesSpec] | None = None) -> pd.DataFr
                 "source_code": spec.source_code,
                 "frequency": spec.frequency,
                 "required_by_default": bool(spec.required_by_default),
+                "required_from_date": (spec.required_from_date.isoformat() if spec.required_from_date is not None else None),
                 "optional": bool(spec.optional),
                 "staleness_max_bdays": int(STALENESS_MAX_BDAYS_BY_FREQUENCY[spec.frequency]),
                 "release_calendar_source": _default_release_calendar_source(spec.key),

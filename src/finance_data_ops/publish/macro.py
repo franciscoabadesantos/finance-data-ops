@@ -120,12 +120,20 @@ def publish_macro_surfaces(
     daily_rows = build_macro_daily_payload(macro_daily)
 
     catalog_result = publisher.upsert("macro_series_catalog", catalog_rows, on_conflict="series_key")
-    observations_result = publisher.upsert(
-        "macro_observations",
-        observation_rows,
+    observations_result = _chunked_upsert(
+        publisher=publisher,
+        table="macro_observations",
+        rows=observation_rows,
         on_conflict="series_key,observation_period",
+        chunk_size=2500,
     )
-    daily_result = publisher.upsert("macro_daily", daily_rows, on_conflict="as_of_date,series_key")
+    daily_result = _chunked_upsert(
+        publisher=publisher,
+        table="macro_daily",
+        rows=daily_rows,
+        on_conflict="as_of_date,series_key",
+        chunk_size=2500,
+    )
 
     mv_latest_obs_result: dict[str, Any] | None = None
     mv_latest_rel_result: dict[str, Any] | None = None
@@ -139,4 +147,36 @@ def publish_macro_surfaces(
         "macro_daily": daily_result,
         "mv_latest_macro_observations": mv_latest_obs_result,
         "mv_latest_economic_release_calendar": mv_latest_rel_result,
+    }
+
+
+def _chunked_upsert(
+    *,
+    publisher: Publisher,
+    table: str,
+    rows: list[dict[str, Any]],
+    on_conflict: str,
+    chunk_size: int,
+) -> dict[str, Any]:
+    if not rows:
+        return {"table": table, "status": "skipped", "rows": 0, "chunks": 0}
+
+    size = max(int(chunk_size), 1)
+    chunk_responses: list[dict[str, Any]] = []
+    total_rows = 0
+    for start in range(0, len(rows), size):
+        batch = rows[start : start + size]
+        response = publisher.upsert(table, batch, on_conflict=on_conflict)
+        chunk_responses.append(response)
+        total_rows += len(batch)
+
+    status_code = None
+    if chunk_responses:
+        status_code = chunk_responses[-1].get("status_code")
+    return {
+        "table": table,
+        "status_code": status_code,
+        "rows": total_rows,
+        "chunks": len(chunk_responses),
+        "chunk_responses": chunk_responses,
     }

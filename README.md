@@ -64,6 +64,15 @@ Optional:
 
 See [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example).
 
+## Secret management
+
+- GCP runtime secrets should come from Google Secret Manager (Cloud Run `--set-secrets`).
+- Vercel-side shared secrets/config should use Vercel Shared Environment Variables.
+- Do not commit `.env` or concrete worker env files. Use:
+  - [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example)
+  - [`worker.env.template.yaml`](/home/franciscosantos/finance-data-ops/worker.env.template.yaml)
+- Prefer Cloud Tasks OIDC + Cloud Run IAM authentication; use `WORKER_SHARED_TOKEN` only as optional defense-in-depth.
+
 ## Manual runs
 
 Market:

@@ -24,3 +24,5 @@ data_cache/
 
 # Local credentials
 key.json
+.env
+worker.env.yaml

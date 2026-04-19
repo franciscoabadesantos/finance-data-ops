@@ -1,0 +1,185 @@
+{
+  "run_id": "run_dataops_market_daily_84e4385f102c",
+  "run_date": "2026-04-18",
+  "cache_root": "/home/franciscosantos/finance-data-ops/data_cache",
+  "symbols": [
+    "ADBE",
+    "PANW",
+    "ORCL",
+    "SPY"
+  ],
+  "refresh": {
+    "market_daily": {
+      "run_id": "run_market_daily_8c7a479ebc8d",
+      "asset_name": "market_price_daily",
+      "status": "fresh",
+      "started_at": "2026-04-18T21:32:21.441672+00:00",
+      "ended_at": "2026-04-18T21:32:24.416070+00:00",
+      "symbols_requested": [
+        "ADBE",
+        "PANW",
+        "ORCL",
+        "SPY"
+      ],
+      "symbols_succeeded": [
+        "ADBE",
+        "PANW",
+        "ORCL",
+        "SPY"
+      ],
+      "symbols_failed": [],
+      "retry_exhausted_symbols": [],
+      "rows_written": 23291,
+      "error_messages": []
+    },
+    "quotes_latest": {
+      "run_id": "run_quotes_latest_7074aaf44e20",
+      "asset_name": "market_quotes",
+      "status": "fresh",
+      "started_at": "2026-04-18T21:32:24.416266+00:00",
+      "ended_at": "2026-04-18T21:32:30.485805+00:00",
+      "symbols_requested": [
+        "ADBE",
+        "PANW",
+        "ORCL",
+        "SPY"
+      ],
+      "symbols_succeeded": [
+        "ADBE",
+        "ORCL",
+        "PANW",
+        "SPY"
+      ],
+      "symbols_failed": [],
+      "retry_exhausted_symbols": [],
+      "rows_written": 4,
+      "error_messages": []
+    }
+  },
+  "coverage": {
+    "status": "fresh",
+    "required_count": 4,
+    "present_count": 4,
+    "coverage_ratio": 1.0,
+    "missing_symbols": []
+  },
+  "asset_status": [
+    {
+      "asset_key": "market_price_daily",
+      "asset_type": "market_data",
+      "provider": "yahoo_finance",
+      "last_success_at": "2026-04-17T00:00:00",
+      "last_available_date": "2026-04-17",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows=24147; run_id=run_market_daily_8c7a479ebc8d",
+      "updated_at": "2026-04-18T21:32:30.951310+00:00"
+    },
+    {
+      "asset_key": "market_quotes",
+      "asset_type": "market_data",
+      "provider": "yahoo_finance",
+      "last_success_at": "2026-04-17T04:00:00+00:00",
+      "last_available_date": "2026-04-17",
+      "freshness_status": "stale_within_tolerance",
+      "coverage_status": "fresh",
+      "reason": "rows=4; run_id=run_quotes_latest_7074aaf44e20",
+      "updated_at": "2026-04-18T21:32:30.951310+00:00"
+    },
+    {
+      "asset_key": "ticker_market_stats_snapshot",
+      "asset_type": "derived",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-18T21:32:30.932955+00:00",
+      "last_available_date": "2026-04-18",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "rows=8; run_id=ticker_market_stats_snapshot_build",
+      "updated_at": "2026-04-18T21:32:30.951310+00:00"
+    },
+    {
+      "asset_key": "data_ops_publish_pipeline",
+      "asset_type": "pipeline",
+      "provider": "data_ops",
+      "last_success_at": "2026-04-18T21:32:41.532482+00:00",
+      "last_available_date": "2026-04-18",
+      "freshness_status": "fresh",
+      "coverage_status": "fresh",
+      "reason": "success; run_id=run_dataops_market_daily_84e4385f102c",
+      "updated_at": "2026-04-18T21:32:41.532482+00:00"
+    }
+  ],
+  "published": {
+    "prices": {
+      "market_price_daily": {
+        "status_code": 201,
+        "data": null,
+        "table": "market_price_daily",
+        "rows": 24147
+      },
+      "market_quotes": {
+        "status_code": 201,
+        "data": null,
+        "table": "market_quotes",
+        "rows": 4
+      },
+      "market_quotes_history": {
+        "status_code": 201,
+        "data": null,
+        "table": "market_quotes_history",
+        "rows": 4
+      },
+      "mv_latest_prices": {
+        "status_code": 204,
+        "data": null
+      }
+    },
+    "product_metrics": {
+      "status_code": 201,
+      "data": null,
+      "table": "ticker_market_stats_snapshot",
+      "rows": 8
+    },
+    "status": {
+      "data_source_runs": {
+        "status_code": 201,
+        "data": null,
+        "table": "data_source_runs",
+        "rows": 3
+      },
+      "data_asset_status": {
+        "status_code": 201,
+        "data": null,
+        "table": "data_asset_status",
+        "rows": 4
+      },
+      "symbol_data_coverage": {
+        "status_code": 201,
+        "data": null,
+        "table": "symbol_data_coverage",
+        "rows": 4
+      }
+    }
+  },
+  "publish_failures": [],
+  "rows": {
+    "market_price_daily": 24147,
+    "market_quotes": 4,
+    "ticker_market_stats_snapshot": 8
+  },
+  "execution": {
+    "domain": "market",
+    "mode": "normal",
+    "start_date": "2000-01-01",
+    "end_date": "2026-04-18",
+    "expected_end_date": "2026-04-18",
+    "latest_complete_canonical_date": null,
+    "gap_exists": false,
+    "missing_dates_count": 0,
+    "earliest_missing_date": null,
+    "safety_overlap_days": 2,
+    "canonical_source": "supabase",
+    "table_name": "market_price_daily",
+    "date_column": "date"
+  }
+}

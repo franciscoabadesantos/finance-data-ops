@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -74,10 +75,18 @@ def _is_missing_scalar(value: Any) -> bool:
 
 
 class SupabaseRestPublisher:
-    def __init__(self, *, supabase_url: str, service_role_key: str, timeout_seconds: int = 60) -> None:
+    def __init__(
+        self,
+        *,
+        supabase_url: str,
+        service_role_key: str,
+        timeout_seconds: int = 300,
+        max_retries: int = 3,
+    ) -> None:
         self.supabase_url = str(supabase_url).strip().rstrip("/")
         self.service_role_key = str(service_role_key).strip()
         self.timeout_seconds = int(timeout_seconds)
+        self.max_retries = max(int(max_retries), 1)
         if not self.supabase_url:
             raise ValueError("SUPABASE_URL is required.")
         if not self.service_role_key:
@@ -134,14 +143,27 @@ class SupabaseRestPublisher:
         if prefer:
             headers["Prefer"] = prefer
         request = urllib.request.Request(url=url, data=body, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                raw = response.read().decode("utf-8")
-                parsed = json.loads(raw) if raw else None
-                return {"status_code": int(response.status), "data": parsed}
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Supabase request failed ({method} {path}): HTTP {exc.code} {detail}") from exc
+        attempt = 1
+        while True:
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    raw = response.read().decode("utf-8")
+                    parsed = json.loads(raw) if raw else None
+                    return {"status_code": int(response.status), "data": parsed}
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                retryable_codes = {408, 429, 500, 502, 503, 504, 520, 521, 522, 524}
+                if int(exc.code) in retryable_codes and attempt < self.max_retries:
+                    time.sleep(float(2 ** (attempt - 1)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"Supabase request failed ({method} {path}): HTTP {exc.code} {detail}") from exc
+            except (TimeoutError, urllib.error.URLError) as exc:
+                if attempt < self.max_retries:
+                    time.sleep(float(2 ** (attempt - 1)))
+                    attempt += 1
+                    continue
+                raise RuntimeError(f"Supabase request failed ({method} {path}): {exc!r}") from exc
 
 
 @dataclass(slots=True)

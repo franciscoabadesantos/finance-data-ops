@@ -7,6 +7,8 @@ from typing import Iterable
 
 import pandas as pd
 
+from finance_data_ops.providers.macro import DEFAULT_REQUIRED_FROM_DATE_BY_SERIES
+
 
 class MacroValidationError(ValueError):
     """Raised when macro contract validation fails."""
@@ -61,16 +63,10 @@ def validate_macro_publish_contract(
         now_ts = now_ts.tz_localize("UTC")
     else:
         now_ts = now_ts.tz_convert("UTC")
-    required_set = {str(v).strip() for v in (required_series_keys or []) if str(v).strip()}
-    if not required_set and "required_by_default" in series_catalog.columns and "series_key" in series_catalog.columns:
-        required_set = {
-            str(v).strip()
-            for v in series_catalog.loc[
-                series_catalog["required_by_default"].astype(bool),
-                "series_key",
-            ].astype(str)
-            if str(v).strip()
-        }
+    required_set = _resolve_required_set(
+        series_catalog=series_catalog,
+        required_series_keys=required_series_keys,
+    )
 
     _assert_columns("macro_series_catalog", series_catalog, _REQUIRED_CATALOG_COLUMNS)
     _assert_columns("macro_observations", macro_observations, _REQUIRED_OBSERVATION_COLUMNS)
@@ -124,17 +120,24 @@ def validate_macro_publish_contract(
         latest_as_of = pd.to_datetime(macro_daily["as_of_date"], errors="coerce").max()
         if pd.isna(latest_as_of):
             raise MacroValidationError("macro_daily has invalid as_of_date values.")
+        active_required_set = _required_series_for_as_of_date(
+            required_set=required_set,
+            series_catalog=series_catalog,
+            as_of_date=pd.Timestamp(latest_as_of).normalize(),
+        )
+        if not active_required_set:
+            return
         latest_rows = macro_daily[pd.to_datetime(macro_daily["as_of_date"], errors="coerce") == latest_as_of].copy()
         latest_rows["series_key"] = latest_rows["series_key"].astype(str)
 
-        missing_required = sorted(required_set.difference(set(latest_rows["series_key"].tolist())))
+        missing_required = sorted(active_required_set.difference(set(latest_rows["series_key"].tolist())))
         if missing_required:
             raise MacroValidationError(
                 "macro_daily latest as_of_date is missing required series: "
                 + ",".join(missing_required)
             )
 
-        req_rows = latest_rows[latest_rows["series_key"].isin(required_set)].copy()
+        req_rows = latest_rows[latest_rows["series_key"].isin(active_required_set)].copy()
         req_values = pd.to_numeric(req_rows.get("value"), errors="coerce")
         null_required = req_rows.loc[req_values.isna(), "series_key"].astype(str).tolist()
         if null_required:
@@ -195,3 +198,51 @@ def _assert_valid_date_column(
         null_mask = parsed.isna()
         if null_mask.any():
             raise MacroValidationError(f"{table_name}.{column} contains {int(null_mask.sum())} NULL date values.")
+
+
+def _resolve_required_set(
+    *,
+    series_catalog: pd.DataFrame,
+    required_series_keys: Iterable[str] | None,
+) -> set[str]:
+    required_set = {str(v).strip() for v in (required_series_keys or []) if str(v).strip()}
+    if required_set:
+        return required_set
+    if "required_by_default" in series_catalog.columns and "series_key" in series_catalog.columns:
+        return {
+            str(v).strip()
+            for v in series_catalog.loc[
+                series_catalog["required_by_default"].astype(bool),
+                "series_key",
+            ].astype(str)
+            if str(v).strip()
+        }
+    return set()
+
+
+def _required_series_for_as_of_date(
+    *,
+    required_set: set[str],
+    series_catalog: pd.DataFrame,
+    as_of_date: pd.Timestamp,
+) -> set[str]:
+    # Time-aware requiredness: a required series becomes mandatory only after its activation date.
+    required_from_by_series: dict[str, pd.Timestamp] = {
+        key: pd.Timestamp(value).normalize() for key, value in DEFAULT_REQUIRED_FROM_DATE_BY_SERIES.items()
+    }
+
+    if {"series_key", "required_from_date"}.issubset(series_catalog.columns):
+        local = series_catalog[["series_key", "required_from_date"]].copy()
+        local["series_key"] = local["series_key"].astype(str)
+        local["required_from_date"] = pd.to_datetime(local["required_from_date"], errors="coerce").dt.normalize()
+        for _, row in local.dropna(subset=["required_from_date"]).iterrows():
+            series_key = str(row["series_key"]).strip()
+            if series_key:
+                required_from_by_series[series_key] = pd.Timestamp(row["required_from_date"]).normalize()
+
+    active: set[str] = set()
+    for series_key in required_set:
+        required_from = required_from_by_series.get(series_key)
+        if required_from is None or required_from <= as_of_date:
+            active.add(series_key)
+    return active

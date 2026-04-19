@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, time as clock_time
+import logging
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -24,6 +25,7 @@ from finance_data_ops.refresh.storage import write_parquet_table
 
 _DEFAULT_RELEASE_TIMEZONE = "America/New_York"
 _MARKET_CLOSE_LOCAL_TIME = clock_time(hour=16, minute=0)
+LOGGER = logging.getLogger("finance_data_ops.refresh.macro_daily")
 
 
 def refresh_macro_daily(
@@ -47,6 +49,15 @@ def refresh_macro_daily(
         raise ValueError("macro refresh end date must be on/after start date")
 
     catalog = tuple(series_catalog or MACRO_SERIES_CATALOG)
+    LOGGER.info(
+        "Macro refresh started (run_id=%s start=%s end=%s series=%s max_attempts=%s force_recompute=%s).",
+        run_id,
+        start_ts.date().isoformat(),
+        end_ts.date().isoformat(),
+        len(catalog),
+        max(int(max_attempts), 1),
+        bool(force_recompute),
+    )
     catalog_df = catalog_frame(catalog)
 
     observations_rows: list[dict[str, object]] = []
@@ -62,7 +73,7 @@ def refresh_macro_daily(
         def _fetch_one() -> pd.Series:
             return provider.fetch_series(spec, start=start_ts, end=end_ts)
 
-        result, error, _, exhausted_retry_path = run_with_retry(
+        result, error, attempts_used, exhausted_retry_path = run_with_retry(
             _fetch_one,
             max_attempts=max_attempts,
             sleep_seconds=0.0,
@@ -74,6 +85,15 @@ def refresh_macro_daily(
                 retry_exhausted_symbols.append(spec.key)
             classification = classify_failure(error or RuntimeError("unknown macro refresh failure"))
             error_messages.append(f"{spec.key}: {classification.message}")
+            LOGGER.warning(
+                "Series fetch failed (series=%s source=%s attempts=%s code=%s retryable=%s message=%s).",
+                spec.key,
+                spec.source,
+                attempts_used,
+                classification.code,
+                classification.retryable,
+                classification.message,
+            )
             continue
 
         series = pd.to_numeric(result, errors="coerce").dropna()
@@ -81,11 +101,31 @@ def refresh_macro_daily(
             if spec.required_by_default:
                 symbols_failed.append(spec.key)
                 error_messages.append(f"{spec.key}: provider returned zero rows for required series")
+                LOGGER.warning(
+                    "Required series returned empty data (series=%s source=%s attempts=%s).",
+                    spec.key,
+                    spec.source,
+                    attempts_used,
+                )
+            else:
+                LOGGER.info(
+                    "Optional series returned empty data (series=%s source=%s attempts=%s).",
+                    spec.key,
+                    spec.source,
+                    attempts_used,
+                )
             continue
 
         rows = _series_to_observation_rows(spec=spec, series=series, ingested_at=ingested_at)
         observations_rows.extend(rows)
         symbols_succeeded.append(spec.key)
+        LOGGER.info(
+            "Series fetch succeeded (series=%s source=%s attempts=%s rows=%s).",
+            spec.key,
+            spec.source,
+            attempts_used,
+            int(len(series.index)),
+        )
 
     observations = pd.DataFrame(observations_rows)
     if observations.empty:
@@ -149,6 +189,13 @@ def refresh_macro_daily(
         mode="replace" if force_recompute else "append",
         dedupe_subset=["as_of_date", "series_key"],
     )
+    LOGGER.info(
+        "Local parquet writes completed (catalog_rows=%s observations_rows=%s macro_daily_rows=%s cache_root=%s).",
+        int(len(catalog_df.index)),
+        int(len(observations.index)),
+        int(len(macro_daily.index)),
+        cache_root,
+    )
 
     required_failed = sorted(set(DEFAULT_REQUIRED_SERIES_KEYS).intersection(set(symbols_failed)))
     if required_failed and symbols_succeeded:
@@ -172,6 +219,14 @@ def refresh_macro_daily(
         retry_exhausted_symbols=sorted(set(retry_exhausted_symbols)),
         rows_written=int(len(catalog_df.index) + len(observations.index) + len(macro_daily.index)),
         error_messages=error_messages,
+    )
+    LOGGER.info(
+        "Macro refresh finished (run_id=%s status=%s succeeded=%s failed=%s retry_exhausted=%s).",
+        run_id,
+        status,
+        len(refresh_result.symbols_succeeded),
+        len(refresh_result.symbols_failed),
+        len(refresh_result.retry_exhausted_symbols),
     )
     return catalog_df, observations, macro_daily, refresh_result
 

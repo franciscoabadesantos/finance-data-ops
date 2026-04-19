@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -29,6 +30,8 @@ from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import load_settings
 from finance_data_ops.validation.freshness import FreshnessState, classify_freshness
 
+LOGGER = logging.getLogger("finance_data_ops.flows.dataops_macro_daily")
+
 
 def run_dataops_macro_daily(
     *,
@@ -45,12 +48,21 @@ def run_dataops_macro_daily(
     flow_started_at = datetime.now(UTC)
     flow_run_id = f"run_dataops_macro_daily_{uuid4().hex[:12]}"
     settings = load_settings(cache_root=cache_root)
+    LOGGER.info(
+        "Flow started (run_id=%s start=%s end=%s publish_enabled=%s cache_root=%s).",
+        flow_run_id,
+        start,
+        end,
+        bool(publish_enabled),
+        settings.cache_root,
+    )
 
     release_calendar = read_parquet_table(
         "economic_release_calendar",
         cache_root=settings.cache_root,
         required=False,
     )
+    LOGGER.info("Loaded release calendar snapshot (rows=%s).", int(len(release_calendar.index)))
 
     provider_impl = provider or MacroDataProvider()
     catalog_frame, observations_frame, daily_frame, macro_run = refresh_macro_daily(
@@ -61,6 +73,13 @@ def run_dataops_macro_daily(
         release_calendar_frame=(release_calendar if not release_calendar.empty else None),
         max_attempts=max_attempts,
         force_recompute=bool(force_recompute),
+    )
+    LOGGER.info(
+        "Refresh completed (status=%s succeeded=%s failed=%s rows_written=%s).",
+        macro_run.status,
+        len(macro_run.symbols_succeeded),
+        len(macro_run.symbols_failed),
+        macro_run.rows_written,
     )
 
     status_rows = _build_asset_status_rows(
@@ -80,8 +99,10 @@ def run_dataops_macro_daily(
                 supabase_url=settings.supabase_url,
                 service_role_key=settings.supabase_service_role_key,
             )
+        LOGGER.info("Using Supabase publisher for macro/status surfaces.")
     else:
         publisher_impl = publisher or RecordingPublisher()
+        LOGGER.info("Publish disabled; using recording publisher (dry-run mode).")
 
     publish_failures: list[dict[str, Any]] = []
     publish_results: dict[str, Any] = {}
@@ -99,6 +120,7 @@ def run_dataops_macro_daily(
             failures=publish_failures,
         )
         publish_results["macro"] = macro_result
+        LOGGER.info("Macro publish step status=%s.", str(macro_result.get("status")))
 
     if publish_failures:
         for failure in publish_failures:
@@ -159,6 +181,7 @@ def run_dataops_macro_daily(
         failures=publish_failures,
     )
     publish_results["status"] = status_result
+    LOGGER.info("Status publish step status=%s.", str(status_result.get("status")))
 
     hard_failure = bool(publish_failures) or overall_state in {
         FreshnessState.FAILED_HARD,
@@ -177,11 +200,22 @@ def run_dataops_macro_daily(
         )
         emit_alert(payload)
         emit_alert_webhook(payload, webhook_url=settings.alert_webhook_url)
+        LOGGER.error(
+            "Flow ended unhealthy (overall_state=%s publish_failures=%s).",
+            overall_state,
+            len(publish_failures),
+        )
         raise RuntimeError(
             "macro daily flow unhealthy: "
             f"overall_state={overall_state} publish_failures={len(publish_failures)}"
         )
 
+    LOGGER.info(
+        "Flow completed (run_id=%s overall_state=%s publish_failures=%s).",
+        flow_run_id,
+        overall_state,
+        len(publish_failures),
+    )
     return {
         "flow_run_id": flow_run_id,
         "window": {"start": start, "end": end},
