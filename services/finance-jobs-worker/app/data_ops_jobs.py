@@ -12,6 +12,7 @@ from flows.dataops_macro_daily import run_dataops_macro_daily
 from flows.dataops_market_daily import run_dataops_market_daily
 from flows.dataops_release_calendar_daily import run_dataops_release_calendar_daily
 from finance_data_ops.providers.macro import MacroSeriesSpec
+from finance_data_ops.providers.release_calendar import EconomicReleaseCalendarProvider
 from finance_data_ops.publish.client import SupabaseRestPublisher
 from finance_data_ops.publish.release_calendar import publish_release_calendar_surfaces
 from finance_data_ops.rebuild.executor import execute_rebuild_plan
@@ -65,6 +66,12 @@ def run_data_ops_rebuild_job(
         end_date=end_date,
     )
     preview = plan.dry_run_summary
+    preview = _augment_rebuild_preview_with_source_estimates(
+        domain=domain,
+        preview=preview,
+        start_date=start_date,
+        end_date=end_date,
+    )
     if dry_run:
         return {
             "status": "completed",
@@ -411,6 +418,40 @@ def _build_rebuild_preview(
         )
         preview["estimated_rows"][table_name] = estimated
     return preview
+
+
+def _augment_rebuild_preview_with_source_estimates(
+    *,
+    domain: str,
+    preview: dict[str, Any],
+    start_date: str,
+    end_date: str,
+) -> dict[str, Any]:
+    enriched = dict(preview)
+    chunks = [dict(chunk) for chunk in list(enriched.get("chunks") or [])]
+    if domain != "release-calendar":
+        enriched["chunks"] = chunks
+        return enriched
+
+    provider = EconomicReleaseCalendarProvider()
+    frame = provider.build_release_calendar(
+        start_date=date.fromisoformat(start_date),
+        end_date=date.fromisoformat(end_date),
+    )
+    counts_by_series = (
+        frame.groupby("series_key").size().astype(int).to_dict()
+        if not frame.empty
+        else {}
+    )
+    for chunk in chunks:
+        series_batch = tuple(str(value).strip() for value in list(chunk.get("series_batch") or []) if str(value).strip())
+        chunk["estimated_source_rows"] = int(sum(int(counts_by_series.get(series_key, 0)) for series_key in series_batch))
+    enriched["chunks"] = chunks
+    enriched["estimated_source_rows_total"] = int(len(frame.index))
+    enriched["estimated_source_rows_by_series"] = {
+        str(key): int(value) for key, value in sorted(counts_by_series.items())
+    }
+    return enriched
 
 
 def _execute_wipe(

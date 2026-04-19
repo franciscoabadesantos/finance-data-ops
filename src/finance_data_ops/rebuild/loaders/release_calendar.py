@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pandas as pd
@@ -10,6 +11,8 @@ from finance_data_ops.providers.release_calendar import EconomicReleaseCalendarP
 from finance_data_ops.publish.client import SupabaseRestPublisher
 from finance_data_ops.publish.release_calendar import publish_release_calendar_surfaces
 from finance_data_ops.refresh.release_calendar_daily import refresh_release_calendar_daily
+
+logger = logging.getLogger(__name__)
 
 
 def load_release_calendar_chunk(
@@ -34,8 +37,21 @@ def load_release_calendar_chunk(
         force_recompute=bool(force_recompute),
     )
     frame = release_calendar_frame.copy()
+    provider_rows = int(len(frame.index))
     if not frame.empty and series_keys:
         frame = frame.loc[frame["series_key"].astype(str).isin(set(series_keys))].copy()
+    filtered_rows = int(len(frame.index))
+    logger.info(
+        "Release-calendar rebuild chunk prepared (series_keys=%s start=%s end=%s provider_rows=%s filtered_rows=%s refresh_status=%s succeeded=%s failed=%s).",
+        list(series_keys),
+        start_date,
+        end_date,
+        provider_rows,
+        filtered_rows,
+        refresh_run.status,
+        refresh_run.symbols_succeeded,
+        refresh_run.symbols_failed,
+    )
     if frame.empty:
         publish_result = {"status": "skipped", "reason": "empty_chunk"}
     else:
