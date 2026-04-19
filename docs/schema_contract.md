@@ -91,6 +91,8 @@ Historical numbered SQL files remain in the repo for older-instance archaeology,
 Compatibility note:
 
 - `release_timestamp_utc` is retained as a backward-compatible alias of `scheduled_release_timestamp_utc`.
+- Treat `release_timestamp_utc` as a scheduled timestamp alias, not as proof that the release was actually observed in the wild.
+- Actual observed availability belongs in `observed_first_available_at_utc`.
 
 ## Operational surfaces
 

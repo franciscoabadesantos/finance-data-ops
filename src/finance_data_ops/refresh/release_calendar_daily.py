@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 import logging
+import os
 from uuid import uuid4
 
 import pandas as pd
@@ -14,6 +15,10 @@ from finance_data_ops.refresh.market_daily import RefreshRunResult
 from finance_data_ops.refresh.storage import write_parquet_table
 
 logger = logging.getLogger(__name__)
+
+
+def _release_calendar_debug_enabled() -> bool:
+    return str(os.getenv("FINANCE_DATA_OPS_REBUILD_DEBUG", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def refresh_release_calendar_daily(
@@ -90,17 +95,18 @@ def refresh_release_calendar_daily(
         if late_count > 0:
             error_messages.append(f"late_missing_observation_rows={late_count}")
 
-    logger.info(
-        "Release-calendar refresh finished (run_id=%s start=%s end=%s status=%s provider_rows=%s succeeded=%s failed=%s errors=%s).",
-        run_id,
-        start.isoformat(),
-        end.isoformat(),
-        status,
-        int(len(release_calendar.index)),
-        symbols_succeeded,
-        symbols_failed,
-        error_messages,
-    )
+    if _release_calendar_debug_enabled():
+        logger.info(
+            "Release-calendar refresh finished (run_id=%s start=%s end=%s status=%s provider_rows=%s succeeded=%s failed=%s errors=%s).",
+            run_id,
+            start.isoformat(),
+            end.isoformat(),
+            status,
+            int(len(release_calendar.index)),
+            symbols_succeeded,
+            symbols_failed,
+            error_messages,
+        )
 
     write_parquet_table(
         "economic_release_calendar",
