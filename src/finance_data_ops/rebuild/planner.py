@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from finance_data_ops.providers.macro import MACRO_SERIES_CATALOG
+from finance_data_ops.providers.macro import MACRO_SERIES_CATALOG, _default_release_calendar_source
 from finance_data_ops.rebuild.policies import DomainPolicy, get_domain_policy
 
 
@@ -124,7 +124,9 @@ def _resolve_series_start_dates(*, client: Any, domain: str, policy: DomainPolic
     if domain not in {"macro", "release-calendar"}:
         return {}
 
-    catalog_response = client.table("macro_series_catalog").select("series_key,required_from_date").execute()
+    catalog_response = client.table("macro_series_catalog").select(
+        "series_key,required_from_date,release_calendar_source"
+    ).execute()
     rows = [dict(item) for item in (catalog_response.data or []) if isinstance(item, dict)]
     resolved: dict[str, str] = {}
     fallback_start = (
@@ -137,6 +139,9 @@ def _resolve_series_start_dates(*, client: Any, domain: str, policy: DomainPolic
             key = str(row.get("series_key") or "").strip()
             if not key:
                 continue
+            release_calendar_source = str(row.get("release_calendar_source") or "").strip()
+            if domain == "release-calendar" and not release_calendar_source:
+                continue
             required_from = str(row.get("required_from_date") or "").strip()
             if required_from:
                 resolved[key] = required_from[:10]
@@ -145,6 +150,8 @@ def _resolve_series_start_dates(*, client: Any, domain: str, policy: DomainPolic
 
     if not resolved:
         for spec in MACRO_SERIES_CATALOG:
+            if domain == "release-calendar" and not _default_release_calendar_source(spec.key):
+                continue
             if spec.required_from_date is not None:
                 resolved[spec.key] = spec.required_from_date.isoformat()
             else:
