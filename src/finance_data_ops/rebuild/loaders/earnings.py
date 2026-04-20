@@ -72,6 +72,13 @@ def load_earnings_chunk(
             earnings_history=filtered_history,
             refresh_materialized_view=False,
         )
+    symbol_breakdown = _build_symbol_breakdown(
+        tickers=tickers,
+        provider_events=events_frame,
+        provider_history=history_frame,
+        filtered_events=filtered_events,
+        filtered_history=filtered_history,
+    )
     return {
         "refresh_run": refresh_run.as_dict(),
         "publish_result": publish_result,
@@ -84,6 +91,7 @@ def load_earnings_chunk(
             "earnings_events": filtered_event_rows,
             "market_earnings_history": filtered_history_rows,
         },
+        "symbol_breakdown": symbol_breakdown,
         "window_filter_field": "earnings_date",
         "rows_written": int(len(filtered_events.index) + len(filtered_history.index)),
         "touched_symbols": list(tickers),
@@ -107,3 +115,54 @@ def _resolve_earnings_history_limit(*, start_date: date, end_date: date) -> int:
     # nearest past results plus any upcoming event rows from the provider.
     estimated_quarters = (window_days + 89) // 90
     return max(8, min(estimated_quarters + 4, 100))
+
+
+def _build_symbol_breakdown(
+    *,
+    tickers: tuple[str, ...],
+    provider_events: pd.DataFrame,
+    provider_history: pd.DataFrame,
+    filtered_events: pd.DataFrame,
+    filtered_history: pd.DataFrame,
+) -> list[dict[str, object]]:
+    provider_event_counts = _count_by_ticker(provider_events)
+    provider_history_counts = _count_by_ticker(provider_history)
+    filtered_event_counts = _count_by_ticker(filtered_events)
+    filtered_history_counts = _count_by_ticker(filtered_history)
+    breakdown: list[dict[str, object]] = []
+    for ticker in tickers:
+        normalized = str(ticker).strip().upper()
+        provider_events_rows = int(provider_event_counts.get(normalized, 0))
+        provider_history_rows = int(provider_history_counts.get(normalized, 0))
+        filtered_events_rows = int(filtered_event_counts.get(normalized, 0))
+        filtered_history_rows = int(filtered_history_counts.get(normalized, 0))
+        provider_total = provider_events_rows + provider_history_rows
+        filtered_total = filtered_events_rows + filtered_history_rows
+        breakdown.append(
+            {
+                "ticker": normalized,
+                "provider_rows": {
+                    "earnings_events": provider_events_rows,
+                    "market_earnings_history": provider_history_rows,
+                },
+                "filtered_rows": {
+                    "earnings_events": filtered_events_rows,
+                    "market_earnings_history": filtered_history_rows,
+                },
+                "rows_written": filtered_total,
+                "zero_reason": (
+                    "provider_returned_empty"
+                    if provider_total == 0
+                    else ("window_filter_no_matches" if filtered_total == 0 else None)
+                ),
+            }
+        )
+    return breakdown
+
+
+def _count_by_ticker(frame: pd.DataFrame) -> dict[str, int]:
+    if frame.empty or "ticker" not in frame.columns:
+        return {}
+    series = frame["ticker"].astype(str).str.strip().str.upper()
+    counts = series.value_counts(dropna=False)
+    return {str(index): int(value) for index, value in counts.items() if str(index).strip()}
