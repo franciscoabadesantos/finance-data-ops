@@ -37,9 +37,11 @@ def execute_rebuild_plan(
     progress_store = progress or NullRebuildProgressStore()
     health_gate = RebuildHealthGate(client=client, policy=plan.policy)
     health_checks: list[dict[str, Any]] = []
+    batch_results: list[dict[str, Any]] = []
     rows_written_total = 0
     touched_symbols: list[str] = []
     touched_series: list[str] = []
+    consecutive_chunk_failures = 0
 
     try:
         preflight = health_gate.check()
@@ -145,63 +147,115 @@ def execute_rebuild_plan(
             },
         )
 
-        if plan.domain == "macro":
-            batch_result = load_macro_chunk(
-                publisher=publisher,
-                provider=MacroDataProvider(),
-                cache_root=cache_root,
-                start_date=str(chunk.start_date),
-                end_date=str(chunk.end_date),
-                series_keys=chunk.series_batch,
-                max_attempts=max_attempts,
-                force_recompute=True,
+        try:
+            if plan.domain == "macro":
+                batch_result = load_macro_chunk(
+                    publisher=publisher,
+                    provider=MacroDataProvider(),
+                    cache_root=cache_root,
+                    start_date=str(chunk.start_date),
+                    end_date=str(chunk.end_date),
+                    series_keys=chunk.series_batch,
+                    max_attempts=max_attempts,
+                    force_recompute=True,
+                )
+            elif plan.domain == "release-calendar":
+                batch_result = load_release_calendar_chunk(
+                    publisher=publisher,
+                    provider=EconomicReleaseCalendarProvider(),
+                    cache_root=cache_root,
+                    start_date=str(chunk.start_date),
+                    end_date=str(chunk.end_date),
+                    series_keys=chunk.series_batch,
+                    max_attempts=max_attempts,
+                    force_recompute=True,
+                    sleep_seconds=plan.policy.sleep_seconds,
+                )
+            elif plan.domain == "market":
+                batch_result = load_market_chunk(
+                    publisher=publisher,
+                    provider=MarketDataProvider(),
+                    cache_root=cache_root,
+                    tickers=chunk.ticker_batch,
+                    start_date=str(chunk.start_date),
+                    end_date=str(chunk.end_date),
+                    max_attempts=max_attempts,
+                    symbol_batch_size=symbol_batch_size,
+                )
+            elif plan.domain == "fundamentals":
+                batch_result = load_fundamentals_chunk(
+                    publisher=publisher,
+                    provider=FundamentalsDataProvider(),
+                    cache_root=cache_root,
+                    tickers=chunk.ticker_batch,
+                    start_date=str(chunk.start_date),
+                    end_date=str(chunk.end_date),
+                    max_attempts=max_attempts,
+                )
+            elif plan.domain == "earnings":
+                batch_result = load_earnings_chunk(
+                    publisher=publisher,
+                    provider=EarningsDataProvider(),
+                    cache_root=cache_root,
+                    tickers=chunk.ticker_batch,
+                    start_date=str(chunk.start_date),
+                    end_date=str(chunk.end_date),
+                    max_attempts=max_attempts,
+                    history_limit=history_limit,
+                )
+            else:
+                raise ValueError(f"Unsupported rebuild domain: {plan.domain!r}")
+
+            refresh_run = batch_result.get("refresh_run") or {}
+            refresh_status = str(refresh_run.get("status") or "").strip().lower()
+            if refresh_status in {"failed_hard", "failed_retrying"}:
+                failure_detail = ",".join(str(v) for v in (refresh_run.get("error_messages") or []) if str(v).strip())
+                suffix = f": {failure_detail}" if failure_detail else ""
+                raise RuntimeError(f"refresh_status={refresh_status}{suffix}")
+            consecutive_chunk_failures = 0
+        except Exception as exc:
+            consecutive_chunk_failures += 1
+            abort_reason = f"chunk_failed:{exc}"
+            progress_store.update(
+                job_status="failed",
+                step="loading",
+                step_status="failed",
+                payload={
+                    "summary": "Rebuild batch failed.",
+                    "plan": plan.dry_run_summary,
+                    "current_batch": idx,
+                    "total_batches": total_batches,
+                    "current_window": chunk.as_dict(),
+                    "rows_written_total": rows_written_total,
+                    "rows_deleted_total": 0,
+                    "health_checks": health_checks,
+                    "abort_reason": abort_reason,
+                    "consecutive_chunk_failures": consecutive_chunk_failures,
+                    "finalization_status": "skipped",
+                },
+                error_message=str(exc),
             )
-        elif plan.domain == "release-calendar":
-            batch_result = load_release_calendar_chunk(
-                publisher=publisher,
-                provider=EconomicReleaseCalendarProvider(),
-                cache_root=cache_root,
-                start_date=str(chunk.start_date),
-                end_date=str(chunk.end_date),
-                series_keys=chunk.series_batch,
-                max_attempts=max_attempts,
-                force_recompute=True,
-                sleep_seconds=plan.policy.sleep_seconds,
-            )
-        elif plan.domain == "market":
-            batch_result = load_market_chunk(
-                publisher=publisher,
-                provider=MarketDataProvider(),
-                cache_root=cache_root,
-                tickers=chunk.ticker_batch,
-                start_date=str(chunk.start_date),
-                end_date=str(chunk.end_date),
-                max_attempts=max_attempts,
-                symbol_batch_size=symbol_batch_size,
-            )
-        elif plan.domain == "fundamentals":
-            batch_result = load_fundamentals_chunk(
-                publisher=publisher,
-                provider=FundamentalsDataProvider(),
-                cache_root=cache_root,
-                tickers=chunk.ticker_batch,
-                max_attempts=max_attempts,
-            )
-        elif plan.domain == "earnings":
-            batch_result = load_earnings_chunk(
-                publisher=publisher,
-                provider=EarningsDataProvider(),
-                cache_root=cache_root,
-                tickers=chunk.ticker_batch,
-                max_attempts=max_attempts,
-                history_limit=history_limit,
-            )
-        else:
-            raise ValueError(f"Unsupported rebuild domain: {plan.domain!r}")
+            if consecutive_chunk_failures >= max(int(plan.policy.max_consecutive_chunk_failures), 1):
+                raise
+            continue
 
         rows_written_total += int(batch_result.get("rows_written", 0))
         touched_symbols.extend(str(v).strip().upper() for v in batch_result.get("touched_symbols", []))
         touched_series.extend(str(v).strip() for v in batch_result.get("touched_series", []))
+        batch_results.append(
+            {
+                "batch_index": idx,
+                "current_window": batch_result.get("current_window") or chunk.as_dict(),
+                "refresh_status": refresh_status,
+                "provider_rows": batch_result.get("provider_rows"),
+                "filtered_rows": batch_result.get("filtered_rows"),
+                "window_filter_field": batch_result.get("window_filter_field"),
+                "rows_written": int(batch_result.get("rows_written", 0)),
+                "publish_result": batch_result.get("publish_result"),
+                "touched_symbols": list(batch_result.get("touched_symbols", [])),
+                "touched_series": list(batch_result.get("touched_series", [])),
+            }
+        )
 
         progress_store.update(
             job_status="running",
@@ -281,12 +335,14 @@ def execute_rebuild_plan(
             "rows_deleted_total": 0,
             "health_checks": health_checks,
             "finalization_status": "completed",
+            "batch_results": batch_results,
             "finalization": finalization,
         },
     )
     return {
         "rows_written_total": rows_written_total,
         "health_checks": health_checks,
+        "batch_results": batch_results,
         "finalization": finalization,
         "touched_symbols": sorted(set(touched_symbols)),
         "touched_series": sorted(set(touched_series)),

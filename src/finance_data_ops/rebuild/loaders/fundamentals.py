@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import date
+import logging
+
+import pandas as pd
+
 from finance_data_ops.derived.fundamentals_summary import compute_ticker_fundamental_summary
 from finance_data_ops.publish.client import SupabaseRestPublisher
 from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
 from finance_data_ops.refresh.fundamentals_daily import refresh_fundamentals_daily
+
+logger = logging.getLogger(__name__)
 
 
 def load_fundamentals_chunk(
@@ -15,6 +22,8 @@ def load_fundamentals_chunk(
     provider: FundamentalsDataProvider,
     cache_root: str,
     tickers: tuple[str, ...],
+    start_date: str,
+    end_date: str,
     max_attempts: int = 3,
 ) -> dict[str, object]:
     fundamentals_frame, refresh_run = refresh_fundamentals_daily(
@@ -23,19 +32,49 @@ def load_fundamentals_chunk(
         cache_root=cache_root,
         max_attempts=max_attempts,
     )
-    summary_frame = compute_ticker_fundamental_summary(fundamentals_frame)
-    publish_result = publish_fundamentals_surfaces(
-        publisher=publisher,
-        fundamentals_history=fundamentals_frame,
-        fundamentals_summary=summary_frame,
-        refresh_materialized_view=False,
+    provider_rows = int(len(fundamentals_frame.index))
+    filtered_frame = _filter_fundamentals_window(
+        fundamentals_frame,
+        start_date=date.fromisoformat(str(start_date)),
+        end_date=date.fromisoformat(str(end_date)),
     )
+    filtered_rows = int(len(filtered_frame.index))
+    logger.info(
+        "Fundamentals rebuild chunk prepared (tickers=%s start=%s end=%s provider_rows=%s filtered_rows=%s refresh_status=%s).",
+        list(tickers),
+        start_date,
+        end_date,
+        provider_rows,
+        filtered_rows,
+        refresh_run.status,
+    )
+    summary_frame = compute_ticker_fundamental_summary(filtered_frame)
+    if filtered_frame.empty and summary_frame.empty:
+        publish_result = {"status": "skipped", "reason": "window_filter_no_matches"}
+    else:
+        publish_result = publish_fundamentals_surfaces(
+            publisher=publisher,
+            fundamentals_history=filtered_frame,
+            fundamentals_summary=summary_frame,
+            refresh_materialized_view=False,
+        )
     return {
         "refresh_run": refresh_run.as_dict(),
         "publish_result": publish_result,
-        "rows_written": int(len(fundamentals_frame.index) + len(summary_frame.index)),
+        "provider_rows": provider_rows,
+        "filtered_rows": filtered_rows,
+        "window_filter_field": "period_end",
+        "rows_written": int(len(filtered_frame.index) + len(summary_frame.index)),
         "touched_symbols": list(tickers),
         "touched_series": [],
-        "current_window": None,
+        "current_window": {"start_date": start_date, "end_date": end_date},
     }
 
+
+def _filter_fundamentals_window(frame: pd.DataFrame, *, start_date: date, end_date: date) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+    local = frame.copy()
+    period_end = pd.to_datetime(local.get("period_end"), errors="coerce").dt.date
+    filtered = local.loc[period_end.notna() & (period_end >= start_date) & (period_end <= end_date)].copy()
+    return filtered.reset_index(drop=True)

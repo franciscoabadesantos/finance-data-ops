@@ -27,6 +27,7 @@ class DomainPolicy:
     preflight_probe_table: str
     inter_batch_health_check_every_n_batches: int
     max_consecutive_db_failures: int
+    max_consecutive_chunk_failures: int
     max_latency_ms: int
     refresh_materialized_views: tuple[str, ...]
     rebuild_status_assets: tuple[str, ...]
@@ -46,8 +47,9 @@ _POLICIES: dict[DomainName, DomainPolicy] = {
         chunk_granularity="ticker_window",
         sleep_seconds=0.1,
         preflight_probe_table="market_price_daily",
-        inter_batch_health_check_every_n_batches=5,
+        inter_batch_health_check_every_n_batches=2,
         max_consecutive_db_failures=3,
+        max_consecutive_chunk_failures=1,
         max_latency_ms=2500,
         refresh_materialized_views=("refresh_mv_latest_prices",),
         rebuild_status_assets=("market_price_daily", "market_quotes", "ticker_market_stats_snapshot"),
@@ -67,6 +69,7 @@ _POLICIES: dict[DomainName, DomainPolicy] = {
         preflight_probe_table="market_fundamentals_v2",
         inter_batch_health_check_every_n_batches=5,
         max_consecutive_db_failures=3,
+        max_consecutive_chunk_failures=1,
         max_latency_ms=2500,
         refresh_materialized_views=("refresh_mv_latest_fundamentals",),
         rebuild_status_assets=("market_fundamentals_v2", "ticker_fundamental_summary", "mv_latest_fundamentals"),
@@ -86,6 +89,7 @@ _POLICIES: dict[DomainName, DomainPolicy] = {
         preflight_probe_table="market_earnings_history",
         inter_batch_health_check_every_n_batches=5,
         max_consecutive_db_failures=3,
+        max_consecutive_chunk_failures=1,
         max_latency_ms=2500,
         refresh_materialized_views=("refresh_mv_next_earnings",),
         rebuild_status_assets=("market_earnings_events", "market_earnings_history", "mv_next_earnings"),
@@ -105,6 +109,7 @@ _POLICIES: dict[DomainName, DomainPolicy] = {
         preflight_probe_table="macro_observations",
         inter_batch_health_check_every_n_batches=3,
         max_consecutive_db_failures=3,
+        max_consecutive_chunk_failures=1,
         max_latency_ms=2500,
         refresh_materialized_views=("refresh_mv_latest_macro_observations",),
         rebuild_status_assets=("macro_observations", "macro_daily", "mv_latest_macro_observations"),
@@ -126,6 +131,7 @@ _POLICIES: dict[DomainName, DomainPolicy] = {
         preflight_probe_table="economic_release_calendar",
         inter_batch_health_check_every_n_batches=3,
         max_consecutive_db_failures=3,
+        max_consecutive_chunk_failures=1,
         max_latency_ms=2500,
         refresh_materialized_views=("refresh_mv_latest_economic_release_calendar",),
         rebuild_status_assets=("economic_release_calendar", "mv_latest_economic_release_calendar"),

@@ -116,6 +116,8 @@ class EconomicReleaseCalendarProvider:
         monthly = self.build_monthly_release_calendar(
             min_observation_date=start_date,
             sleep_seconds=sleep_seconds,
+            release_window_start_date=start_date,
+            release_window_end_date=end_date,
         )
         weekly = self.build_weekly_release_calendar(
             min_observation_date=start_date,
@@ -125,7 +127,12 @@ class EconomicReleaseCalendarProvider:
 
         out = pd.concat([monthly, weekly], ignore_index=True)
         out["observation_date"] = pd.to_datetime(out["observation_date"], errors="coerce").dt.date
-        out = out[(out["observation_date"] >= start_date) & (out["observation_date"] <= end_date)].copy()
+        release_window_dates = pd.to_datetime(
+            out.get("scheduled_release_timestamp_utc"),
+            utc=True,
+            errors="coerce",
+        ).dt.date
+        out = out[(release_window_dates >= start_date) & (release_window_dates <= end_date)].copy()
         sort_col = "scheduled_release_timestamp_utc" if "scheduled_release_timestamp_utc" in out.columns else "release_timestamp_utc"
         out = out.sort_values(["series_key", "observation_period", sort_col]).drop_duplicates(
             subset=["series_key", "observation_period"],
@@ -139,6 +146,8 @@ class EconomicReleaseCalendarProvider:
         *,
         min_observation_date: date,
         sleep_seconds: float = 0.0,
+        release_window_start_date: date | None = None,
+        release_window_end_date: date | None = None,
     ) -> pd.DataFrame:
         rows: list[dict[str, object]] = []
         min_obs_iso = min_observation_date.isoformat()
@@ -159,6 +168,16 @@ class EconomicReleaseCalendarProvider:
                     min_observation_date=min_obs_iso,
                     sleep_seconds=sleep_seconds,
                     present_observation_dates=present_observation_dates,
+                    release_window_start_date=(
+                        release_window_start_date.isoformat()
+                        if release_window_start_date is not None
+                        else None
+                    ),
+                    release_window_end_date=(
+                        release_window_end_date.isoformat()
+                        if release_window_end_date is not None
+                        else None
+                    ),
                 )
 
             for observation_date, scheduled_release_date_local in sorted(schedule_release_by_obs.items()):
@@ -556,6 +575,8 @@ def _derive_monthly_schedule_and_observed(
     min_observation_date: str,
     sleep_seconds: float,
     present_observation_dates: set[str],
+    release_window_start_date: str | None = None,
+    release_window_end_date: str | None = None,
 ) -> tuple[dict[str, str], dict[str, str]]:
     revision_dates = _load_available_revision_dates(anchor_series_id)
 
@@ -567,7 +588,22 @@ def _derive_monthly_schedule_and_observed(
             monthly_first_release[release_month] = release_date
 
     release_dates = [monthly_first_release[k] for k in sorted(monthly_first_release.keys())]
-    release_dates = [d for d in release_dates if d >= min_observation_date]
+    release_window_start = (
+        date.fromisoformat(release_window_start_date)
+        if release_window_start_date
+        else None
+    )
+    release_window_end = (
+        date.fromisoformat(release_window_end_date)
+        if release_window_end_date
+        else None
+    )
+    if release_window_start is not None:
+        release_dates = [d for d in release_dates if date.fromisoformat(d) >= release_window_start]
+    else:
+        release_dates = [d for d in release_dates if d >= min_observation_date]
+    if release_window_end is not None:
+        release_dates = [d for d in release_dates if date.fromisoformat(d) <= release_window_end]
 
     schedule_by_observation: dict[str, str] = {}
     observed_by_observation: dict[str, str] = {}
@@ -581,14 +617,14 @@ def _derive_monthly_schedule_and_observed(
             12 if release_month_start.month == 1 else release_month_start.month - 1,
             1,
         )
-        if max_obs_month_for_release < min_obs_date:
+        if release_window_start is None and max_obs_month_for_release < min_obs_date:
             continue
 
         first_obs_month = max_obs_month_for_release if latest_seen_obs_month is None else _add_month(latest_seen_obs_month)
         current = first_obs_month
         while current <= max_obs_month_for_release:
             obs_iso = current.isoformat()
-            if current >= min_obs_date:
+            if release_window_start is not None or current >= min_obs_date:
                 schedule_by_observation[obs_iso] = release_date
                 if obs_iso in present_observation_dates:
                     observed_by_observation[obs_iso] = release_date

@@ -99,7 +99,7 @@ def build_rebuild_plan(
         "series_start_dates": series_start_dates,
         "chunk_count": len(chunks),
         "chunks": [chunk.as_dict() for chunk in chunks[:50]],
-        "chunk_size": policy.chunk_size,
+        "upsert_batch_size": policy.chunk_size,
         "sleep_seconds": policy.sleep_seconds,
         "refresh_materialized_views": list(policy.refresh_materialized_views),
         "wipe_tables": list(policy.wipe_tables),

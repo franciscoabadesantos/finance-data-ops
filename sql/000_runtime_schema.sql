@@ -516,6 +516,12 @@ create index idx_economic_release_calendar_effective_release
     coalesce(observed_first_available_at_utc, scheduled_release_timestamp_utc) desc
   );
 
+comment on column public.economic_release_calendar.release_timestamp_utc is
+  'Backward-compatible alias of scheduled_release_timestamp_utc. Use observed_first_available_at_utc for actual observed availability.';
+
+comment on column public.economic_release_calendar.observed_first_available_at_utc is
+  'First observed availability timestamp. This is the source of truth for actual release availability when present.';
+
 
 create materialized view public.mv_latest_economic_release_calendar as
 select
