@@ -249,6 +249,7 @@ def execute_rebuild_plan(
                 "refresh_status": refresh_status,
                 "provider_rows": batch_result.get("provider_rows"),
                 "filtered_rows": batch_result.get("filtered_rows"),
+                "symbol_breakdown": batch_result.get("symbol_breakdown"),
                 "window_filter_field": batch_result.get("window_filter_field"),
                 "rows_written": int(batch_result.get("rows_written", 0)),
                 "publish_result": batch_result.get("publish_result"),

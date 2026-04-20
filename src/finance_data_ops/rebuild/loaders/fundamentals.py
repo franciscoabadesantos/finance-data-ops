@@ -58,11 +58,18 @@ def load_fundamentals_chunk(
             fundamentals_summary=summary_frame,
             refresh_materialized_view=False,
         )
+    symbol_breakdown = _build_symbol_breakdown(
+        tickers=tickers,
+        provider_frame=fundamentals_frame,
+        filtered_frame=filtered_frame,
+        summary_frame=summary_frame,
+    )
     return {
         "refresh_run": refresh_run.as_dict(),
         "publish_result": publish_result,
         "provider_rows": provider_rows,
         "filtered_rows": filtered_rows,
+        "symbol_breakdown": symbol_breakdown,
         "window_filter_field": "period_end",
         "rows_written": int(len(filtered_frame.index) + len(summary_frame.index)),
         "touched_symbols": list(tickers),
@@ -78,3 +85,44 @@ def _filter_fundamentals_window(frame: pd.DataFrame, *, start_date: date, end_da
     period_end = pd.to_datetime(local.get("period_end"), errors="coerce").dt.date
     filtered = local.loc[period_end.notna() & (period_end >= start_date) & (period_end <= end_date)].copy()
     return filtered.reset_index(drop=True)
+
+
+def _build_symbol_breakdown(
+    *,
+    tickers: tuple[str, ...],
+    provider_frame: pd.DataFrame,
+    filtered_frame: pd.DataFrame,
+    summary_frame: pd.DataFrame,
+) -> list[dict[str, object]]:
+    provider_counts = _count_by_ticker(provider_frame)
+    filtered_counts = _count_by_ticker(filtered_frame)
+    summary_counts = _count_by_ticker(summary_frame)
+    breakdown: list[dict[str, object]] = []
+    for ticker in tickers:
+        normalized = str(ticker).strip().upper()
+        provider_rows = int(provider_counts.get(normalized, 0))
+        filtered_rows = int(filtered_counts.get(normalized, 0))
+        summary_rows = int(summary_counts.get(normalized, 0))
+        breakdown.append(
+            {
+                "ticker": normalized,
+                "provider_rows": provider_rows,
+                "filtered_rows": filtered_rows,
+                "summary_rows": summary_rows,
+                "rows_written": filtered_rows + summary_rows,
+                "zero_reason": (
+                    "provider_returned_empty"
+                    if provider_rows == 0
+                    else ("window_filter_no_matches" if filtered_rows == 0 else None)
+                ),
+            }
+        )
+    return breakdown
+
+
+def _count_by_ticker(frame: pd.DataFrame) -> dict[str, int]:
+    if frame.empty or "ticker" not in frame.columns:
+        return {}
+    series = frame["ticker"].astype(str).str.strip().str.upper()
+    counts = series.value_counts(dropna=False)
+    return {str(index): int(value) for index, value in counts.items() if str(index).strip()}
