@@ -36,12 +36,18 @@ _VALID_AVAILABILITY_STATUS = {
 }
 
 
-def validate_release_calendar_publish_contract(*, economic_release_calendar: pd.DataFrame) -> None:
+def validate_release_calendar_publish_contract(
+    *,
+    economic_release_calendar: pd.DataFrame,
+    allow_empty: bool = False,
+) -> None:
     missing = sorted(_REQUIRED_COLUMNS.difference(economic_release_calendar.columns))
     if missing:
         raise ReleaseCalendarValidationError(f"economic_release_calendar missing required columns: {missing}")
 
     if economic_release_calendar.empty:
+        if allow_empty:
+            return
         raise ReleaseCalendarValidationError("economic_release_calendar cannot be empty before publish.")
 
     duplicated = economic_release_calendar.duplicated(subset=["series_key", "observation_period"], keep=False)

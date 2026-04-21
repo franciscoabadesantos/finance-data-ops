@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -60,6 +61,14 @@ def run_dataops_release_calendar_daily(
         official_end_year=official_end_year,
         force_recompute=bool(force_recompute),
     )
+    empty_window_ok = _is_valid_empty_release_window(release_calendar_frame, release_run)
+    if empty_window_ok:
+        release_run = replace(
+            release_run,
+            status=FreshnessState.FRESH,
+            symbols_failed=[],
+            error_messages=[],
+        )
     late_anomaly = _extract_late_release_anomaly(release_calendar_frame)
     if late_anomaly is not None:
         payload = build_alert_payload(
@@ -75,6 +84,7 @@ def run_dataops_release_calendar_daily(
         release_calendar=release_calendar_frame,
         release_run=release_run,
         flow_run_id=flow_run_id,
+        empty_window_ok=empty_window_ok,
     )
     run_rows = [_refresh_run_to_row(release_run)]
 
@@ -99,6 +109,7 @@ def run_dataops_release_calendar_daily(
             lambda: publish_release_calendar_surfaces(
                 publisher=publisher_impl,
                 economic_release_calendar=release_calendar_frame,
+                allow_empty=empty_window_ok,
             ),
             failures=publish_failures,
         )
@@ -205,9 +216,40 @@ def _build_asset_status_rows(
     release_calendar: pd.DataFrame,
     release_run: RefreshRunResult,
     flow_run_id: str,
+    empty_window_ok: bool = False,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
     latest_release_ts = _latest_release_effective_timestamp(release_calendar)
+    if empty_window_ok:
+        latest_release_ts = now
+        release_state = FreshnessState.FRESH
+        coverage_status = FreshnessState.FRESH
+        reason = f"rows_written=0; run_id={release_run.run_id}; empty_window_ok=true"
+        now_iso = now.isoformat()
+        return [
+            {
+                "asset_key": "economic_release_calendar",
+                "asset_type": "release_calendar",
+                "provider": "mixed_alfred_fred_dol",
+                "last_success_at": now_iso,
+                "last_available_date": now.date().isoformat(),
+                "freshness_status": str(release_state),
+                "coverage_status": coverage_status,
+                "reason": reason,
+                "updated_at": now_iso,
+            },
+            {
+                "asset_key": "mv_latest_economic_release_calendar",
+                "asset_type": "derived",
+                "provider": "data_ops",
+                "last_success_at": now_iso,
+                "last_available_date": now.date().isoformat(),
+                "freshness_status": str(release_state),
+                "coverage_status": coverage_status,
+                "reason": reason,
+                "updated_at": now_iso,
+            },
+        ]
 
     release_state = classify_freshness(
         last_observed_at=latest_release_ts,
@@ -274,6 +316,15 @@ def _extract_late_release_anomaly(release_calendar: pd.DataFrame) -> dict[str, A
         .head(25)
         .to_dict(orient="records"),
     }
+
+
+def _is_valid_empty_release_window(release_calendar: pd.DataFrame, release_run: RefreshRunResult) -> bool:
+    if not release_calendar.empty:
+        return False
+    if str(release_run.status).strip().lower() != FreshnessState.FAILED_HARD:
+        return False
+    errors = [str(value).strip() for value in release_run.error_messages if str(value).strip()]
+    return errors == ["provider returned zero release-calendar rows"]
 
 
 def _latest_release_effective_timestamp(release_calendar: pd.DataFrame) -> datetime | None:
