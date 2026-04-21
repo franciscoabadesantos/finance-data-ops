@@ -37,6 +37,23 @@ defense-in-depth for app-layer bearer verification.
 - `TASKS_INVOKER_SERVICE_ACCOUNT_EMAIL`
 - `WORKER_SHARED_TOKEN` (optional, if app-layer bearer auth is enabled)
 
+## Runtime sizing
+
+Recommended Cloud Run floor:
+
+- memory: `1Gi`
+- timeout: `300s`
+
+Reason:
+
+- historical earnings rebuilds are the most memory-intensive request path in
+  this worker because provider fetches load per-ticker history before local
+  window filtering
+- `512Mi` is not enough for a 30-symbol historical earnings region request and
+  was observed to OOM-kill the worker
+- market, fundamentals, macro, and release-calendar completed at lower memory,
+  but `1Gi` is the correct floor for the shared worker service
+
 ## Local run
 
 ```bash

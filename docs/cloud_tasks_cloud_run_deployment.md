@@ -176,6 +176,7 @@ gcloud run deploy "${WORKER_SERVICE}" \
   --project "${PROJECT_ID}" \
   --region "${REGION}" \
   --image "${IMAGE_URI}" \
+  --memory "1Gi" \
   --service-account "${WORKER_RUNTIME_SA}" \
   --no-allow-unauthenticated \
   --set-env-vars "SUPABASE_URL=${SUPABASE_URL}" \
@@ -187,6 +188,19 @@ gcloud run deploy "${WORKER_SERVICE}" \
   --set-env-vars "GCP_TASKS_QUEUE=${QUEUE_NAME}" \
   --set-env-vars "TASKS_INVOKER_SERVICE_ACCOUNT_EMAIL=${TASKS_INVOKER_SA}"
 ```
+
+Recommended worker floor:
+
+- memory: `1Gi`
+- timeout: `300s`
+
+Reason:
+
+- historical earnings rebuilds can exceed `512Mi` because the provider loads
+  full per-ticker earnings history in memory before local window filtering
+- `512Mi` was observed to OOM-kill the worker during a 30-symbol historical
+  region run around batch 3, causing repeated Cloud Tasks retries
+- `1Gi` resolved the issue without any other runtime changes
 
 Optional if using app-layer worker bearer auth:
 
