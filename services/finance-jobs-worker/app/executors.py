@@ -8,6 +8,7 @@ from flows.dataops_fundamentals_daily import run_dataops_fundamentals_daily
 from flows.dataops_market_daily import run_dataops_market_daily
 from finance_data_ops.analysis.coverage import build_coverage_report
 from finance_data_ops.analysis.snapshots import build_ticker_snapshot_report
+from finance_data_ops.analysis.ticker_signal_v1 import build_ticker_signal_v1_report
 from finance_data_ops.validation.ticker_validation import run_single_ticker_validation
 
 from app.config import WorkerSettings
@@ -313,16 +314,18 @@ class JobExecutor:
             region=region,
             exchange=exchange,
         )
-        market_price_rows = self.registry.fetch_market_price_daily_rows(ticker)
+        market_price_rows = self.registry.fetch_market_price_daily_rows(ticker, limit=252)
         fundamentals_rows = self.registry.fetch_fundamentals_rows(ticker)
         earnings_rows = self.registry.fetch_earnings_history_rows(ticker)
+        market_snapshot = self.registry.fetch_market_snapshot(ticker)
+        next_earnings_row = self.registry.fetch_next_earnings_row(ticker)
         if resolved_analysis_type == "ticker_snapshot":
             result_json = build_ticker_snapshot_report(
                 ticker=ticker,
                 region=region,
                 exchange=exchange,
                 analysis_type=resolved_analysis_type,
-                market_snapshot=self.registry.fetch_market_snapshot(ticker),
+                market_snapshot=market_snapshot,
                 coverage=coverage,
                 asset_status_by_key=assets,
                 registry_row=registry_row,
@@ -342,6 +345,20 @@ class JobExecutor:
                 market_price_rows=market_price_rows,
                 fundamentals_rows=fundamentals_rows,
                 earnings_rows=earnings_rows,
+            )
+        elif resolved_analysis_type == "ticker_signal_v1":
+            result_json = build_ticker_signal_v1_report(
+                ticker=ticker,
+                region=region,
+                exchange=exchange,
+                analysis_type=resolved_analysis_type,
+                market_snapshot=market_snapshot,
+                coverage=coverage,
+                asset_status_by_key=assets,
+                registry_row=registry_row,
+                market_price_rows=market_price_rows,
+                earnings_rows=earnings_rows,
+                next_earnings_row=next_earnings_row,
             )
         elif resolved_analysis_type == "data_ops_rebuild":
             output = run_data_ops_rebuild_job(
@@ -385,7 +402,7 @@ class JobExecutor:
             analysis_type=resolved_analysis_type,
             result_json=(dict(result_json) if isinstance(result_json, dict) else {"result": result_json}),
             summary_text=(
-                str(result_json.get("summary") or "")
+                str(result_json.get("summary_text") or result_json.get("summary") or "")
                 if isinstance(result_json, dict)
                 else ""
             ),

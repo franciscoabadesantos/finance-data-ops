@@ -142,6 +142,19 @@ class WorkerRegistryStore:
             return None
         return dict(data[0])
 
+    def fetch_next_earnings_row(self, ticker: str) -> dict[str, Any] | None:
+        response = (
+            self.client.table("mv_next_earnings")
+            .select("*")
+            .eq("ticker", str(ticker).strip().upper())
+            .limit(1)
+            .execute()
+        )
+        data = response.data or []
+        if not data:
+            return None
+        return dict(data[0])
+
     def fetch_symbol_coverage(self, ticker: str) -> dict[str, Any] | None:
         response = (
             self.client.table("symbol_data_coverage")
@@ -156,6 +169,21 @@ class WorkerRegistryStore:
         return dict(data[0])
 
     def fetch_market_price_daily_rows(self, ticker: str, *, limit: int = 5000) -> list[dict[str, Any]]:
+        symbol = str(ticker).strip().upper()
+        try:
+            query = (
+                self.client.table("market_price_daily")
+                .select("*")
+                .eq("ticker", symbol)
+                .order("date", desc=True)
+                .limit(max(1, int(limit)))
+            )
+            response = query.execute()
+            rows = [dict(item) for item in (response.data or []) if isinstance(item, dict)]
+            if rows:
+                return rows
+        except Exception:
+            pass
         return self._fetch_rows_for_ticker("market_price_daily", ticker=ticker, limit=limit)
 
     def fetch_fundamentals_rows(self, ticker: str, *, limit: int = 5000) -> list[dict[str, Any]]:

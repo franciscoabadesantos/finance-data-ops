@@ -10,6 +10,7 @@ JobType = Literal["ticker_validation", "ticker_backfill", "analysis_job"]
 AnalysisType = Literal[
     "ticker_snapshot",
     "coverage_report",
+    "ticker_signal_v1",
     "data_ops_rebuild",
     "data_ops_series_upsert",
 ]
@@ -67,11 +68,12 @@ class ExecuteJobRequest(BaseModel):
             if self.analysis_type not in {
                 "ticker_snapshot",
                 "coverage_report",
+                "ticker_signal_v1",
                 "data_ops_rebuild",
                 "data_ops_series_upsert",
             }:
                 raise ValueError(
-                    "analysis_type must be one of: ticker_snapshot, coverage_report, data_ops_rebuild, data_ops_series_upsert"
+                    "analysis_type must be one of: ticker_snapshot, coverage_report, ticker_signal_v1, data_ops_rebuild, data_ops_series_upsert"
                 )
         return self
 

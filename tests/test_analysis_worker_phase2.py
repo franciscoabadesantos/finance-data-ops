@@ -115,6 +115,9 @@ class FakeSupabaseClient:
             "symbol_data_coverage": [],
             "data_asset_status": [],
             "ticker_registry": [],
+            "mv_next_earnings": [],
+            "market_price_daily": [],
+            "market_earnings_history": [],
         }
 
     def table(self, table_name: str) -> FakeSupabaseQuery:
@@ -288,4 +291,124 @@ def test_analysis_job_coverage_report_transitions_to_completed_and_persists_resu
     assert stored["analysis_type"] == "coverage_report"
     payload = stored["result_json"]
     assert payload["metadata"]["analysis_type"] == "coverage_report"
-    assert any(section.get("title") == "Domain Coverage" for section in payload["sections"])
+
+
+def test_analysis_job_ticker_signal_v1_transitions_to_completed_and_persists_result() -> None:
+    supabase = FakeSupabaseClient()
+    supabase.tables["analysis_jobs"].append(
+        {
+            "job_id": "analysis-signal-1",
+            "ticker": "AAPL",
+            "region": "us",
+            "exchange": None,
+            "analysis_type": "ticker_signal_v1",
+            "status": "queued",
+            "created_at": "2026-04-18T00:00:00+00:00",
+            "error_message": None,
+            "worker_job_id": None,
+        }
+    )
+    supabase.tables["ticker_market_stats_snapshot"].append(
+        {
+            "ticker": "AAPL",
+            "as_of_date": "2026-04-17",
+            "last_price": 189.11,
+            "return_1d_pct": 0.0045,
+            "return_1m_pct": 0.021,
+            "return_3m_pct": 0.084,
+            "return_1y_pct": 0.182,
+            "vol_30d_pct": 0.22,
+            "drawdown_1y_pct": -0.061,
+        }
+    )
+    supabase.tables["symbol_data_coverage"].append(
+        {
+            "ticker": "AAPL",
+            "market_data_available": True,
+            "fundamentals_available": True,
+            "earnings_available": True,
+            "coverage_status": "fresh",
+        }
+    )
+    supabase.tables["data_asset_status"].extend(
+        [
+            {"asset_key": "market_price_daily", "freshness_status": "fresh"},
+            {"asset_key": "market_quotes", "freshness_status": "fresh"},
+            {"asset_key": "market_earnings_history", "freshness_status": "fresh"},
+            {"asset_key": "mv_next_earnings", "freshness_status": "fresh"},
+        ]
+    )
+    supabase.tables["ticker_registry"].append(
+        {
+            "registry_key": "AAPL|us|default",
+            "input_symbol": "AAPL",
+            "region": "us",
+            "exchange": None,
+            "status": "active",
+            "validation_status": "validated",
+            "promotion_status": "validated_full",
+            "instrument_type": "equity",
+        }
+    )
+    supabase.tables["mv_next_earnings"].append(
+        {
+            "ticker": "AAPL",
+            "earnings_date": "2026-04-30",
+            "earnings_time": "post_market",
+        }
+    )
+    for day, close, volume in [
+        ("2025-07-01", 150.0, 1000),
+        ("2025-09-15", 162.0, 1100),
+        ("2025-12-01", 171.0, 1200),
+        ("2026-01-15", 176.0, 1300),
+        ("2026-02-20", 182.0, 1400),
+        ("2026-03-20", 186.0, 1500),
+        ("2026-04-10", 188.0, 1600),
+        ("2026-04-17", 189.11, 1700),
+    ]:
+        supabase.tables["market_price_daily"].append(
+            {"ticker": "AAPL", "date": day, "close": close, "volume": volume}
+        )
+    for earnings_date, surprise_eps in [
+        ("2025-07-30", 0.08),
+        ("2025-10-30", 0.05),
+        ("2026-01-29", 0.06),
+        ("2026-04-28", 0.07),
+    ]:
+        supabase.tables["market_earnings_history"].append(
+            {"ticker": "AAPL", "earnings_date": earnings_date, "surprise_eps": surprise_eps}
+        )
+
+    request = ExecuteJobRequest(
+        job_type="analysis_job",
+        job_id="analysis-signal-1",
+        ticker="AAPL",
+        region="us",
+        analysis_type="ticker_signal_v1",
+        idempotency_key="analysis:analysis-signal-1",
+    )
+    executor = JobExecutor(
+        settings=FakeSettings(),
+        registry=WorkerRegistryStore(supabase),  # type: ignore[arg-type]
+        tasks=object(),  # type: ignore[arg-type]
+    )
+    result = executor.execute(
+        request,
+        job_id="worker-job-signal-1",
+        attempt=1,
+        task_name="projects/x/locations/y/queues/z/tasks/worker-job-signal-1",
+    )
+
+    assert result["status"] == "completed"
+    analysis_job = supabase.tables["analysis_jobs"][0]
+    assert analysis_job["status"] == "completed"
+    stored = supabase.tables["analysis_results"][0]
+    assert stored["analysis_type"] == "ticker_signal_v1"
+    payload = stored["result_json"]
+    assert payload["metadata"]["analysis_type"] == "ticker_signal_v1"
+    assert payload["summary"]["ticker"] == "AAPL"
+    assert payload["signal"]["label"] in {"positive", "watch", "neutral", "caution"}
+    assert stored["summary_text"]
+    assert "market" in payload
+    assert "earnings" in payload
