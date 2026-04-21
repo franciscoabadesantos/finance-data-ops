@@ -6,7 +6,6 @@ import csv
 import io
 import json
 import re
-import subprocess
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time as dtime, timedelta
@@ -14,6 +13,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import requests
 
 # Use the FRED host for ALFRED-mode endpoints; in this runtime environment it is
 # materially more reliable than direct alfred.stlouisfed.org while preserving payload semantics.
@@ -411,9 +411,13 @@ def _fetch_text(
     last_error: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
-            # Curl transport with explicit subprocess timeout gives deterministic upper bounds
-            # in environments where Python TLS/DNS stack can block beyond socket read timeouts.
-            return _fetch_text_via_curl(url=url, timeout=timeout)
+            response = requests.get(
+                url,
+                timeout=timeout,
+                headers={"User-Agent": "finance-data-ops/0.1 (+https://github.com/franciscoabadesantos/finance-data-ops)"},
+            )
+            response.raise_for_status()
+            return str(response.text or "")
         except Exception as exc:
             last_error = exc
             if attempt >= max_retries:
@@ -423,35 +427,6 @@ def _fetch_text(
     if last_error is not None:
         raise last_error
     raise RuntimeError("unreachable")
-
-
-def _fetch_text_via_curl(*, url: str, timeout: int) -> str:
-    try:
-        result = subprocess.run(
-            [
-                "curl",
-                "--fail",
-                "--silent",
-                "--show-error",
-                "--location",
-                "--http1.1",
-                "--max-time",
-                str(int(timeout)),
-                "--connect-timeout",
-                "10",
-                url,
-            ],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=int(timeout) + 5,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(f"curl subprocess timeout for {url}") from exc
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        raise RuntimeError(f"curl fetch failed for {url}: rc={result.returncode} stderr={stderr}")
-    return str(result.stdout or "")
 
 
 def _fetch_json(url: str, *, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> dict:

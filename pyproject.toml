@@ -16,6 +16,7 @@ dependencies = [
     "pandas-datareader>=0.10",
     "lxml>=4.9",
     "PyYAML>=6.0",
+    "requests>=2.31",
 ]
 
 [project.optional-dependencies]
