@@ -4,15 +4,20 @@ from __future__ import annotations
 
 from datetime import date
 import logging
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import pandas as pd
 
 from finance_data_ops.publish.client import SupabaseRestPublisher
 from finance_data_ops.publish.earnings import publish_earnings_surfaces
 from finance_data_ops.providers.earnings import EarningsDataProvider
+from finance_data_ops.refresh.market_daily import RefreshRunResult
 from finance_data_ops.refresh.earnings_daily import refresh_earnings_daily
 
 logger = logging.getLogger(__name__)
+
+NON_EARNINGS_INSTRUMENT_TYPES = {"etf", "index_proxy", "country_fund"}
 
 
 def load_earnings_chunk(
@@ -23,20 +28,56 @@ def load_earnings_chunk(
     tickers: tuple[str, ...],
     start_date: str,
     end_date: str,
+    registry_metadata: dict[str, dict[str, object]] | None = None,
     max_attempts: int = 3,
     history_limit: int = 120,
 ) -> dict[str, object]:
+    normalized_tickers = tuple(str(value).strip().upper() for value in tickers if str(value).strip())
+    metadata_by_ticker = {
+        str(symbol).strip().upper(): dict(payload or {})
+        for symbol, payload in (registry_metadata or {}).items()
+        if str(symbol).strip()
+    }
+    supported_tickers: list[str] = []
+    skipped_tickers: list[str] = []
+    skipped_reasons: dict[str, str] = {}
+    for ticker in normalized_tickers:
+        instrument_type = str(metadata_by_ticker.get(ticker, {}).get("instrument_type") or "").strip().lower()
+        if instrument_type in NON_EARNINGS_INSTRUMENT_TYPES:
+            skipped_tickers.append(ticker)
+            skipped_reasons[ticker] = "instrument_type_not_supported"
+        else:
+            supported_tickers.append(ticker)
+
     resolved_history_limit = _resolve_earnings_history_limit(
         start_date=date.fromisoformat(str(start_date)),
         end_date=date.fromisoformat(str(end_date)),
     )
-    events_frame, history_frame, refresh_run = refresh_earnings_daily(
-        symbols=list(tickers),
-        provider=provider,
-        cache_root=cache_root,
-        max_attempts=max_attempts,
-        history_limit=resolved_history_limit,
-    )
+    if supported_tickers:
+        events_frame, history_frame, refresh_run = refresh_earnings_daily(
+            symbols=supported_tickers,
+            provider=provider,
+            cache_root=cache_root,
+            max_attempts=max_attempts,
+            history_limit=resolved_history_limit,
+        )
+    else:
+        events_frame = pd.DataFrame()
+        history_frame = pd.DataFrame()
+        now = datetime.now(UTC).isoformat()
+        refresh_run = RefreshRunResult(
+            run_id=f"run_earnings_daily_{uuid4().hex[:12]}",
+            asset_name="market_earnings",
+            status="fresh",
+            started_at=now,
+            ended_at=now,
+            symbols_requested=list(normalized_tickers),
+            symbols_succeeded=list(skipped_tickers),
+            symbols_failed=[],
+            retry_exhausted_symbols=[],
+            rows_written=0,
+            error_messages=[],
+        )
     provider_event_rows = int(len(events_frame.index))
     provider_history_rows = int(len(history_frame.index))
     filtered_events = _filter_earnings_window(
@@ -53,7 +94,7 @@ def load_earnings_chunk(
     filtered_history_rows = int(len(filtered_history.index))
     logger.info(
         "Earnings rebuild chunk prepared (tickers=%s start=%s end=%s history_limit=%s provider_event_rows=%s filtered_event_rows=%s provider_history_rows=%s filtered_history_rows=%s refresh_status=%s).",
-        list(tickers),
+        list(normalized_tickers),
         start_date,
         end_date,
         resolved_history_limit,
@@ -73,11 +114,12 @@ def load_earnings_chunk(
             refresh_materialized_view=False,
         )
     symbol_breakdown = _build_symbol_breakdown(
-        tickers=tickers,
+        tickers=normalized_tickers,
         provider_events=events_frame,
         provider_history=history_frame,
         filtered_events=filtered_events,
         filtered_history=filtered_history,
+        skipped_reasons=skipped_reasons,
     )
     return {
         "refresh_run": refresh_run.as_dict(),
@@ -94,7 +136,7 @@ def load_earnings_chunk(
         "symbol_breakdown": symbol_breakdown,
         "window_filter_field": "earnings_date",
         "rows_written": int(len(filtered_events.index) + len(filtered_history.index)),
-        "touched_symbols": list(tickers),
+        "touched_symbols": list(normalized_tickers),
         "touched_series": [],
         "current_window": {"start_date": start_date, "end_date": end_date},
     }
@@ -124,7 +166,13 @@ def _build_symbol_breakdown(
     provider_history: pd.DataFrame,
     filtered_events: pd.DataFrame,
     filtered_history: pd.DataFrame,
+    skipped_reasons: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
+    zero_reason_overrides = {
+        str(symbol).strip().upper(): str(reason).strip()
+        for symbol, reason in (skipped_reasons or {}).items()
+        if str(symbol).strip() and str(reason).strip()
+    }
     provider_event_counts = _count_by_ticker(provider_events)
     provider_history_counts = _count_by_ticker(provider_history)
     filtered_event_counts = _count_by_ticker(filtered_events)
@@ -138,6 +186,13 @@ def _build_symbol_breakdown(
         filtered_history_rows = int(filtered_history_counts.get(normalized, 0))
         provider_total = provider_events_rows + provider_history_rows
         filtered_total = filtered_events_rows + filtered_history_rows
+        zero_reason = zero_reason_overrides.get(normalized)
+        if zero_reason is None:
+            zero_reason = (
+                "provider_returned_empty"
+                if provider_total == 0
+                else ("window_filter_no_matches" if filtered_total == 0 else None)
+            )
         breakdown.append(
             {
                 "ticker": normalized,
@@ -150,11 +205,7 @@ def _build_symbol_breakdown(
                     "market_earnings_history": filtered_history_rows,
                 },
                 "rows_written": filtered_total,
-                "zero_reason": (
-                    "provider_returned_empty"
-                    if provider_total == 0
-                    else ("window_filter_no_matches" if filtered_total == 0 else None)
-                ),
+                "zero_reason": zero_reason,
             }
         )
     return breakdown
