@@ -177,14 +177,8 @@ def run_dataops_earnings_daily(
         )
     )
 
-    symbols_succeeded = sorted(
-        {
-            str(row.get("ticker", "")).strip().upper()
-            for row in coverage_rows
-            if bool(row.get("earnings_available"))
-        }
-    )
-    symbols_failed = [symbol for symbol in normalized_symbols if symbol not in set(symbols_succeeded)]
+    symbols_succeeded = sorted({str(value).strip().upper() for value in earnings_run.symbols_succeeded if str(value).strip()})
+    symbols_failed = sorted({str(value).strip().upper() for value in earnings_run.symbols_failed if str(value).strip()})
 
     overall_state = _overall_status(status_rows)
     orchestration_status = _orchestration_run_status(
