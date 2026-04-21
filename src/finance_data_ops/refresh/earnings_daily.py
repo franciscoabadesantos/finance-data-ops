@@ -13,9 +13,8 @@ import pandas as pd
 from finance_data_ops.ops.incidents import classify_failure, run_with_retry
 from finance_data_ops.providers.earnings import EarningsDataProvider
 from finance_data_ops.refresh.market_daily import RefreshRunResult
-from finance_data_ops.refresh.storage import write_parquet_table
+from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.settings import load_settings
-from finance_data_ops.validation.ticker_registry import read_ticker_registry
 
 
 NON_EARNINGS_INSTRUMENT_TYPES = {"etf", "index_proxy", "country_fund"}
@@ -164,7 +163,7 @@ def _fetch_ticker_registry_metadata(
     if remote_rows:
         return _index_registry_rows(remote_rows, normalized_tickers)
 
-    local_frame = read_ticker_registry(cache_root=cache_root)
+    local_frame = read_parquet_table("ticker_registry", cache_root=cache_root, required=False)
     if local_frame.empty:
         return {}
     local_rows = local_frame.to_dict(orient="records")
