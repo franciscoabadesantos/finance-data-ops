@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
+import urllib.parse
+import urllib.request
 from uuid import uuid4
 
 import pandas as pd
@@ -11,6 +14,11 @@ from finance_data_ops.ops.incidents import classify_failure, run_with_retry
 from finance_data_ops.providers.earnings import EarningsDataProvider
 from finance_data_ops.refresh.market_daily import RefreshRunResult
 from finance_data_ops.refresh.storage import write_parquet_table
+from finance_data_ops.settings import load_settings
+from finance_data_ops.validation.ticker_registry import read_ticker_registry
+
+
+NON_EARNINGS_INSTRUMENT_TYPES = {"etf", "index_proxy", "country_fund"}
 
 
 def refresh_earnings_daily(
@@ -23,17 +31,28 @@ def refresh_earnings_daily(
 ) -> tuple[pd.DataFrame, pd.DataFrame, RefreshRunResult]:
     started_at = datetime.now(UTC)
     run_id = f"run_earnings_daily_{uuid4().hex[:12]}"
+    settings = load_settings(cache_root=cache_root)
 
     symbols_requested = [str(v).strip().upper() for v in symbols if str(v).strip()]
     symbols_succeeded: list[str] = []
     symbols_failed: list[str] = []
     retry_exhausted_symbols: list[str] = []
     error_messages: list[str] = []
+    registry_metadata = _fetch_ticker_registry_metadata(
+        cache_root=cache_root,
+        supabase_url=settings.supabase_url,
+        service_role_key=settings.supabase_service_role_key,
+        tickers=symbols_requested,
+    )
 
     events_frames: list[pd.DataFrame] = []
     history_frames: list[pd.DataFrame] = []
 
     for symbol in symbols_requested:
+        instrument_type = str(registry_metadata.get(symbol, {}).get("instrument_type") or "").strip().lower()
+        if instrument_type in NON_EARNINGS_INSTRUMENT_TYPES:
+            symbols_succeeded.append(symbol)
+            continue
 
         def _fetch_one() -> tuple[pd.DataFrame, pd.DataFrame]:
             events_frame, history_frame = provider.fetch_symbol_earnings(
@@ -105,3 +124,91 @@ def refresh_earnings_daily(
         error_messages=error_messages,
     )
     return events, history, refresh_result
+
+
+def _fetch_ticker_registry_metadata(
+    *,
+    cache_root: str,
+    supabase_url: str,
+    service_role_key: str,
+    tickers: list[str],
+    timeout_seconds: int = 30,
+) -> dict[str, dict[str, object]]:
+    normalized_tickers = [str(value).strip().upper() for value in tickers if str(value).strip()]
+    metadata: dict[str, dict[str, object]] = {}
+    if not normalized_tickers:
+        return metadata
+
+    remote_rows: list[dict[str, object]] = []
+    if str(supabase_url).strip() and str(service_role_key).strip():
+        try:
+            remote_rows = _fetch_registry_rows_from_supabase(
+                supabase_url=supabase_url,
+                service_role_key=service_role_key,
+                tickers=normalized_tickers,
+                column="normalized_symbol",
+                timeout_seconds=timeout_seconds,
+            )
+            remote_rows.extend(
+                _fetch_registry_rows_from_supabase(
+                    supabase_url=supabase_url,
+                    service_role_key=service_role_key,
+                    tickers=normalized_tickers,
+                    column="input_symbol",
+                    timeout_seconds=timeout_seconds,
+                )
+            )
+        except Exception:
+            remote_rows = []
+
+    if remote_rows:
+        return _index_registry_rows(remote_rows, normalized_tickers)
+
+    local_frame = read_ticker_registry(cache_root=cache_root)
+    if local_frame.empty:
+        return {}
+    local_rows = local_frame.to_dict(orient="records")
+    return _index_registry_rows(local_rows, normalized_tickers)
+
+
+def _fetch_registry_rows_from_supabase(
+    *,
+    supabase_url: str,
+    service_role_key: str,
+    tickers: list[str],
+    column: str,
+    timeout_seconds: int,
+) -> list[dict[str, object]]:
+    encoded_tickers = ",".join(str(value).strip().upper() for value in tickers if str(value).strip())
+    if not encoded_tickers:
+        return []
+    params = {
+        "select": "input_symbol,normalized_symbol,instrument_type,earnings_supported",
+        column: f"in.({encoded_tickers})",
+    }
+    base = str(supabase_url).strip().rstrip("/")
+    url = f"{base}/rest/v1/ticker_registry?{urllib.parse.urlencode(params)}"
+    headers = {
+        "apikey": str(service_role_key).strip(),
+        "Authorization": f"Bearer {str(service_role_key).strip()}",
+        "Accept": "application/json",
+    }
+    request = urllib.request.Request(url=url, headers=headers, method="GET")
+    with urllib.request.urlopen(request, timeout=int(timeout_seconds)) as response:
+        raw = response.read().decode("utf-8")
+    parsed = json.loads(raw) if raw else []
+    if not isinstance(parsed, list):
+        return []
+    return [row for row in parsed if isinstance(row, dict)]
+
+
+def _index_registry_rows(rows: list[dict[str, object]], tickers: list[str]) -> dict[str, dict[str, object]]:
+    normalized_targets = {str(value).strip().upper() for value in tickers if str(value).strip()}
+    indexed: dict[str, dict[str, object]] = {}
+    for row in rows:
+        input_symbol = str(row.get("input_symbol") or "").strip().upper()
+        normalized_symbol = str(row.get("normalized_symbol") or "").strip().upper()
+        for key in (normalized_symbol, input_symbol):
+            if key and key in normalized_targets and key not in indexed:
+                indexed[key] = dict(row)
+    return indexed
