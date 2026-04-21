@@ -296,7 +296,7 @@ def _default_release_calendar_source(series_key: str) -> str | None:
     if key in {"UNRATE", "U6RATE", "CIVPART"}:
         return "bls_unrate_release_calendar_v1"
     if key == "ICSA":
-        return "dol_icsa_release_calendar_v1"
+        return "fred_icsa_release_calendar_v2"
     return None
 
 
