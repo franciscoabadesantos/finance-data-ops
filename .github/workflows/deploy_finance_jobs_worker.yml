@@ -18,6 +18,7 @@ env:
   GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'finance-data-ops' }}
   GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
   WORKER_SERVICE: ${{ vars.GCP_WORKER_SERVICE || 'finance-jobs-worker' }}
+  GCP_WORKER_MEMORY: ${{ vars.GCP_WORKER_MEMORY || '1Gi' }}
   GCP_TASKS_QUEUE: ${{ vars.GCP_TASKS_QUEUE || 'ticker-jobs' }}
   SUPABASE_URL: ${{ vars.SUPABASE_URL }}
   GSM_SUPABASE_SERVICE_ROLE_KEY_SECRET: ${{ vars.GSM_SUPABASE_SERVICE_ROLE_KEY_SECRET }}
@@ -97,6 +98,7 @@ jobs:
             --project "${GCP_PROJECT_ID}"
             --region "${GCP_REGION}"
             --image "${{ steps.image.outputs.image_uri }}"
+            --memory "${GCP_WORKER_MEMORY}"
             --set-env-vars "SUPABASE_URL=${SUPABASE_URL},FINANCE_DATA_OPS_ROOT=/app,CLOUD_TASKS_ENABLED=true,GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},GCP_TASKS_QUEUE=${GCP_TASKS_QUEUE}"
             --set-secrets "SUPABASE_SERVICE_ROLE_KEY=${GSM_SUPABASE_SERVICE_ROLE_KEY_SECRET}:latest"
             --quiet

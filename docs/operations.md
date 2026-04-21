@@ -88,3 +88,17 @@ For macro and release calendar domains:
 Ticker validation/backfill deployment and cutover (Cloud Tasks + Cloud Run) runbook:
 
 - [`docs/cloud_tasks_cloud_run_deployment.md`](/home/franciscosantos/finance-data-ops/docs/cloud_tasks_cloud_run_deployment.md)
+
+## Worker runtime floor
+
+For the shared Cloud Run worker (`finance-jobs-worker`), keep:
+
+- memory: `1Gi`
+- timeout: `300s`
+
+Operational reason:
+
+- historical earnings region rebuilds OOM-kill the worker at `512Mi`
+- the failure presents as Cloud Tasks retries plus worker shutdowns around
+  batch 3, not as an explicit application error
+- `1Gi` resolved the issue and is now the minimum safe production floor

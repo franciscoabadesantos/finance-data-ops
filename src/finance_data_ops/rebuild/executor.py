@@ -200,6 +200,7 @@ def execute_rebuild_plan(
                     tickers=chunk.ticker_batch,
                     start_date=str(chunk.start_date),
                     end_date=str(chunk.end_date),
+                    registry_metadata=_fetch_ticker_registry_metadata(client=client, tickers=chunk.ticker_batch),
                     max_attempts=max_attempts,
                     history_limit=history_limit,
                 )
@@ -348,3 +349,34 @@ def execute_rebuild_plan(
         "touched_symbols": sorted(set(touched_symbols)),
         "touched_series": sorted(set(touched_series)),
     }
+
+
+def _fetch_ticker_registry_metadata(*, client: Any, tickers: tuple[str, ...]) -> dict[str, dict[str, object]]:
+    metadata: dict[str, dict[str, object]] = {}
+    for raw_ticker in tickers:
+        ticker = str(raw_ticker).strip().upper()
+        if not ticker:
+            continue
+        row = _fetch_first_registry_match(client=client, ticker=ticker, column="normalized_symbol")
+        if row is None:
+            row = _fetch_first_registry_match(client=client, ticker=ticker, column="input_symbol")
+        if row is not None:
+            metadata[ticker] = row
+    return metadata
+
+
+def _fetch_first_registry_match(*, client: Any, ticker: str, column: str) -> dict[str, object] | None:
+    try:
+        response = (
+            client.table("ticker_registry")
+            .select("input_symbol,normalized_symbol,instrument_type,earnings_supported")
+            .eq(column, ticker)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        return None
+    rows = [dict(item) for item in (response.data or []) if isinstance(item, dict)]
+    if not rows:
+        return None
+    return rows[0]

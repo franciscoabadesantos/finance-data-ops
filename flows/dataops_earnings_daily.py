@@ -379,6 +379,19 @@ def _execute_publish_step(
         }
 
 
+def _count_items(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        return 0 if not value.strip() else 1
+    try:
+        return len(value)
+    except TypeError:
+        return 0
+
+
 def _refresh_run_to_row(result: RefreshRunResult) -> dict[str, Any]:
     failure_classification = (
         str(result.status)
@@ -399,9 +412,9 @@ def _refresh_run_to_row(result: RefreshRunResult) -> dict[str, Any]:
         "error_class": failure_classification,
         "error_message": error_message,
         "failure_classification": failure_classification,
-        "symbols_requested": result.symbols_requested,
-        "symbols_succeeded": result.symbols_succeeded,
-        "symbols_failed": result.symbols_failed,
+        "symbols_requested": _count_items(result.symbols_requested),
+        "symbols_succeeded": _count_items(result.symbols_succeeded),
+        "symbols_failed": _count_items(result.symbols_failed),
         "error_messages": error_messages,
         "created_at": datetime.now(UTC).isoformat(),
     }
@@ -434,9 +447,9 @@ def _flow_run_row(
         "error_class": failure_classification,
         "error_message": details if failure_classification else None,
         "failure_classification": failure_classification,
-        "symbols_requested": context.get("symbols", []),
-        "symbols_succeeded": context.get("symbols_succeeded", []),
-        "symbols_failed": context.get("symbols_failed", []),
+        "symbols_requested": _count_items(context.get("symbols")),
+        "symbols_succeeded": _count_items(context.get("symbols_succeeded")),
+        "symbols_failed": _count_items(context.get("symbols_failed")),
         "error_messages": [details],
         "created_at": datetime.now(UTC).isoformat(),
     }
