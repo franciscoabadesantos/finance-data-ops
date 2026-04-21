@@ -66,8 +66,18 @@ def publish_release_calendar_surfaces(
     publisher: Publisher,
     economic_release_calendar: pd.DataFrame,
     refresh_materialized_view: bool = True,
+    allow_empty: bool = False,
 ) -> dict[str, Any]:
-    validate_release_calendar_publish_contract(economic_release_calendar=economic_release_calendar)
+    validate_release_calendar_publish_contract(
+        economic_release_calendar=economic_release_calendar,
+        allow_empty=allow_empty,
+    )
+
+    if economic_release_calendar.empty:
+        return {
+            "economic_release_calendar": {"table": "economic_release_calendar", "status": "skipped", "rows": 0},
+            "mv_latest_economic_release_calendar": None,
+        }
 
     rows = build_economic_release_calendar_payload(economic_release_calendar)
     table_result = publisher.upsert(

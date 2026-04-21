@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import re
 import subprocess
@@ -19,7 +20,7 @@ import pandas as pd
 ALFRED_BASE_URL = "https://fred.stlouisfed.org"
 ALFRED_GRAPH_API_SERIES_URL = f"{ALFRED_BASE_URL}/graph/api/series/"
 ALFRED_GRAPH_CSV_URL = f"{ALFRED_BASE_URL}/graph/fredgraph.csv"
-DOL_AR539_URL = "https://oui.doleta.gov/unemploy/csv/ar539.csv"
+DOL_WEEKLY_CLAIMS_REPORT_URL = "https://oui.doleta.gov/unemploy/wkclaims/report.asp"
 FRED_RELEASE_CALENDAR_URL = "https://fred.stlouisfed.org/releases/calendar"
 
 DEFAULT_TIMEOUT_SECONDS = 15
@@ -689,21 +690,75 @@ def _load_icsa_available_revision_dates() -> list[date]:
 
 
 def _load_icsa_observation_weeks_from_dol(*, min_observation_date: date) -> list[date]:
-    raw = _fetch_text(DOL_AR539_URL, timeout=60, max_retries=4)
-    reader = csv.DictReader(raw.splitlines())
     obs: set[date] = set()
-    for row in reader:
-        if not isinstance(row, dict):
+    current_year = datetime.now(UTC).year
+    for year in range(int(min_observation_date.year), int(current_year) + 1):
+        frame = _fetch_dol_weekly_claims_report_for_year(year=year)
+        if frame.empty:
             continue
-        parsed = _parse_date(str(row.get("c2", "")).strip(), "%m/%d/%Y")
-        if parsed is None:
-            continue
-        if parsed < min_observation_date:
-            continue
-        obs.add(parsed)
+        date_column = frame.iloc[:, 0]
+        parsed_dates = pd.to_datetime(date_column, format="%m/%d/%Y", errors="coerce")
+        for value in parsed_dates.dropna():
+            parsed = value.date()
+            if parsed < min_observation_date:
+                continue
+            obs.add(parsed)
     if not obs:
-        raise ReleaseCalendarProviderError("No weekly observation dates extracted from DOL ar539.csv column c2.")
+        raise ReleaseCalendarProviderError(
+            "No weekly observation dates extracted from DOL weekly claims report first column."
+        )
     return sorted(obs)
+
+
+def _fetch_dol_weekly_claims_report_for_year(*, year: int) -> pd.DataFrame:
+    try:
+        import requests
+    except Exception as exc:  # pragma: no cover - runtime dependency
+        raise RuntimeError("requests is required for DOL weekly claims fetches.") from exc
+
+    response = requests.post(
+        DOL_WEEKLY_CLAIMS_REPORT_URL,
+        data={
+            "level": "us",
+            "final_yr": str(datetime.now(UTC).year + 1),
+            "strtdate": str(int(year)),
+            "enddate": str(int(year)),
+            "filetype": "xls",
+            "submit": "Submit",
+        },
+        timeout=60,
+    )
+    if response.status_code != 200:
+        raise ReleaseCalendarProviderError(
+            f"DOL weekly claims fetch failed: status={response.status_code} url={DOL_WEEKLY_CLAIMS_REPORT_URL}"
+        )
+
+    content_type = str(response.headers.get("content-type") or "").strip().lower()
+    payload = response.text
+    payload_prefix = payload[:256].lstrip().lower()
+    if "text/html" in content_type or payload_prefix.startswith("<!doctype html") or payload_prefix.startswith("<html"):
+        raise ReleaseCalendarProviderError(
+            "DOL weekly claims fetch returned HTML/non-report payload: "
+            f"status={response.status_code} url={DOL_WEEKLY_CLAIMS_REPORT_URL}"
+        )
+
+    try:
+        tables = pd.read_html(io.StringIO(payload))
+    except ValueError as exc:
+        raise ReleaseCalendarProviderError(
+            f"DOL weekly claims report parse failed for year={year}: no tables found."
+        ) from exc
+    if not tables:
+        raise ReleaseCalendarProviderError(
+            f"DOL weekly claims report parse failed for year={year}: no tables returned."
+        )
+
+    frame = tables[0]
+    if frame.shape[1] < 1:
+        raise ReleaseCalendarProviderError(
+            f"DOL weekly claims report parse failed for year={year}: expected date column in first position."
+        )
+    return frame
 
 
 def _load_fred_release_calendar_dates(*, start_year: int, end_year: int) -> set[date]:
