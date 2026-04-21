@@ -230,7 +230,7 @@ def _build_asset_status_rows(
             {
                 "asset_key": "economic_release_calendar",
                 "asset_type": "release_calendar",
-                "provider": "mixed_alfred_fred_dol",
+                "provider": "mixed_alfred_fred",
                 "last_success_at": now_iso,
                 "last_available_date": now.date().isoformat(),
                 "freshness_status": str(release_state),
@@ -265,7 +265,7 @@ def _build_asset_status_rows(
         {
             "asset_key": "economic_release_calendar",
             "asset_type": "release_calendar",
-            "provider": "mixed_alfred_fred_dol",
+            "provider": "mixed_alfred_fred",
             "last_success_at": _last_success_timestamp(latest_release_ts, release_state),
             "last_available_date": _date_or_none(latest_release_ts),
             "freshness_status": str(release_state),

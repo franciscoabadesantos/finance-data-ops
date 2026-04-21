@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import io
 import json
 import re
 import time
@@ -20,7 +19,6 @@ import requests
 ALFRED_BASE_URL = "https://fred.stlouisfed.org"
 ALFRED_GRAPH_API_SERIES_URL = f"{ALFRED_BASE_URL}/graph/api/series/"
 ALFRED_GRAPH_CSV_URL = f"{ALFRED_BASE_URL}/graph/fredgraph.csv"
-DOL_WEEKLY_CLAIMS_REPORT_URL = "https://oui.doleta.gov/unemploy/wkclaims/report.asp"
 FRED_RELEASE_CALENDAR_URL = "https://fred.stlouisfed.org/releases/calendar"
 
 DEFAULT_TIMEOUT_SECONDS = 15
@@ -32,7 +30,7 @@ RELEASE_TIME_LOCAL = dtime(hour=8, minute=30)
 WEEKLY_RELEASE_WINDOW_MAX_DAYS = 14
 RELEASE_AVAILABILITY_GRACE_SECONDS = 4 * 60 * 60
 
-ICSA_RELEASE_SOURCE = "dol_icsa_release_calendar_v1"
+ICSA_RELEASE_SOURCE = "fred_icsa_release_calendar_v2"
 ICSA_LAPSE_BACKFILL_SOURCE = "dol_eta20251120_lapse_notice_backfill_v1"
 ICSA_LAPSE_BACKFILL_RELEASE_DATE = date(2025, 11, 20)
 ICSA_LAPSE_BACKFILL_OBSERVATIONS: tuple[date, ...] = (
@@ -269,10 +267,20 @@ class EconomicReleaseCalendarProvider:
         official_start_year: int,
         official_end_year: int,
     ) -> pd.DataFrame:
-        observation_dates = _load_icsa_observation_weeks_from_dol(min_observation_date=min_observation_date)
+        observation_dates = _load_icsa_observation_weeks_from_fred(min_observation_date=min_observation_date)
+        official_release_dates = _load_fred_release_calendar_dates(
+            start_year=int(official_start_year),
+            end_year=int(official_end_year),
+        )
+        official_obs_dates = {
+            _previous_saturday(release_date)
+            for release_date in official_release_dates
+            if _previous_saturday(release_date) >= min_observation_date
+        }
+        observation_dates = sorted(set(observation_dates).union(official_obs_dates))
         latest_obs_raw: set[str] = set()
-        # DOL ar539 can lag the newest weekly period; union with current ICSA observation
-        # presence so frontier weeks still get official release timestamps.
+        # Union with current ICSA observation presence so frontier weeks still get
+        # official release timestamps even if the latest full-history snapshot lags.
         try:
             latest_obs_raw = _load_latest_observation_presence("ICSA")
             latest_obs_dates = [
@@ -282,13 +290,10 @@ class EconomicReleaseCalendarProvider:
             ]
             observation_dates = sorted(set(observation_dates).union(set(latest_obs_dates)))
         except Exception:
-            # Keep DOL-derived baseline when latest presence probe is transiently unavailable.
+            # Keep the FRED-history + official-calendar baseline when latest presence
+            # probing is transiently unavailable.
             observation_dates = sorted(set(observation_dates))
         available_revision_dates = _load_icsa_available_revision_dates()
-        official_release_dates = _load_fred_release_calendar_dates(
-            start_year=int(official_start_year),
-            end_year=int(official_end_year),
-        )
 
         if not available_revision_dates:
             raise ReleaseCalendarProviderError("No ICSA ALFRED revision dates loaded.")
@@ -664,76 +669,44 @@ def _load_icsa_available_revision_dates() -> list[date]:
     return sorted(set(out))
 
 
-def _load_icsa_observation_weeks_from_dol(*, min_observation_date: date) -> list[date]:
+def _load_icsa_observation_weeks_from_fred(*, min_observation_date: date) -> list[date]:
+    raw = _fetch_text(f"{ALFRED_GRAPH_CSV_URL}?id=ICSA")
+    reader = csv.DictReader(raw.splitlines())
+    fieldnames = list(reader.fieldnames or [])
+    date_col = "observation_date" if "observation_date" in fieldnames else ("DATE" if "DATE" in fieldnames else None)
+    if date_col is None:
+        date_col = fieldnames[0] if fieldnames else None
+    if date_col is None:
+        raise ReleaseCalendarProviderError("Could not resolve DATE column for FRED ICSA history.")
+
+    value_col: str | None = None
+    if "ICSA" in fieldnames:
+        value_col = "ICSA"
+    else:
+        prefixed = sorted([name for name in fieldnames if str(name).startswith("ICSA_")])
+        if prefixed:
+            value_col = prefixed[-1]
+    if value_col is None:
+        fallback_cols = [name for name in fieldnames if name != date_col]
+        value_col = fallback_cols[0] if fallback_cols else None
+    if value_col is None:
+        raise ReleaseCalendarProviderError("Could not resolve value column for FRED ICSA history.")
+
     obs: set[date] = set()
-    current_year = datetime.now(UTC).year
-    for year in range(int(min_observation_date.year), int(current_year) + 1):
-        frame = _fetch_dol_weekly_claims_report_for_year(year=year)
-        if frame.empty:
+    for row in reader:
+        if not isinstance(row, dict):
             continue
-        date_column = frame.iloc[:, 0]
-        parsed_dates = pd.to_datetime(date_column, format="%m/%d/%Y", errors="coerce")
-        for value in parsed_dates.dropna():
-            parsed = value.date()
-            if parsed < min_observation_date:
-                continue
-            obs.add(parsed)
-    if not obs:
-        raise ReleaseCalendarProviderError(
-            "No weekly observation dates extracted from DOL weekly claims report first column."
-        )
+        obs_raw = str(row.get(str(date_col), "")).strip()
+        if not obs_raw:
+            continue
+        value_raw = str(row.get(value_col, "")).strip()
+        if not value_raw or value_raw == ".":
+            continue
+        parsed = _parse_date(obs_raw, "%Y-%m-%d")
+        if parsed is None or parsed < min_observation_date:
+            continue
+        obs.add(parsed)
     return sorted(obs)
-
-
-def _fetch_dol_weekly_claims_report_for_year(*, year: int) -> pd.DataFrame:
-    try:
-        import requests
-    except Exception as exc:  # pragma: no cover - runtime dependency
-        raise RuntimeError("requests is required for DOL weekly claims fetches.") from exc
-
-    response = requests.post(
-        DOL_WEEKLY_CLAIMS_REPORT_URL,
-        data={
-            "level": "us",
-            "final_yr": str(datetime.now(UTC).year + 1),
-            "strtdate": str(int(year)),
-            "enddate": str(int(year)),
-            "filetype": "xls",
-            "submit": "Submit",
-        },
-        timeout=60,
-    )
-    if response.status_code != 200:
-        raise ReleaseCalendarProviderError(
-            f"DOL weekly claims fetch failed: status={response.status_code} url={DOL_WEEKLY_CLAIMS_REPORT_URL}"
-        )
-
-    content_type = str(response.headers.get("content-type") or "").strip().lower()
-    payload = response.text
-    payload_prefix = payload[:256].lstrip().lower()
-    if "text/html" in content_type or payload_prefix.startswith("<!doctype html") or payload_prefix.startswith("<html"):
-        raise ReleaseCalendarProviderError(
-            "DOL weekly claims fetch returned HTML/non-report payload: "
-            f"status={response.status_code} url={DOL_WEEKLY_CLAIMS_REPORT_URL}"
-        )
-
-    try:
-        tables = pd.read_html(io.StringIO(payload))
-    except ValueError as exc:
-        raise ReleaseCalendarProviderError(
-            f"DOL weekly claims report parse failed for year={year}: no tables found."
-        ) from exc
-    if not tables:
-        raise ReleaseCalendarProviderError(
-            f"DOL weekly claims report parse failed for year={year}: no tables returned."
-        )
-
-    frame = tables[0]
-    if frame.shape[1] < 1:
-        raise ReleaseCalendarProviderError(
-            f"DOL weekly claims report parse failed for year={year}: expected date column in first position."
-        )
-    return frame
 
 
 def _load_fred_release_calendar_dates(*, start_year: int, end_year: int) -> set[date]:
