@@ -76,8 +76,8 @@ def build_coverage_report(
             "items": [
                 {"key": "Market price history", "value": str((assets.get("market_price_daily") or {}).get("freshness_status") or "unknown")},
                 {"key": "Market quotes", "value": str((assets.get("market_quotes") or {}).get("freshness_status") or "unknown")},
-                {"key": "Fundamentals", "value": str((assets.get("fundamentals_daily") or {}).get("freshness_status") or "unknown")},
-                {"key": "Earnings history", "value": str((assets.get("earnings_daily") or {}).get("freshness_status") or "unknown")},
+                {"key": "Fundamentals", "value": str((assets.get("market_fundamentals_v2") or {}).get("freshness_status") or "unknown")},
+                {"key": "Earnings history", "value": str((assets.get("market_earnings_history") or {}).get("freshness_status") or "unknown")},
                 {"key": "Macro observations", "value": str((assets.get("macro_observations") or {}).get("freshness_status") or "unknown")},
                 {
                     "key": "Economic release calendar",
@@ -121,7 +121,7 @@ def build_coverage_report(
         warnings.append("No market_earnings_history rows found for ticker.")
 
     freshness_alerts = []
-    for asset_key in ("market_price_daily", "market_quotes", "fundamentals_daily", "earnings_daily"):
+    for asset_key in ("market_price_daily", "market_quotes", "market_fundamentals_v2", "market_earnings_history"):
         freshness = str((assets.get(asset_key) or {}).get("freshness_status") or "unknown").strip().lower()
         if freshness in {"stale", "failed_hard", "partial"}:
             freshness_alerts.append(f"{asset_key} freshness={freshness}")

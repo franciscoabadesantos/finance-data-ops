@@ -79,8 +79,8 @@ def build_ticker_snapshot_report(
             "items": [
                 {"key": "Market price history", "value": str((assets.get("market_price_daily") or {}).get("freshness_status") or "unknown")},
                 {"key": "Market quotes", "value": str((assets.get("market_quotes") or {}).get("freshness_status") or "unknown")},
-                {"key": "Fundamentals", "value": str((assets.get("fundamentals_daily") or {}).get("freshness_status") or "unknown")},
-                {"key": "Earnings history", "value": str((assets.get("earnings_daily") or {}).get("freshness_status") or "unknown")},
+                {"key": "Fundamentals", "value": str((assets.get("market_fundamentals_v2") or {}).get("freshness_status") or "unknown")},
+                {"key": "Earnings history", "value": str((assets.get("market_earnings_history") or {}).get("freshness_status") or "unknown")},
             ],
         },
         {
