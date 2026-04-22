@@ -7,6 +7,7 @@ create table public.market_price_daily (
   date date not null,
   as_of_date date generated always as ("date") stored,
   close double precision not null,
+  volume double precision,
   source text,
   fetched_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
