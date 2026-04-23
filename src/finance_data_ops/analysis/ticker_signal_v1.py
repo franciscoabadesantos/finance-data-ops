@@ -241,15 +241,27 @@ def _compute_market_features(
 
 def _prepare_earnings_history_frame(earnings_rows: list[dict[str, Any]] | None) -> pd.DataFrame:
     if not earnings_rows:
-        return pd.DataFrame(columns=["ticker", "earnings_date", "surprise_eps"])
+        return pd.DataFrame(columns=["ticker", "earnings_date", "actual_eps", "estimate_eps", "surprise_pct"])
     frame = pd.DataFrame(list(earnings_rows))
     if frame.empty:
-        return pd.DataFrame(columns=["ticker", "earnings_date", "surprise_eps"])
+        return pd.DataFrame(columns=["ticker", "earnings_date", "actual_eps", "estimate_eps", "surprise_pct"])
     ticker_col = "ticker" if "ticker" in frame.columns else ("symbol" if "symbol" in frame.columns else None)
     if ticker_col and ticker_col != "ticker":
         frame["ticker"] = frame[ticker_col]
     frame["earnings_date"] = pd.to_datetime(frame.get("earnings_date"), errors="coerce")
-    frame["surprise_eps"] = pd.to_numeric(frame.get("surprise_eps"), errors="coerce")
+    frame["actual_eps"] = pd.to_numeric(frame.get("actual_eps"), errors="coerce")
+    frame["estimate_eps"] = pd.to_numeric(frame.get("estimate_eps"), errors="coerce")
+    denominator = frame["estimate_eps"].abs()
+    frame["surprise_pct"] = pd.Series(float("nan"), index=frame.index, dtype="float64")
+    valid_mask = (
+        frame["actual_eps"].notna()
+        & frame["estimate_eps"].notna()
+        & denominator.notna()
+        & (denominator != 0)
+    )
+    frame.loc[valid_mask, "surprise_pct"] = (
+        (frame.loc[valid_mask, "actual_eps"] - frame.loc[valid_mask, "estimate_eps"]) / denominator.loc[valid_mask]
+    )
     frame = frame.dropna(subset=["earnings_date"]).sort_values("earnings_date").drop_duplicates(subset=["earnings_date"], keep="last")
     return frame.reset_index(drop=True)
 
@@ -334,12 +346,13 @@ def _compute_earnings_features(
             },
         }, warnings
 
-    surprise_values = pd.to_numeric(recent.get("surprise_eps"), errors="coerce")
+    surprise_values = pd.to_numeric(recent.get("surprise_pct"), errors="coerce")
+    valid_surprise_values = surprise_values.dropna()
     beat_count = int((surprise_values > 0).sum())
     miss_count = int((surprise_values < 0).sum())
-    avg_surprise = _to_float(surprise_values.mean())
-    last_surprise = _to_float(surprise_values.iloc[-1]) if len(surprise_values.index) else None
-    trend = _surprise_trend(surprise_values.tolist())
+    avg_surprise = _to_float(valid_surprise_values.mean())
+    last_surprise = _to_float(valid_surprise_values.iloc[-1]) if len(valid_surprise_values.index) else None
+    trend = _surprise_trend(valid_surprise_values.tolist())
     return {
         "next_event": next_event,
         "history": {

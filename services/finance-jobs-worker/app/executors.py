@@ -314,6 +314,9 @@ class JobExecutor:
             region=region,
             exchange=exchange,
         )
+        # limit=252 is intentional: snapshot and coverage reports evaluate
+        # completeness over a recent ~1-year window, not full canonical history.
+        # Full history is available in market_price_daily but not fetched here.
         market_price_rows = self.registry.fetch_market_price_daily_rows(ticker, limit=252)
         fundamentals_rows = self.registry.fetch_fundamentals_rows(ticker)
         earnings_rows = self.registry.fetch_earnings_history_rows(ticker)

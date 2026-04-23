@@ -99,7 +99,14 @@ def _compute_market_stats_from_db(*, client: Any, symbols: list[str]) -> pd.Data
     for symbol in sorted({str(value).strip().upper() for value in symbols if str(value).strip()}):
         for column in ("ticker", "symbol"):
             try:
-                response = client.table("market_price_daily").select("*").eq(column, symbol).limit(50000).execute()
+                response = (
+                    client.table("market_price_daily")
+                    .select("*")
+                    .eq(column, symbol)
+                    .order("date", desc=True)
+                    .limit(300)
+                    .execute()
+                )
             except Exception:
                 continue
             rows = response.data or []
