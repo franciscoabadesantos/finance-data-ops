@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -9,10 +9,15 @@ from finance_data_ops.publish.client import RecordingPublisher
 from finance_data_ops.refresh.storage import table_path
 from flows.dataops_market_daily import run_dataops_market_daily
 
+TEST_RUN_NOW = datetime.now(UTC).replace(microsecond=0)
+TEST_END_DATE = TEST_RUN_NOW.date().isoformat()
+TEST_START_DATE = (TEST_RUN_NOW.date() - timedelta(days=1)).isoformat()
+
 
 class FakeMarketProvider:
     def fetch_daily_prices(self, symbols: list[str], *, start: str, end: str) -> pd.DataFrame:
         rows: list[dict[str, object]] = []
+        price_ingested_at = TEST_RUN_NOW - timedelta(hours=1)
         for symbol in symbols:
             rows.append(
                 {
@@ -25,7 +30,7 @@ class FakeMarketProvider:
                     "adj_close": 100.5,
                     "volume": 1_000_000,
                     "provider": "fake",
-                    "ingested_at": datetime(2026, 4, 11, 8, 0, tzinfo=UTC),
+                    "ingested_at": price_ingested_at,
                 }
             )
             rows.append(
@@ -39,18 +44,19 @@ class FakeMarketProvider:
                     "adj_close": 101.5,
                     "volume": 1_100_000,
                     "provider": "fake",
-                    "ingested_at": datetime(2026, 4, 11, 8, 0, tzinfo=UTC),
+                    "ingested_at": price_ingested_at,
                 }
             )
         return pd.DataFrame(rows)
 
     def fetch_latest_quotes(self, symbols: list[str]) -> pd.DataFrame:
         rows: list[dict[str, object]] = []
+        quote_timestamp = TEST_RUN_NOW
         for symbol in symbols:
             rows.append(
                 {
                     "symbol": symbol.upper(),
-                    "quote_ts": datetime(2026, 4, 11, 8, 30, tzinfo=UTC),
+                    "quote_ts": quote_timestamp,
                     "price": 101.5,
                     "previous_close": 100.5,
                     "open": 101.0,
@@ -58,7 +64,7 @@ class FakeMarketProvider:
                     "low": 100.0,
                     "volume": 1_100_000,
                     "provider": "fake",
-                    "ingested_at": datetime(2026, 4, 11, 8, 30, tzinfo=UTC),
+                    "ingested_at": quote_timestamp,
                 }
             )
         return pd.DataFrame(rows)
@@ -75,8 +81,8 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     publisher = RecordingPublisher()
     summary = run_dataops_market_daily(
         symbols=["SPY", "QQQ"],
-        start="2026-04-10",
-        end="2026-04-11",
+        start=TEST_START_DATE,
+        end=TEST_END_DATE,
         cache_root=str(tmp_path),
         publish_enabled=True,
         provider=FakeMarketProvider(),
@@ -143,17 +149,17 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
         assert row["run_id"]
     orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_market_daily")
     assert orchestration_row["status"] == "success"
-    assert orchestration_row["symbols_requested"] == ["SPY", "QQQ"]
-    assert sorted(orchestration_row["symbols_succeeded"]) == ["QQQ", "SPY"]
-    assert orchestration_row["symbols_failed"] == []
+    assert orchestration_row["symbols_requested"] == 2
+    assert orchestration_row["symbols_succeeded"] == 2
+    assert orchestration_row["symbols_failed"] == 0
 
 
 def test_smoke_publish_failure_still_attempts_status(tmp_path) -> None:
     publisher = FailOncePublisher()
     summary = run_dataops_market_daily(
         symbols=["SPY", "QQQ"],
-        start="2026-04-10",
-        end="2026-04-11",
+        start=TEST_START_DATE,
+        end=TEST_END_DATE,
         cache_root=str(tmp_path),
         publish_enabled=True,
         provider=FakeMarketProvider(),
@@ -182,8 +188,8 @@ def test_publish_enabled_requires_supabase_env_without_injected_publisher(tmp_pa
     try:
         run_dataops_market_daily(
             symbols=["SPY"],
-            start="2026-04-10",
-            end="2026-04-11",
+            start=TEST_START_DATE,
+            end=TEST_END_DATE,
             cache_root=str(tmp_path),
             publish_enabled=True,
             provider=FakeMarketProvider(),
@@ -203,25 +209,25 @@ def test_market_coverage_merge_preserves_existing_fundamentals_and_earnings(tmp_
         {
             "ticker": "SPY",
             "fundamentals_available": True,
-            "fundamentals_last_date": "2026-04-10",
+            "fundamentals_last_date": TEST_START_DATE,
             "earnings_available": True,
-            "next_earnings_date": "2026-05-01",
+            "next_earnings_date": TEST_END_DATE,
             "signal_available": False,
         },
         {
             "ticker": "QQQ",
             "fundamentals_available": True,
-            "fundamentals_last_date": "2026-04-10",
+            "fundamentals_last_date": TEST_START_DATE,
             "earnings_available": True,
-            "next_earnings_date": "2026-05-01",
+            "next_earnings_date": TEST_END_DATE,
             "signal_available": False,
         },
     ]
 
     summary = run_dataops_market_daily(
         symbols=["SPY", "QQQ"],
-        start="2026-04-10",
-        end="2026-04-11",
+        start=TEST_START_DATE,
+        end=TEST_END_DATE,
         cache_root=str(tmp_path),
         publish_enabled=True,
         provider=FakeMarketProvider(),
@@ -238,4 +244,4 @@ def test_market_coverage_merge_preserves_existing_fundamentals_and_earnings(tmp_
     assert rows_by_ticker["SPY"]["earnings_available"] is True
     assert rows_by_ticker["SPY"]["coverage_status"] == "fresh"
     assert rows_by_ticker["SPY"]["reason"] == "market_fundamentals_earnings_available"
-    assert rows_by_ticker["SPY"]["next_earnings_date"] == "2026-05-01"
+    assert rows_by_ticker["SPY"]["next_earnings_date"] == TEST_END_DATE
