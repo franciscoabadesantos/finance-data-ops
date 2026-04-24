@@ -50,7 +50,7 @@ Owned Supabase surfaces:
 Required for publish runs:
 
 - `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_SECRET_KEY`
 - `DATA_OPS_SYMBOLS` (unless passed via `--symbols`)
 
 Optional:

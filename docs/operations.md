@@ -50,7 +50,7 @@ python scripts/check_release_calendar_parity.py --start-date 2020-01-01 --end-da
 ## Required environment
 
 - `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_SECRET_KEY`
 - `DATA_OPS_SYMBOLS`
 
 Optional:

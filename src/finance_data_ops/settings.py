@@ -24,7 +24,7 @@ class DataOpsSettings:
     repo_root: Path
     cache_root: Path
     supabase_url: str
-    supabase_service_role_key: str
+    supabase_secret_key: str
     default_symbols: list[str]
     default_lookback_days: int
     default_max_attempts: int
@@ -34,8 +34,8 @@ class DataOpsSettings:
     def require_supabase(self) -> None:
         if not self.supabase_url:
             raise ValueError("SUPABASE_URL is required when publish is enabled.")
-        if not self.supabase_service_role_key:
-            raise ValueError("SUPABASE_SERVICE_ROLE_KEY is required when publish is enabled.")
+        if not self.supabase_secret_key:
+            raise ValueError("SUPABASE_SECRET_KEY is required when publish is enabled.")
 
 
 def load_settings(
@@ -57,7 +57,7 @@ def load_settings(
     resolved_cache_root.mkdir(parents=True, exist_ok=True)
 
     supabase_url = str(env_map.get("SUPABASE_URL") or "").strip()
-    supabase_service_role_key = str(env_map.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+    supabase_secret_key = str(env_map.get("SUPABASE_SECRET_KEY") or "").strip()
     default_symbols = _parse_symbols_env(env_map.get("DATA_OPS_SYMBOLS"))
     default_lookback_days = _parse_positive_int(env_map.get("DATA_OPS_LOOKBACK_DAYS"), fallback=400)
     default_max_attempts = _parse_positive_int(env_map.get("DATA_OPS_MAX_ATTEMPTS"), fallback=3)
@@ -68,7 +68,7 @@ def load_settings(
         repo_root=repo_root,
         cache_root=resolved_cache_root,
         supabase_url=supabase_url,
-        supabase_service_role_key=supabase_service_role_key,
+        supabase_secret_key=supabase_secret_key,
         default_symbols=default_symbols,
         default_lookback_days=default_lookback_days,
         default_max_attempts=default_max_attempts,

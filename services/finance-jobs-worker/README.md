@@ -24,7 +24,7 @@ defense-in-depth for app-layer bearer verification.
 ## Required env vars
 
 - `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_SECRET_KEY`
 
 ## Optional env vars
 

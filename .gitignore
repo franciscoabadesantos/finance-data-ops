@@ -14,6 +14,7 @@ venv/
 
 # Local runtime/build artifacts
 data_cache/
+aggregation/
 *.egg-info/
 
 # OS/editor

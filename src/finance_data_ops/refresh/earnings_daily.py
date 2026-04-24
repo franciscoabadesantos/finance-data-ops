@@ -40,7 +40,7 @@ def refresh_earnings_daily(
     registry_metadata = _fetch_ticker_registry_metadata(
         cache_root=cache_root,
         supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_service_role_key,
+        service_role_key=settings.supabase_secret_key,
         tickers=symbols_requested,
     )
 

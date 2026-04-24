@@ -100,7 +100,7 @@ def run_dataops_macro_daily(
             settings.require_supabase()
             publisher_impl = SupabaseRestPublisher(
                 supabase_url=settings.supabase_url,
-                service_role_key=settings.supabase_service_role_key,
+                service_role_key=settings.supabase_secret_key,
             )
         LOGGER.info("Using Supabase publisher for macro/status surfaces.")
     else:

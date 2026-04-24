@@ -183,7 +183,7 @@ def test_smoke_publish_failure_still_attempts_status(tmp_path) -> None:
 
 def test_publish_enabled_requires_supabase_env_without_injected_publisher(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
 
     try:
         run_dataops_market_daily(
@@ -198,7 +198,7 @@ def test_publish_enabled_requires_supabase_env_without_injected_publisher(tmp_pa
         )
     except ValueError as exc:
         message = str(exc)
-        assert "SUPABASE_URL" in message or "SUPABASE_SERVICE_ROLE_KEY" in message
+        assert "SUPABASE_URL" in message or "SUPABASE_SECRET_KEY" in message
     else:  # pragma: no cover - defensive
         raise AssertionError("Expected missing Supabase env validation error.")
 

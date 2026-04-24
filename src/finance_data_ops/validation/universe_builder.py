@@ -31,7 +31,7 @@ def load_validated_symbols(
 
     settings = load_settings(cache_root=cache_root)
     resolved_supabase_url = str(supabase_url or settings.supabase_url).strip()
-    resolved_service_key = str(service_role_key or settings.supabase_service_role_key).strip()
+    resolved_service_key = str(service_role_key or settings.supabase_secret_key).strip()
 
     rows: list[dict[str, Any]] = []
     if resolved_supabase_url and resolved_service_key:
@@ -66,7 +66,7 @@ def load_all_region_universes(
 ) -> dict[str, list[str]]:
     settings = load_settings(cache_root=cache_root)
     resolved_supabase_url = str(supabase_url or settings.supabase_url).strip()
-    resolved_service_key = str(service_role_key or settings.supabase_service_role_key).strip()
+    resolved_service_key = str(service_role_key or settings.supabase_secret_key).strip()
 
     rows: list[dict[str, Any]] = []
     if resolved_supabase_url and resolved_service_key:

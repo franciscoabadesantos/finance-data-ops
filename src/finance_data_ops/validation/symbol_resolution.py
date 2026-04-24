@@ -41,7 +41,7 @@ def resolve_symbols(
             require_market=True,
             cache_root=settings.cache_root,
             supabase_url=settings.supabase_url,
-            service_role_key=settings.supabase_service_role_key,
+            service_role_key=settings.supabase_secret_key,
         )
         if registry_symbols:
             return registry_symbols

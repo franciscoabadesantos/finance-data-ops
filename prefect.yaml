@@ -46,7 +46,7 @@ deployments:
           - "PyYAML>=6.0"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           BACKEND_BASE_URL: "{{ prefect.blocks.secret.backend-base-url }}"
           BACKEND_SERVICE_TOKEN: "{{ prefect.blocks.secret.backend-service-token }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
@@ -83,7 +83,7 @@ deployments:
           - "PyYAML>=6.0"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
           DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK.B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
           DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
@@ -121,7 +121,7 @@ deployments:
           - "PyYAML>=6.0"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
           DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK.B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
           DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
@@ -164,7 +164,7 @@ deployments:
           - "pandas-datareader>=0.10"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
 
   - name: release-calendar-daily
@@ -205,5 +205,5 @@ deployments:
           - "pandas-datareader>=0.10"
         env:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SERVICE_ROLE_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"

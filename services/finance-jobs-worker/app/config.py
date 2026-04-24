@@ -12,7 +12,7 @@ class WorkerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 
     supabase_url: str
-    supabase_service_role_key: str
+    supabase_secret_key: str
     worker_shared_token: str | None = None
 
     finance_data_ops_root: str = "../.."
@@ -29,7 +29,7 @@ class WorkerSettings(BaseSettings):
 
     @field_validator(
         "supabase_url",
-        "supabase_service_role_key",
+        "supabase_secret_key",
         "worker_shared_token",
         "finance_data_ops_root",
         "gcp_project_id",

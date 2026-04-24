@@ -95,7 +95,7 @@ def run_dataops_release_calendar_daily(
             settings.require_supabase()
             publisher_impl = SupabaseRestPublisher(
                 supabase_url=settings.supabase_url,
-                service_role_key=settings.supabase_service_role_key,
+                service_role_key=settings.supabase_secret_key,
             )
     else:
         publisher_impl = publisher or RecordingPublisher()

@@ -84,7 +84,7 @@ def run_data_ops_rebuild_job(
     data_ops_settings = load_settings()
     publisher = SupabaseRestPublisher(
         supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_service_role_key,
+        service_role_key=settings.supabase_secret_key,
     )
     progress = None
     if job_id:
@@ -319,7 +319,7 @@ def _run_release_calendar_upsert(
 
     publisher = SupabaseRestPublisher(
         supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_service_role_key,
+        service_role_key=settings.supabase_secret_key,
     )
     frame = pd.DataFrame([table_row])
     publish_result = publish_release_calendar_surfaces(

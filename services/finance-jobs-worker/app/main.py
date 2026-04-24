@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-    supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    supabase = create_client(settings.supabase_url, settings.supabase_secret_key)
     registry = WorkerRegistryStore(supabase)
     tasks = CloudTasksEnqueuer(settings)
     executor = JobExecutor(settings=settings, registry=registry, tasks=tasks)

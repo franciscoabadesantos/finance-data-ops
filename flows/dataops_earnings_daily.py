@@ -92,7 +92,7 @@ def run_dataops_earnings_daily(
     if publish_enabled and publisher is None and not existing_coverage_rows:
         existing_coverage_rows = _load_existing_symbol_coverage_rows(
             supabase_url=settings.supabase_url,
-            service_role_key=settings.supabase_service_role_key,
+            service_role_key=settings.supabase_secret_key,
             symbols=normalized_symbols,
         )
 
@@ -131,7 +131,7 @@ def run_dataops_earnings_daily(
             settings.require_supabase()
             publisher_impl = SupabaseRestPublisher(
                 supabase_url=settings.supabase_url,
-                service_role_key=settings.supabase_service_role_key,
+                service_role_key=settings.supabase_secret_key,
             )
     else:
         publisher_impl = publisher or RecordingPublisher()

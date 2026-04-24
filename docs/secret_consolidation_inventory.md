@@ -16,7 +16,7 @@ Scope: `finance-data-ops`, `finance-backend`, `spy-signal-site`, `spy-signal-bac
 
 | Secret / Config | Current locations | Owning runtime | Target source of truth | Rotation impact |
 |---|---|---|---|---|
-| `SUPABASE_SERVICE_ROLE_KEY` | `finance-data-ops` workflows + Prefect blocks + local `.env`; `finance-backend` env; `spy-signal-site` server env; `Finance` workflows | GCP worker, Prefect jobs, Vercel backends, GH Actions | GCP: Google Secret Manager (`supabase-service-role-key`); Vercel: Shared Environment Variable `SUPABASE_SERVICE_ROLE_KEY`; Prefect: Prefect Secret block synchronized from same canonical value | High: affects all write paths; rotate with staged rollout and smoke tests |
+| `SUPABASE_SECRET_KEY` | `finance-data-ops` workflows + Prefect blocks + local `.env`; `finance-backend` env; `spy-signal-site` server env; `Finance` workflows | GCP worker, Prefect jobs, Vercel backends, GH Actions | GCP: Google Secret Manager (`supabase-service-role-key`); Vercel: Shared Environment Variable `SUPABASE_SECRET_KEY`; Prefect: Prefect Secret block synchronized from same canonical value | High: affects all write paths; rotate with staged rollout and smoke tests |
 | `SUPABASE_URL` | All repos env/config | All runtimes | Non-secret shared config: Vercel Shared Env + GCP repo vars + Prefect block | Low-medium |
 | `SHARED_SECRET` / `FINANCE_BACKEND_SHARED_SECRET` | `finance-backend` + `spy-signal-site` | Backend ticker endpoints + website proxy | Canonical name: `BACKEND_SHARED_SECRET` (Vercel Shared Env), legacy aliases temporary | Medium; ticker request/status auth path |
 | `FINANCE_BACKEND_SERVICE_TOKEN` | `spy-signal-backoffice` | Backoffice -> backend analyst API | Canonical name: `BACKEND_SERVICE_TOKEN` (Vercel Shared Env), legacy alias temporary | Medium; analyst API access control |
@@ -53,7 +53,7 @@ Scope: `finance-data-ops`, `finance-backend`, `spy-signal-site`, `spy-signal-bac
 - Added ignore rules for `.env` and `worker.env.yaml`.
 - Updated `finance-data-ops` worker deploy workflow to:
   - use Workload Identity Federation auth (no `GCP_SA_KEY` JSON in GH secrets),
-  - pull `SUPABASE_SERVICE_ROLE_KEY` from Secret Manager via `--set-secrets`,
+  - pull `SUPABASE_SECRET_KEY` from Secret Manager via `--set-secrets`,
   - keep optional `WORKER_SHARED_TOKEN` secret.
 - Standardized backend auth names in code (with legacy fallback):
   - `BACKEND_SHARED_SECRET`
@@ -63,7 +63,7 @@ Scope: `finance-data-ops`, `finance-backend`, `spy-signal-site`, `spy-signal-bac
 
 ## Required follow-up (operator actions)
 
-1. Rotate leaked `SUPABASE_SERVICE_ROLE_KEY` immediately.
+1. Rotate leaked `SUPABASE_SECRET_KEY` immediately.
 2. Create/refresh GSM secrets:
    - `supabase-service-role-key`
    - optional `worker-shared-token`
@@ -71,10 +71,10 @@ Scope: `finance-data-ops`, `finance-backend`, `spy-signal-site`, `spy-signal-bac
    - `GCP_WORKLOAD_IDENTITY_PROVIDER`
    - `GCP_DEPLOYER_SERVICE_ACCOUNT`
    - `SUPABASE_URL`
-   - `GSM_SUPABASE_SERVICE_ROLE_KEY_SECRET`
+   - `GSM_SUPABASE_SECRET_KEY_SECRET`
    - optional: `GSM_WORKER_SHARED_TOKEN_SECRET`, `GCP_WORKER_RUNTIME_SERVICE_ACCOUNT`, `TASKS_INVOKER_SERVICE_ACCOUNT_EMAIL`
 4. Move shared Vercel secrets into Vercel Shared Environment Variables:
-   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `SUPABASE_SECRET_KEY`
    - `BACKEND_SHARED_SECRET`
    - `BACKEND_SERVICE_TOKEN`
    - `GCP_SERVICE_ACCOUNT_JSON` (temporary until identity-native replacement)

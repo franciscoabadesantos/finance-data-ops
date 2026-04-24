@@ -9,7 +9,7 @@ from finance_data_ops.validation.universe_builder import load_all_region_univers
 def test_load_validated_symbols_filters_by_registry_rules(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DATA_OPS_CACHE_ROOT", str(tmp_path))
     monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
 
     frame = pd.DataFrame(
         [
@@ -85,7 +85,7 @@ def test_load_validated_symbols_filters_by_registry_rules(tmp_path, monkeypatch)
 def test_load_all_region_universes_returns_defaults_when_empty(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DATA_OPS_CACHE_ROOT", str(tmp_path))
     monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
 
     universes = load_all_region_universes()
     assert set(universes.keys()) == {"us", "eu", "apac"}

@@ -252,7 +252,7 @@ def dataops_market_daily_flow(
         safety_overlap_days=2,
         cache_root=settings.cache_root,
         supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_service_role_key,
+        service_role_key=settings.supabase_secret_key,
     )
     resolved_start, resolved_end = execution_plan.start_date, execution_plan.end_date
 
@@ -318,7 +318,7 @@ def dataops_fundamentals_daily_flow(
         explicit_end=None,
         cache_root=settings.cache_root,
         supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_service_role_key,
+        service_role_key=settings.supabase_secret_key,
     )
     logger.info(
         "Running fundamentals flow (region=%s, symbols=%s, mode=%s, latest_complete=%s, gap_exists=%s).",
@@ -373,7 +373,7 @@ def dataops_earnings_daily_flow(
         explicit_end=None,
         cache_root=settings.cache_root,
         supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_service_role_key,
+        service_role_key=settings.supabase_secret_key,
     )
     resolved_history_limit = int(history_limit)
     if execution_plan.gap_exists and execution_plan.earliest_missing_date:
@@ -439,7 +439,7 @@ def dataops_macro_daily_flow(
         safety_overlap_days=2,
         cache_root=settings.cache_root,
         supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_service_role_key,
+        service_role_key=settings.supabase_secret_key,
     )
     resolved_start, resolved_end = execution_plan.start_date, execution_plan.end_date
 
@@ -501,7 +501,7 @@ def dataops_release_calendar_daily_flow(
         explicit_end=end_date,
         cache_root=settings.cache_root,
         supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_service_role_key,
+        service_role_key=settings.supabase_secret_key,
     )
     resolved_start = str(start_date).strip() if start_date else execution_plan.start_date
     resolved_end = execution_plan.end_date
@@ -716,17 +716,17 @@ def dataops_ticker_validation_flow(
     )
 
     remote_publish_result: dict[str, Any] = {"status": "skipped"}
-    if bool(publish_registry) and settings.supabase_url and settings.supabase_service_role_key:
+    if bool(publish_registry) and settings.supabase_url and settings.supabase_secret_key:
         publisher = SupabaseRestPublisher(
             supabase_url=settings.supabase_url,
-            service_role_key=settings.supabase_service_role_key,
+            service_role_key=settings.supabase_secret_key,
         )
         remote_publish_result = publish_ticker_registry(
             publisher=publisher,
             rows=[result["registry_row"]],
         )
     elif bool(publish_registry):
-        logger.info("Ticker registry remote publish skipped: SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY missing.")
+        logger.info("Ticker registry remote publish skipped: SUPABASE_URL/SUPABASE_SECRET_KEY missing.")
 
     selected = result.get("selected", {})
     if str(selected.get("validation_status")) == "rejected":
@@ -792,10 +792,10 @@ def dataops_ticker_onboarding_flow(
     )
 
     pending_publish_result: dict[str, Any] = {"status": "skipped"}
-    if bool(publish_enabled) and settings.supabase_url and settings.supabase_service_role_key:
+    if bool(publish_enabled) and settings.supabase_url and settings.supabase_secret_key:
         publisher = SupabaseRestPublisher(
             supabase_url=settings.supabase_url,
-            service_role_key=settings.supabase_service_role_key,
+            service_role_key=settings.supabase_secret_key,
         )
         pending_publish_result = publish_ticker_registry(
             publisher=publisher,
@@ -828,7 +828,7 @@ def dataops_ticker_onboarding_flow(
         registry_key=str(pending_row["registry_key"]),
         cache_root=settings.cache_root,
         supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_service_role_key,
+        service_role_key=settings.supabase_secret_key,
     )
     if str(validation_state).lower() != "completed":
         fallback_row = build_pending_registry_row(
@@ -847,10 +847,10 @@ def dataops_ticker_onboarding_flow(
             }
         )
         upsert_ticker_registry_rows(cache_root=settings.cache_root, rows=[fallback_row])
-        if bool(publish_enabled) and settings.supabase_url and settings.supabase_service_role_key:
+        if bool(publish_enabled) and settings.supabase_url and settings.supabase_secret_key:
             publisher = SupabaseRestPublisher(
                 supabase_url=settings.supabase_url,
-                service_role_key=settings.supabase_service_role_key,
+                service_role_key=settings.supabase_secret_key,
             )
             publish_ticker_registry(publisher=publisher, rows=[fallback_row])
         registry_row = fallback_row

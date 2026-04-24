@@ -90,7 +90,7 @@ class SupabaseRestPublisher:
         if not self.supabase_url:
             raise ValueError("SUPABASE_URL is required.")
         if not self.service_role_key:
-            raise ValueError("SUPABASE_SERVICE_ROLE_KEY is required.")
+            raise ValueError("SUPABASE_SECRET_KEY is required.")
 
     def upsert(
         self,

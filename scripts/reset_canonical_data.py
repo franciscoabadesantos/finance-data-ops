@@ -168,9 +168,9 @@ def main(argv: list[str] | None = None) -> int:
     domains = _normalize_domains(args.domains)
 
     supabase_url = str(os.environ.get("SUPABASE_URL") or "").strip()
-    service_role_key = str(os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+    service_role_key = str(os.environ.get("SUPABASE_SECRET_KEY") or "").strip()
     if not supabase_url or not service_role_key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set.")
+        raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY must be set.")
 
     targets: list[TableResetTarget] = []
     for domain in domains:
