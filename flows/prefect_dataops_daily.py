@@ -217,8 +217,8 @@ def _record_ticker_backfill_status(
 
 @flow(
     name="dataops_market_daily",
-    retries=2,
-    retry_delay_seconds=300,
+    retries=1,
+    retry_delay_seconds=120,
     log_prints=True,
 )
 def dataops_market_daily_flow(
@@ -288,7 +288,7 @@ def dataops_market_daily_flow(
 @flow(
     name="dataops_fundamentals_daily",
     retries=1,
-    retry_delay_seconds=900,
+    retry_delay_seconds=120,
     log_prints=True,
 )
 def dataops_fundamentals_daily_flow(
@@ -342,8 +342,8 @@ def dataops_fundamentals_daily_flow(
 
 @flow(
     name="dataops_earnings_daily",
-    retries=2,
-    retry_delay_seconds=600,
+    retries=1,
+    retry_delay_seconds=120,
     log_prints=True,
 )
 def dataops_earnings_daily_flow(
@@ -412,8 +412,8 @@ def dataops_earnings_daily_flow(
 
 @flow(
     name="dataops_macro_daily",
-    retries=2,
-    retry_delay_seconds=600,
+    retries=1,
+    retry_delay_seconds=120,
     log_prints=True,
 )
 def dataops_macro_daily_flow(
@@ -472,8 +472,8 @@ def dataops_macro_daily_flow(
 
 @flow(
     name="dataops_release_calendar_daily",
-    retries=2,
-    retry_delay_seconds=600,
+    retries=1,
+    retry_delay_seconds=120,
     log_prints=True,
 )
 def dataops_release_calendar_daily_flow(
