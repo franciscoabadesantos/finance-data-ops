@@ -15,6 +15,19 @@ Historical numbered SQL files remain in the repo for older-instance archaeology,
 - `mv_latest_prices` (RPC refresh path: `refresh_mv_latest_prices`)
 - `ticker_market_stats_snapshot`
 
+`market_price_daily` write contract (upsert key: `ticker,date`):
+
+- `ticker`
+- `date`
+- `open`
+- `high`
+- `low`
+- `close`
+- `volume`
+- `source`
+- `fetched_at`
+- `created_at`
+
 ## Fundamentals surfaces
 
 - `market_fundamentals_v2` (canonical normalized history)

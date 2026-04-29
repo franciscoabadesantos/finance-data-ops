@@ -32,6 +32,9 @@ def build_market_price_daily_payload(prices_frame: pd.DataFrame) -> list[dict[st
         {
             "ticker": ticker.astype(str).str.upper(),
             "date": pd.to_datetime(date_series, errors="coerce").dt.date,
+            "open": pd.to_numeric(frame.get("open"), errors="coerce"),
+            "high": pd.to_numeric(frame.get("high"), errors="coerce"),
+            "low": pd.to_numeric(frame.get("low"), errors="coerce"),
             "close": pd.to_numeric(frame.get("close"), errors="coerce"),
             "volume": pd.to_numeric(frame.get("volume"), errors="coerce"),
             "source": source,
@@ -49,6 +52,9 @@ def build_market_price_daily_payload(prices_frame: pd.DataFrame) -> list[dict[st
         [
             "ticker",
             "date",
+            "open",
+            "high",
+            "low",
             "close",
             "volume",
             "source",

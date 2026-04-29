@@ -105,6 +105,22 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     assert coverage_row["market_data_last_date"] is not None
     assert coverage_row["reason"] == "market_price_and_quote_available"
 
+    prices_upsert = next(call for call in publisher.upserts if call["table"] == "market_price_daily")
+    price_row = prices_upsert["rows"][0]
+    assert set(price_row.keys()) == {
+        "ticker",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "source",
+        "fetched_at",
+        "created_at",
+    }
+    assert price_row["high"] == 101.0
+
     quotes_upsert = next(call for call in publisher.upserts if call["table"] == "market_quotes")
     assert quotes_upsert["on_conflict"] == "ticker"
     quote_row = quotes_upsert["rows"][0]

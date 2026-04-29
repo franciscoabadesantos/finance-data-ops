@@ -118,9 +118,24 @@ def test_publish_contract_writes_expected_tables() -> None:
     assert conflict_by_table["ticker_market_stats_snapshot"] == "ticker"
     prices_call = next(call for call in publisher.upserts if call["table"] == "market_price_daily")
     price_row = prices_call["rows"][0]
-    assert set(price_row.keys()) == {"ticker", "date", "close", "source", "fetched_at", "created_at"}
+    assert set(price_row.keys()) == {
+        "ticker",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "source",
+        "fetched_at",
+        "created_at",
+    }
     assert price_row["ticker"] == "SPY"
     assert price_row["source"] == "yahoo_finance"
+    assert price_row["open"] == 500.0
+    assert price_row["high"] == 510.0
+    assert price_row["low"] == 495.0
+    assert price_row["volume"] == 1_000_000.0
     quotes_call = next(call for call in publisher.upserts if call["table"] == "market_quotes")
     quote_row = quotes_call["rows"][0]
     assert set(quote_row.keys()) == {
@@ -190,12 +205,27 @@ def test_publish_rows_are_json_safe_before_upsert() -> None:
 
     price_call = next(call for call in publisher.upserts if call["table"] == "market_price_daily")
     row = price_call["rows"][0]
-    assert set(row.keys()) == {"ticker", "date", "close", "source", "fetched_at", "created_at"}
+    assert set(row.keys()) == {
+        "ticker",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "source",
+        "fetched_at",
+        "created_at",
+    }
     assert row["ticker"] == "SPY"
     assert isinstance(row["date"], str)
     assert isinstance(row["fetched_at"], str)
     assert isinstance(row["created_at"], str)
+    assert isinstance(row["open"], float)
+    assert isinstance(row["high"], float)
+    assert isinstance(row["low"], float)
     assert isinstance(row["close"], float)
+    assert isinstance(row["volume"], (int, float))
 
 
 def test_quote_rows_are_json_safe_before_upsert() -> None:
