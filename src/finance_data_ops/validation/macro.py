@@ -55,6 +55,7 @@ def validate_macro_publish_contract(
     macro_observations: pd.DataFrame,
     macro_daily: pd.DataFrame,
     required_series_keys: Iterable[str] | None = None,
+    validate_required_across_window: bool = False,
     now_utc: datetime | None = None,
 ) -> None:
     now = now_utc or datetime.now(UTC)
@@ -117,6 +118,13 @@ def validate_macro_publish_contract(
         )
 
     if required_set:
+        if validate_required_across_window:
+            _validate_required_series_across_publish_window(
+                series_catalog=series_catalog,
+                macro_daily=macro_daily,
+                required_set=required_set,
+            )
+            return
         latest_as_of = pd.to_datetime(macro_daily["as_of_date"], errors="coerce").max()
         if pd.isna(latest_as_of):
             raise MacroValidationError("macro_daily has invalid as_of_date values.")
@@ -144,6 +152,63 @@ def validate_macro_publish_contract(
             raise MacroValidationError(
                 "macro_daily latest as_of_date has NULL required series values: "
                 + ",".join(sorted(set(null_required)))
+            )
+
+
+def _validate_required_series_across_publish_window(
+    *,
+    series_catalog: pd.DataFrame,
+    macro_daily: pd.DataFrame,
+    required_set: set[str],
+) -> None:
+    as_of_series = pd.to_datetime(macro_daily["as_of_date"], errors="coerce").dt.normalize()
+    if as_of_series.isna().all():
+        raise MacroValidationError("macro_daily has invalid as_of_date values.")
+
+    frame = macro_daily.copy()
+    frame["as_of_date"] = as_of_series
+    frame["series_key"] = frame["series_key"].astype(str)
+    first_available_by_series = {
+        str(series_key): pd.Timestamp(first_as_of_date).normalize()
+        for series_key, first_as_of_date in frame.groupby("series_key")["as_of_date"].min().items()
+        if pd.notna(first_as_of_date)
+    }
+
+    for as_of_date in sorted(v for v in frame["as_of_date"].dropna().unique()):
+        normalized_as_of = pd.Timestamp(as_of_date).normalize()
+        active_required_set = _required_series_for_as_of_date(
+            required_set=required_set,
+            series_catalog=series_catalog,
+            as_of_date=normalized_as_of,
+        )
+        active_required_set = {
+            series_key
+            for series_key in active_required_set
+            if first_available_by_series.get(series_key) is not None
+            and first_available_by_series[series_key] <= normalized_as_of
+        }
+        if not active_required_set:
+            continue
+
+        rows = frame.loc[frame["as_of_date"] == normalized_as_of].copy()
+        present_series = set(rows["series_key"].tolist())
+        missing_required = sorted(active_required_set.difference(present_series))
+        if missing_required:
+            raise MacroValidationError(
+                "macro_daily is missing required series across publish window at "
+                f"{normalized_as_of.date().isoformat()}: " + ",".join(missing_required)
+            )
+
+        req_rows = rows[rows["series_key"].isin(active_required_set)].copy()
+        req_values = pd.to_numeric(req_rows.get("value"), errors="coerce")
+        if req_values.isna().any():
+            null_pairs = [
+                f"{normalized_as_of.date().isoformat()}:{series_key}"
+                for series_key in sorted(req_rows.loc[req_values.isna(), "series_key"].astype(str).tolist())
+            ]
+            raise MacroValidationError(
+                "macro_daily contains NULL required series values across publish window: "
+                + ",".join(null_pairs)
             )
 
 

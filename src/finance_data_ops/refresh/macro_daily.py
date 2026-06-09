@@ -500,9 +500,14 @@ def _build_macro_daily_frame(
             staleness_valid = np.busday_count(src_days[valid], idx_days[valid])
             staleness[valid] = staleness_valid
 
-        limit = int(STALENESS_MAX_BDAYS_BY_FREQUENCY[spec.frequency])
-        stale_mask = (~valid) | (staleness > limit)
-        aligned.loc[stale_mask, "value"] = np.nan
+        configured_limit = spec.staleness_max_bdays
+        limit = int(configured_limit) if configured_limit is not None else int(STALENESS_MAX_BDAYS_BY_FREQUENCY[spec.frequency])
+        stale_mask = valid & (staleness > limit)
+        keep_mask = valid
+
+        aligned = aligned.loc[keep_mask].copy()
+        staleness = staleness[keep_mask]
+        stale_mask = stale_mask[keep_mask]
 
         aligned = aligned.reset_index().rename(columns={"index": "as_of_date"})
         aligned["as_of_date"] = pd.to_datetime(aligned["as_of_date"], errors="coerce").dt.date

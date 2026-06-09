@@ -203,6 +203,7 @@ def _run_macro_series_upsert(
         required_by_default=bool(series.get("required_by_default")),
         optional=bool(series.get("optional", True)),
         description=str(series.get("description") or "").strip(),
+        staleness_max_bdays=int(series.get("staleness_max_bdays")) if series.get("staleness_max_bdays") is not None else None,
     )
 
     row = {

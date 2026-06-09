@@ -24,6 +24,7 @@ class MacroSeriesSpec:
     required_from_date: date | None = None
     optional: bool = False
     description: str = ""
+    staleness_max_bdays: int | None = None
 
 
 STALENESS_MAX_BDAYS_BY_FREQUENCY: dict[MacroFrequency, int] = {
@@ -177,7 +178,11 @@ def catalog_frame(catalog: Iterable[MacroSeriesSpec] | None = None) -> pd.DataFr
                 "required_by_default": bool(spec.required_by_default),
                 "required_from_date": (spec.required_from_date.isoformat() if spec.required_from_date is not None else None),
                 "optional": bool(spec.optional),
-                "staleness_max_bdays": int(STALENESS_MAX_BDAYS_BY_FREQUENCY[spec.frequency]),
+                "staleness_max_bdays": int(
+                    spec.staleness_max_bdays
+                    if spec.staleness_max_bdays is not None
+                    else STALENESS_MAX_BDAYS_BY_FREQUENCY[spec.frequency]
+                ),
                 "release_calendar_source": _default_release_calendar_source(spec.key),
                 "description": spec.description,
                 "updated_at": now_utc,

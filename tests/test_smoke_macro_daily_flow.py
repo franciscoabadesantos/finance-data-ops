@@ -38,8 +38,11 @@ def _seed_release_calendar(cache_root: str, *, run_date: date) -> None:
     month_release_date = run_date - timedelta(days=1)
     release_ts = datetime.combine(month_release_date, datetime.min.time(), tzinfo=UTC) + pd.Timedelta(hours=12, minutes=30)
     release_ts_iso = release_ts.isoformat()
-    icsa_obs = run_date - timedelta(days=(run_date.weekday() - 5) % 7)
-    icsa_release = icsa_obs + timedelta(days=(3 - icsa_obs.weekday()) % 7)
+    days_since_prior_thursday = (run_date.weekday() - 3) % 7
+    if days_since_prior_thursday == 0:
+        days_since_prior_thursday = 7
+    icsa_release = run_date - timedelta(days=days_since_prior_thursday)
+    icsa_obs = icsa_release - timedelta(days=5)
     rows = [
         {
             "series_key": "CPI_Headline",

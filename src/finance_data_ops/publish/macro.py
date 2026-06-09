@@ -106,12 +106,14 @@ def publish_macro_surfaces(
     macro_daily: pd.DataFrame,
     refresh_materialized_views: bool = True,
     required_series_keys: Iterable[str] | None = None,
+    validate_required_across_window: bool = False,
 ) -> dict[str, Any]:
     validate_macro_publish_contract(
         series_catalog=series_catalog,
         macro_observations=macro_observations,
         macro_daily=macro_daily,
         required_series_keys=required_series_keys,
+        validate_required_across_window=validate_required_across_window,
         now_utc=datetime.now(UTC),
     )
 

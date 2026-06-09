@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from finance_data_ops.publish.client import RecordingPublisher
-from finance_data_ops.publish.macro import publish_macro_surfaces
+from finance_data_ops.publish.macro import build_macro_daily_payload, publish_macro_surfaces
 from finance_data_ops.validation.macro import MacroValidationError
 
 
@@ -91,3 +91,29 @@ def test_publish_macro_surfaces_fails_before_upsert_when_validation_fails() -> N
     assert publisher.upserts == []
     assert publisher.rpcs == []
 
+
+def test_build_macro_daily_payload_preserves_stale_non_null_rows() -> None:
+    now = datetime.now(UTC)
+    daily = pd.DataFrame(
+        [
+            {
+                "as_of_date": "2026-01-08",
+                "series_key": "WTI",
+                "value": 70.0,
+                "source_observation_period": "2026-01-02",
+                "source_observation_date": "2026-01-02",
+                "available_at_utc": "2026-01-02T00:00:00+00:00",
+                "staleness_bdays": 4,
+                "is_stale": True,
+                "alignment_mode": "release_timed",
+                "ingested_at": now.isoformat(),
+            }
+        ]
+    )
+
+    payload = build_macro_daily_payload(daily)
+
+    assert len(payload) == 1
+    assert payload[0]["series_key"] == "WTI"
+    assert payload[0]["value"] == 70.0
+    assert payload[0]["is_stale"] is True

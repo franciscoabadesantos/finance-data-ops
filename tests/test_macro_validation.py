@@ -203,3 +203,211 @@ def test_validate_macro_publish_contract_allows_pre_activation_missing_required_
         macro_daily=daily,
         now_utc=now,
     )
+
+
+def test_validate_macro_publish_contract_rejects_null_required_value_across_explicit_window() -> None:
+    now = datetime.now(UTC)
+    catalog = pd.DataFrame(
+        [
+            {
+                "series_key": "CPI_Headline",
+                "source_provider": "fred",
+                "source_code": "CPIAUCSL",
+                "frequency": "monthly",
+                "required_by_default": False,
+                "staleness_max_bdays": 45,
+            }
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {
+                "series_key": "CPI_Headline",
+                "observation_period": "2025-12",
+                "observation_date": "2025-12-01",
+                "frequency": "monthly",
+                "value": 300.0,
+                "source_provider": "fred",
+                "source_code": "CPIAUCSL",
+                "release_timestamp_utc": "2026-01-09T13:30:00+00:00",
+                "release_timezone": "America/New_York",
+                "release_date_local": "2026-01-09",
+                "release_calendar_source": "bls_cpi_release_calendar_v1",
+                "source": "fred_api_v1",
+                "fetched_at": now.isoformat(),
+                "ingested_at": now.isoformat(),
+            }
+        ]
+    )
+    daily = pd.DataFrame(
+        [
+            {
+                "as_of_date": "2026-01-08",
+                "series_key": "CPI_Headline",
+                "value": None,
+                "source_observation_period": "2025-12",
+                "source_observation_date": "2025-12-01",
+                "available_at_utc": "2026-01-09T13:30:00+00:00",
+                "staleness_bdays": 28,
+                "is_stale": True,
+                "alignment_mode": "release_timed",
+                "ingested_at": now.isoformat(),
+            },
+            {
+                "as_of_date": "2026-01-09",
+                "series_key": "CPI_Headline",
+                "value": 300.0,
+                "source_observation_period": "2025-12",
+                "source_observation_date": "2025-12-01",
+                "available_at_utc": "2026-01-09T13:30:00+00:00",
+                "staleness_bdays": 29,
+                "is_stale": True,
+                "alignment_mode": "release_timed",
+                "ingested_at": now.isoformat(),
+            },
+        ]
+    )
+
+    with pytest.raises(MacroValidationError, match="NULL required series values across publish window"):
+        validate_macro_publish_contract(
+            series_catalog=catalog,
+            macro_observations=observations,
+            macro_daily=daily,
+            required_series_keys=("CPI_Headline",),
+            validate_required_across_window=True,
+            now_utc=now,
+        )
+
+
+def test_validate_macro_publish_contract_allows_stale_non_null_required_rows_across_explicit_window() -> None:
+    now = datetime.now(UTC)
+    catalog = pd.DataFrame(
+        [
+            {
+                "series_key": "WTI",
+                "source_provider": "fred",
+                "source_code": "DCOILWTICO",
+                "frequency": "daily",
+                "required_by_default": False,
+                "staleness_max_bdays": 5,
+            }
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {
+                "series_key": "WTI",
+                "observation_period": "2026-01-02",
+                "observation_date": "2026-01-02",
+                "frequency": "daily",
+                "value": 70.0,
+                "source_provider": "fred",
+                "source_code": "DCOILWTICO",
+                "release_timestamp_utc": None,
+                "release_timezone": None,
+                "release_date_local": None,
+                "release_calendar_source": None,
+                "source": "fred_api_v1",
+                "fetched_at": now.isoformat(),
+                "ingested_at": now.isoformat(),
+            }
+        ]
+    )
+    daily = pd.DataFrame(
+        [
+            {
+                "as_of_date": "2026-01-07",
+                "series_key": "WTI",
+                "value": 70.0,
+                "source_observation_period": "2026-01-02",
+                "source_observation_date": "2026-01-02",
+                "available_at_utc": "2026-01-02T00:00:00+00:00",
+                "staleness_bdays": 3,
+                "is_stale": True,
+                "alignment_mode": "release_timed",
+                "ingested_at": now.isoformat(),
+            },
+            {
+                "as_of_date": "2026-01-08",
+                "series_key": "WTI",
+                "value": 70.0,
+                "source_observation_period": "2026-01-02",
+                "source_observation_date": "2026-01-02",
+                "available_at_utc": "2026-01-02T00:00:00+00:00",
+                "staleness_bdays": 4,
+                "is_stale": True,
+                "alignment_mode": "release_timed",
+                "ingested_at": now.isoformat(),
+            },
+        ]
+    )
+
+    validate_macro_publish_contract(
+        series_catalog=catalog,
+        macro_observations=observations,
+        macro_daily=daily,
+        required_series_keys=("WTI",),
+        validate_required_across_window=True,
+        now_utc=now,
+    )
+
+
+def test_validate_macro_publish_contract_allows_omitted_pre_first_eligible_rows_across_explicit_window() -> None:
+    now = datetime.now(UTC)
+    catalog = pd.DataFrame(
+        [
+            {
+                "series_key": "CPI_Headline",
+                "source_provider": "fred",
+                "source_code": "CPIAUCSL",
+                "frequency": "monthly",
+                "required_by_default": False,
+                "staleness_max_bdays": 45,
+            }
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {
+                "series_key": "CPI_Headline",
+                "observation_period": "2025-12",
+                "observation_date": "2025-12-01",
+                "frequency": "monthly",
+                "value": 300.0,
+                "source_provider": "fred",
+                "source_code": "CPIAUCSL",
+                "release_timestamp_utc": "2026-01-09T13:30:00+00:00",
+                "release_timezone": "America/New_York",
+                "release_date_local": "2026-01-09",
+                "release_calendar_source": "bls_cpi_release_calendar_v1",
+                "source": "fred_api_v1",
+                "fetched_at": now.isoformat(),
+                "ingested_at": now.isoformat(),
+            }
+        ]
+    )
+    daily = pd.DataFrame(
+        [
+            {
+                "as_of_date": "2026-01-09",
+                "series_key": "CPI_Headline",
+                "value": 300.0,
+                "source_observation_period": "2025-12",
+                "source_observation_date": "2025-12-01",
+                "available_at_utc": "2026-01-09T13:30:00+00:00",
+                "staleness_bdays": 29,
+                "is_stale": False,
+                "alignment_mode": "release_timed",
+                "ingested_at": now.isoformat(),
+            }
+        ]
+    )
+
+    validate_macro_publish_contract(
+        series_catalog=catalog,
+        macro_observations=observations,
+        macro_daily=daily,
+        required_series_keys=("CPI_Headline",),
+        validate_required_across_window=True,
+        now_utc=now,
+    )
