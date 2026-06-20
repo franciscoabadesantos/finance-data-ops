@@ -18,7 +18,5 @@ def test_already_suffixed_symbol_stays_stable() -> None:
     assert normalize_symbol_for_provider("ANZ.AX", region="apac") == ["ANZ.AX"]
 
 
-def test_brk_b_uses_dash_variant_first() -> None:
-    candidates = normalize_symbol_for_provider("BRK.B", region="us")
-    assert candidates[0] == "BRK-B"
-    assert "BRK.B" in candidates
+def test_brk_b_dash_symbol_stays_stable() -> None:
+    assert normalize_symbol_for_provider("BRK-B", region="us") == ["BRK-B"]

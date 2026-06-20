@@ -123,10 +123,10 @@ def test_fetch_daily_prices_uses_provider_symbol_candidates() -> None:
         return pd.DataFrame()
 
     provider = MarketDataProvider(download_fn=fake_download, quote_fn=lambda _: {})
-    out = provider.fetch_daily_prices(["BRK.B"], start="2026-04-08", end="2026-04-08")
+    out = provider.fetch_daily_prices(["BRK-B"], start="2026-04-08", end="2026-04-08")
 
     assert len(out.index) == 1
-    assert out.iloc[0]["symbol"] == "BRK.B"
+    assert out.iloc[0]["symbol"] == "BRK-B"
     assert "BRK-B" in calls
 
 

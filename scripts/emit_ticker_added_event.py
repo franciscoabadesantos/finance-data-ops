@@ -44,7 +44,7 @@ def main() -> None:
         raise ValueError("ticker must be non-empty.")
     if not TICKER_PATTERN.fullmatch(ticker):
         raise ValueError(
-            "Invalid ticker format. Expected plain uppercase symbol without prefixes (for example: AAPL, BRK.B)."
+            "Invalid ticker format. Expected plain uppercase symbol without prefixes (for example: AAPL, BRK-B)."
         )
 
     try:

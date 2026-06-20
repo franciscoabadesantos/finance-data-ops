@@ -128,7 +128,7 @@ def _normalize_ticker(raw: str) -> str:
         raise ValueError("ticker is required.")
     if not TICKER_PATTERN.fullmatch(ticker):
         raise ValueError(
-            "Invalid ticker format. Expected plain uppercase symbol (for example: AAPL, BRK.B, RDS-A) without prefixes."
+            "Invalid ticker format. Expected plain uppercase symbol (for example: AAPL, BRK-B, RDS-A) without prefixes."
         )
     return ticker
 
