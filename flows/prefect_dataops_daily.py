@@ -338,6 +338,21 @@ def dataops_fundamentals_daily_flow(
         raise_on_failed_hard=not bool(allow_unhealthy),
     )
     summary["execution"] = execution_plan.as_dict()
+
+    # Exchange trading calendars ride along with fundamentals-daily (runs once per day)
+    # instead of owning a separate Prefect deployment (free-tier 5-deployment limit).
+    # Daily cadence captures any calendar change (exchange_calendars update, new exchange)
+    # within a day. Idempotent upsert; never fail the fundamentals flow on it.
+    try:
+        summary["trading_calendar"] = run_dataops_trading_calendar_daily(
+            cache_root=cache_root,
+            publish_enabled=bool(publish_enabled),
+            raise_on_failed_hard=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - calendar refresh is best-effort
+        logger.warning("Trading-calendar refresh failed (non-fatal): %s", exc)
+        summary["trading_calendar"] = {"status": "error", "error": str(exc)}
+
     return summary
 
 
@@ -535,35 +550,6 @@ def dataops_release_calendar_daily_flow(
     )
     summary["execution"] = execution_plan.as_dict()
     return summary
-
-
-@flow(
-    name="dataops_trading_calendar_daily",
-    retries=1,
-    retry_delay_seconds=120,
-    log_prints=True,
-)
-def dataops_trading_calendar_daily_flow(
-    *,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    cache_root: str | None = None,
-    publish_enabled: bool = True,
-    allow_unhealthy: bool = False,
-) -> dict[str, Any]:
-    logger = get_run_logger()
-    logger.info(
-        "Running trading-calendar flow (start_date=%s, end_date=%s).",
-        str(start_date or "1990-01-01"),
-        str(end_date or "today+366d"),
-    )
-    return run_dataops_trading_calendar_daily(
-        start_date=start_date,
-        end_date=end_date,
-        cache_root=cache_root,
-        publish_enabled=bool(publish_enabled),
-        raise_on_failed_hard=not bool(allow_unhealthy),
-    )
 
 
 @flow(
