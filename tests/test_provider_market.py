@@ -88,6 +88,8 @@ def test_fetch_latest_quotes_normalizes_fields() -> None:
             "high": 506.0,
             "low": 499.0,
             "volume": 3_200_000,
+            "name": "SPDR S&P 500 ETF Trust",
+            "market_cap": 520_000_000_000,
             "quote_ts": quote_ts,
         }
 
@@ -97,7 +99,9 @@ def test_fetch_latest_quotes_normalizes_fields() -> None:
     assert len(out.index) == 1
     row = out.iloc[0]
     assert row["symbol"] == "SPY"
+    assert row["name"] == "SPDR S&P 500 ETF Trust"
     assert float(row["price"]) == 505.12
+    assert float(row["market_cap"]) == 520_000_000_000
     assert pd.Timestamp(row["quote_ts"]).tzinfo is not None
 
 

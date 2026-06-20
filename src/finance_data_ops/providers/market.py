@@ -28,12 +28,14 @@ DAILY_PRICE_COLUMNS = [
 LATEST_QUOTE_COLUMNS = [
     "symbol",
     "quote_ts",
+    "name",
     "price",
     "previous_close",
     "open",
     "high",
     "low",
     "volume",
+    "market_cap",
     "provider",
     "ingested_at",
 ]
@@ -203,6 +205,16 @@ class MarketDataProvider:
                 info.get("volume"),
                 info.get("regularMarketVolume"),
             ),
+            "name": _first_text(
+                info.get("longName"),
+                info.get("shortName"),
+                info.get("displayName"),
+            ),
+            "market_cap": _first_float(
+                fast.get("market_cap"),
+                fast.get("marketCap"),
+                info.get("marketCap"),
+            ),
             "currency": _first_text(
                 fast.get("currency"),
                 info.get("currency"),
@@ -283,12 +295,14 @@ class MarketDataProvider:
         return {
             "symbol": symbol,
             "quote_ts": pd.Timestamp(quote_ts).tz_convert("UTC"),
+            "name": _first_text(payload.get("name")) or symbol,
             "price": _coerce_float(payload.get("price")),
             "previous_close": _coerce_float(payload.get("previous_close")),
             "open": _coerce_float(payload.get("open")),
             "high": _coerce_float(payload.get("high")),
             "low": _coerce_float(payload.get("low")),
             "volume": _coerce_float(payload.get("volume")),
+            "market_cap": _coerce_float(payload.get("market_cap")),
             "currency": _normalize_optional_upper_text(payload.get("currency")),
             "exchange": _normalize_optional_upper_text(payload.get("exchange")),
             "exchange_mic": _normalize_optional_upper_text(payload.get("exchange_mic")) or mic_for_symbol(symbol),
