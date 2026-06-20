@@ -125,6 +125,7 @@ def test_publish_contract_writes_expected_tables() -> None:
         "high",
         "low",
         "close",
+        "adj_close",
         "volume",
         "source",
         "fetched_at",
@@ -135,6 +136,7 @@ def test_publish_contract_writes_expected_tables() -> None:
     assert price_row["open"] == 500.0
     assert price_row["high"] == 510.0
     assert price_row["low"] == 495.0
+    assert price_row["adj_close"] == 505.0
     assert price_row["volume"] == 1_000_000.0
     quotes_call = next(call for call in publisher.upserts if call["table"] == "market_quotes")
     quote_row = quotes_call["rows"][0]
@@ -212,6 +214,7 @@ def test_publish_rows_are_json_safe_before_upsert() -> None:
         "high",
         "low",
         "close",
+        "adj_close",
         "volume",
         "source",
         "fetched_at",
@@ -225,6 +228,7 @@ def test_publish_rows_are_json_safe_before_upsert() -> None:
     assert isinstance(row["high"], float)
     assert isinstance(row["low"], float)
     assert isinstance(row["close"], float)
+    assert isinstance(row["adj_close"], float)
     assert isinstance(row["volume"], (int, float))
 
 

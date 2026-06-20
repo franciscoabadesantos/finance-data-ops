@@ -114,12 +114,14 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
         "high",
         "low",
         "close",
+        "adj_close",
         "volume",
         "source",
         "fetched_at",
         "created_at",
     }
     assert price_row["high"] == 101.0
+    assert price_row["adj_close"] == 100.5
 
     quotes_upsert = next(call for call in publisher.upserts if call["table"] == "market_quotes")
     assert quotes_upsert["on_conflict"] == "ticker"
