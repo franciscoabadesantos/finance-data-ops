@@ -25,6 +25,11 @@ def test_mic_for_symbol_maps_yfinance_suffixes() -> None:
     assert mic_for_symbol("INFY.NS") == "XBOM"
     assert mic_for_symbol("RELIANCE.BO") == "XBOM"
     assert mic_for_symbol("7203.T") == "XTKS"
+    assert mic_for_symbol("ASML.AS") == "XAMS"
+    assert mic_for_symbol("TTE.PA") == "XPAR"
+    assert mic_for_symbol("EDP.LS") == "XLIS"
+    assert mic_for_symbol("NOVO-B.CO") == "XCSE"
+    assert mic_for_symbol("BP.L") == "XLON"
 
 
 def test_trading_session_rows_uses_exchange_calendar_sessions() -> None:

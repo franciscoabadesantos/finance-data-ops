@@ -15,9 +15,25 @@ _SUFFIX_TO_MIC: dict[str, str] = {
     ".NS": "XBOM",
     ".BO": "XBOM",
     ".T": "XTKS",
+    ".AS": "XAMS",
+    ".PA": "XPAR",
+    ".LS": "XLIS",
+    ".CO": "XCSE",
 }
 
-SUPPORTED_MICS: tuple[str, ...] = ("XNYS", "XASX", "XLON", "XETR", "XHKG", "XBOM", "XTKS")
+SUPPORTED_MICS: tuple[str, ...] = (
+    "XNYS",
+    "XASX",
+    "XLON",
+    "XETR",
+    "XHKG",
+    "XBOM",
+    "XTKS",
+    "XAMS",
+    "XPAR",
+    "XLIS",
+    "XCSE",
+)
 DEFAULT_MIC = "XNYS"
 
 

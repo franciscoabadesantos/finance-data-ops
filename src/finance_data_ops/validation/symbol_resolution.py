@@ -35,6 +35,19 @@ def resolve_symbols(
 
     env_map = dict(env or {})
     normalized_region = str(region or "").strip().lower()
+    if normalized_region in {"all", "global"}:
+        combined: list[str] = []
+        seen: set[str] = set()
+        for sub_region in REGION_SYMBOL_ENV:
+            for symbol in resolve_symbols(symbols=None, region=sub_region, settings=settings, env=env_map):
+                if symbol in seen:
+                    continue
+                seen.add(symbol)
+                combined.append(symbol)
+        if combined:
+            return combined
+        return list(settings.default_symbols)
+
     if normalized_region:
         registry_symbols = load_validated_symbols(
             normalized_region,

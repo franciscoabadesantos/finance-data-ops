@@ -24,15 +24,16 @@ deployments:
       lookback_days: null
       region: us
     schedules:
-      - cron: "30 6 * * 1-5"
+      - cron: "0 18 * * 1-5"
         timezone: "UTC"
         active: true
-      - cron: "30 14 * * 1-5"
-        timezone: "UTC"
-        active: true
+        parameters:
+          region: eu
       - cron: "30 22 * * 1-5"
         timezone: "UTC"
         active: true
+        parameters:
+          region: us
     work_pool:
       name: dataops-managed-pool
       work_queue_name: default
@@ -51,8 +52,8 @@ deployments:
           BACKEND_BASE_URL: "{{ prefect.blocks.secret.backend-base-url }}"
           BACKEND_SERVICE_TOKEN: "{{ prefect.blocks.secret.backend-service-token }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
-          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK-B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
-          DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
+          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK-B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM,VGK,EZU,EWI,EWP,EWU,FEZ"
+          DATA_OPS_SYMBOLS_EU: "SAP.DE,DBK.DE,ASML.AS,TTE.PA,SAN.PA,SHEL.L,HSBA.L,AZN.L,BP.L,ULVR.L,GSK.L,NOVO-B.CO,EDP.LS,GALP.LS,JMT.LS,BCP.LS,SON.LS,NOS.LS,EGL.LS,COR.LS,RENE.LS,NVG.LS"
           # APAC market exclusions (provider compatibility): TTM,WOW,WBC,SAUD,ANZ,EGPT,GAF
           DATA_OPS_SYMBOLS_APAC: "TSM,BABA,SONY,INFY,HDB"
 
@@ -66,7 +67,7 @@ deployments:
     entrypoint: flows/prefect_dataops_daily.py:dataops_fundamentals_daily_flow
     parameters:
       symbols: null
-      region: us
+      region: all
     schedules:
       - cron: "0 3 * * 1-5"
         timezone: "UTC"
@@ -87,8 +88,8 @@ deployments:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
           SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
-          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK-B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
-          DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
+          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK-B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM,VGK,EZU,EWI,EWP,EWU,FEZ"
+          DATA_OPS_SYMBOLS_EU: "SAP.DE,DBK.DE,ASML.AS,TTE.PA,SAN.PA,SHEL.L,HSBA.L,AZN.L,BP.L,ULVR.L,GSK.L,NOVO-B.CO,EDP.LS,GALP.LS,JMT.LS,BCP.LS,SON.LS,NOS.LS,EGL.LS,COR.LS,RENE.LS,NVG.LS"
           DATA_OPS_SYMBOLS_APAC: "TSM,BABA,JD,BIDU,EWJ,EWT,MCHI,NTES,SONY,KWEB,FXI,KORU,EWY,EWS,EWM,EPHE,VNM,IDX,THD,EIDO,ASEA,INDA,INFY,HDB,IBN,WIT,TTM,RDY,INDY,SMIN,EWA,BHP,RIO,CSL,WOW,WBC,ANZ,ASX,EZA,AFK,NGE,EGPT,GAF,EIS,ISRA,UAE,SAUD,QAT,KSA,EWZ,VALE,PBR,EWW,MELI,ILF,BAP,EC,CX,SBS,BBD,ARGT"
 
   - name: earnings-daily
@@ -102,7 +103,7 @@ deployments:
     parameters:
       symbols: null
       history_limit: 12
-      region: us
+      region: all
     schedules:
       - cron: "0 8 * * 1-5"
         timezone: "UTC"
@@ -126,8 +127,8 @@ deployments:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
           SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
-          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK-B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM"
-          DATA_OPS_SYMBOLS_EU: "ASML,SAP,SHEL,NVO,HSBC,TTE,AZN,VGK,EZU,BP,UL,SNY,DB,EWI,EWP,EWU,FEZ,GSK"
+          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK-B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM,VGK,EZU,EWI,EWP,EWU,FEZ"
+          DATA_OPS_SYMBOLS_EU: "SAP.DE,DBK.DE,ASML.AS,TTE.PA,SAN.PA,SHEL.L,HSBA.L,AZN.L,BP.L,ULVR.L,GSK.L,NOVO-B.CO,EDP.LS,GALP.LS,JMT.LS,BCP.LS,SON.LS,NOS.LS,EGL.LS,COR.LS,RENE.LS,NVG.LS"
           DATA_OPS_SYMBOLS_APAC: "TSM,BABA,JD,BIDU,EWJ,EWT,MCHI,NTES,SONY,KWEB,FXI,KORU,EWY,EWS,EWM,EPHE,VNM,IDX,THD,EIDO,ASEA,INDA,INFY,HDB,IBN,WIT,TTM,RDY,INDY,SMIN,EWA,BHP,RIO,CSL,WOW,WBC,ANZ,ASX,EZA,AFK,NGE,EGPT,GAF,EIS,ISRA,UAE,SAUD,QAT,KSA,EWZ,VALE,PBR,EWW,MELI,ILF,BAP,EC,CX,SBS,BBD,ARGT"
 
   - name: macro-daily
