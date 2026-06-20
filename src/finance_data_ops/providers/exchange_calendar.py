@@ -31,7 +31,10 @@ def mic_for_symbol(symbol: str) -> str:
 
 def trading_sessions(mic: str, *, start: date, end: date) -> list[date]:
     cal = ec.get_calendar(str(mic).strip().upper())
-    sessions = cal.sessions_in_range(start.isoformat(), end.isoformat())
+    bounded_start, bounded_end = _bounded_calendar_window(cal, start=start, end=end)
+    if bounded_start is None or bounded_end is None:
+        return []
+    sessions = cal.sessions_in_range(bounded_start.isoformat(), bounded_end.isoformat())
     return [session.date() for session in sessions]
 
 
@@ -51,11 +54,14 @@ def trading_session_rows(mic: str, *, start: date, end: date) -> list[dict[str, 
 
 def _half_day_sessions(mic: str, *, start: date, end: date) -> set[date]:
     cal = ec.get_calendar(mic)
+    bounded_start, bounded_end = _bounded_calendar_window(cal, start=start, end=end)
+    if bounded_start is None or bounded_end is None:
+        return set()
     early_closes = getattr(cal, "early_closes", None)
     if early_closes is None:
         return set()
     try:
-        frame = early_closes.loc[start.isoformat() : end.isoformat()]
+        frame = early_closes.loc[bounded_start.isoformat() : bounded_end.isoformat()]
     except Exception:
         return set()
     try:
@@ -63,3 +69,15 @@ def _half_day_sessions(mic: str, *, start: date, end: date) -> set[date]:
     except AttributeError:
         index = early_closes
     return {session.date() for session in index}
+
+
+def _bounded_calendar_window(cal: object, *, start: date, end: date) -> tuple[date | None, date | None]:
+    first_session = getattr(cal, "first_session", None)
+    last_session = getattr(cal, "last_session", None)
+    first_date = first_session.date() if first_session is not None else start
+    last_date = last_session.date() if last_session is not None else end
+    bounded_start = max(start, first_date)
+    bounded_end = min(end, last_date)
+    if bounded_start > bounded_end:
+        return None, None
+    return bounded_start, bounded_end

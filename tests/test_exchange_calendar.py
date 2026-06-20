@@ -33,6 +33,19 @@ def test_trading_session_rows_uses_exchange_calendar_sessions() -> None:
     assert all(row["exchange_mic"] == "XNYS" for row in rows)
 
 
+def test_trading_session_rows_clamps_to_calendar_bounds() -> None:
+    cal = ec.get_calendar("XNYS")
+    rows = trading_session_rows("XNYS", start=date(1990, 1, 1), end=cal.first_session.date())
+
+    assert rows == [
+        {
+            "exchange_mic": "XNYS",
+            "session_date": cal.first_session.date(),
+            "is_half_day": False,
+        }
+    ]
+
+
 def test_publish_trading_calendar_upserts_expected_table() -> None:
     publisher = RecordingPublisher()
     frame = pd.DataFrame(
