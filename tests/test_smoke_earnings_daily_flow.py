@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pandas as pd
+from freezegun import freeze_time
 
 from finance_data_ops.publish.client import RecordingPublisher
 from finance_data_ops.refresh.market_daily import RefreshRunResult
@@ -49,6 +50,7 @@ class FakeEarningsProvider:
         return events, history
 
 
+@freeze_time("2026-04-12")
 def test_smoke_earnings_refresh_publish_status(tmp_path) -> None:
     publisher = RecordingPublisher()
 
@@ -83,7 +85,7 @@ def test_smoke_earnings_refresh_publish_status(tmp_path) -> None:
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_earnings_daily")
     assert orchestration_row["status"] == "success"
-    assert sorted(orchestration_row["symbols_succeeded"]) == ["QQQ", "SPY"]
+    assert orchestration_row["symbols_succeeded"] == 2
 
 
 def test_build_asset_status_rows_handles_empty_frames() -> None:
@@ -114,6 +116,7 @@ def test_build_asset_status_rows_handles_empty_frames() -> None:
     assert rows[0]["freshness_status"] == "failed_hard"
 
 
+@freeze_time("2026-04-12")
 def test_earnings_coverage_merge_preserves_existing_market_and_fundamentals(tmp_path) -> None:
     publisher = RecordingPublisher()
     existing_rows = [

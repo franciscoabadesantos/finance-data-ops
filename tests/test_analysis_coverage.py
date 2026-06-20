@@ -19,8 +19,8 @@ def test_build_coverage_report_contract_shape() -> None:
         asset_status_by_key={
             "market_price_daily": {"freshness_status": "fresh"},
             "market_quotes": {"freshness_status": "fresh"},
-            "fundamentals_daily": {"freshness_status": "fresh"},
-            "earnings_daily": {"freshness_status": "stale"},
+            "market_fundamentals_v2": {"freshness_status": "fresh"},
+            "market_earnings_history": {"freshness_status": "stale"},
             "macro_observations": {"freshness_status": "fresh"},
             "economic_release_calendar": {"freshness_status": "fresh"},
         },

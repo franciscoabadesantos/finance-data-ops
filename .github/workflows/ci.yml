@@ -20,7 +20,10 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          # [orchestration] brings prefect; the worker requirements bring pydantic etc.
+          # Both are needed so the flow/worker test modules can be imported (collected).
+          pip install -e ".[dev,orchestration]"
+          pip install -r services/finance-jobs-worker/requirements.txt
 
       - name: Run tests
         run: pytest -q

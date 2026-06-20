@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pandas as pd
+from freezegun import freeze_time
 
 from finance_data_ops.publish.client import RecordingPublisher
 from finance_data_ops.refresh.storage import table_path
@@ -70,6 +71,7 @@ class FakeFundamentalsProvider:
         )
 
 
+@freeze_time("2026-04-12")
 def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     publisher = RecordingPublisher()
 
@@ -116,7 +118,7 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_fundamentals_daily")
     assert orchestration_row["status"] == "success"
-    assert sorted(orchestration_row["symbols_succeeded"]) == ["QQQ", "SPY"]
+    assert orchestration_row["symbols_succeeded"] == 2
 
 
 def test_fundamentals_coverage_merge_preserves_existing_market_flags(tmp_path) -> None:

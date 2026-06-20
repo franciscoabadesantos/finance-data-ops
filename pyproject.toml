@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "freezegun>=1.5",
 ]
 orchestration = [
     "prefect>=3.0",
