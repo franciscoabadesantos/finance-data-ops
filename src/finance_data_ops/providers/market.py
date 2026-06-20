@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 
+from finance_data_ops.providers.exchange_calendar import mic_for_symbol
 from finance_data_ops.providers.symbols import normalize_symbol_for_provider
 
 
@@ -202,6 +203,17 @@ class MarketDataProvider:
                 info.get("volume"),
                 info.get("regularMarketVolume"),
             ),
+            "currency": _first_text(
+                fast.get("currency"),
+                info.get("currency"),
+                info.get("financialCurrency"),
+            ),
+            "exchange": _first_text(
+                fast.get("exchange"),
+                info.get("exchange"),
+                info.get("fullExchangeName"),
+            ),
+            "exchange_mic": mic_for_symbol(symbol),
             "quote_ts": parsed_quote_ts,
         }
 
@@ -277,6 +289,9 @@ class MarketDataProvider:
             "high": _coerce_float(payload.get("high")),
             "low": _coerce_float(payload.get("low")),
             "volume": _coerce_float(payload.get("volume")),
+            "currency": _normalize_optional_upper_text(payload.get("currency")),
+            "exchange": _normalize_optional_upper_text(payload.get("exchange")),
+            "exchange_mic": _normalize_optional_upper_text(payload.get("exchange_mic")) or mic_for_symbol(symbol),
             "provider": self.provider_name,
             "ingested_at": pd.Timestamp(ingested_at).tz_convert("UTC"),
         }
@@ -298,6 +313,33 @@ def _first_float(*values: Any) -> float | None:
         if casted is not None:
             return casted
     return None
+
+
+def _first_text(*values: Any) -> str | None:
+    for raw in values:
+        token = _text_or_none(raw)
+        if token:
+            return token
+    return None
+
+
+def _normalize_optional_upper_text(value: Any) -> str | None:
+    token = str(_text_or_none(value) or "").upper()
+    if not token or token in {"NAN", "NONE", "NULL"}:
+        return None
+    return token
+
+
+def _text_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    token = str(value).strip()
+    return token or None
 
 
 def _normalize_column_name(column: Any) -> str:

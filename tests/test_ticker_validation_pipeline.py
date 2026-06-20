@@ -60,6 +60,9 @@ class FakeMarketProvider:
                     "high": 51.0,
                     "low": 49.0,
                     "volume": 100,
+                    "currency": "AUD" if symbol.endswith(".AX") else "USD",
+                    "exchange": "ASX" if symbol.endswith(".AX") else "NYSE",
+                    "exchange_mic": "XASX" if symbol.endswith(".AX") else "XNYS",
                     "provider": "fake",
                     "ingested_at": datetime(2026, 4, 12, tzinfo=UTC),
                 }
@@ -139,6 +142,8 @@ def test_raw_anz_validates_to_anz_ax() -> None:
     assert result["selected"]["candidate_symbol"] == "ANZ.AX"
     assert result["selected"]["validation_status"] == "validated_full"
     assert result["registry_row"]["normalized_symbol"] == "ANZ.AX"
+    assert result["registry_row"]["exchange_mic"] == "XASX"
+    assert result["registry_row"]["currency"] == "AUD"
 
 
 def test_problematic_symbols_fail_before_promotion() -> None:

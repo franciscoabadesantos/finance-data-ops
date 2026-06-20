@@ -16,6 +16,8 @@ REGISTRY_COLUMNS = [
     "normalized_symbol",
     "region",
     "exchange",
+    "exchange_mic",
+    "currency",
     "instrument_type",
     "status",
     "market_supported",
@@ -42,6 +44,8 @@ def build_ticker_registry_payload(rows: list[dict[str, Any]]) -> list[dict[str, 
     frame["normalized_symbol"] = frame["normalized_symbol"].astype(str).str.upper()
     frame["region"] = frame["region"].astype(str).str.lower()
     frame["exchange"] = frame["exchange"].astype(str).str.upper()
+    frame["exchange_mic"] = frame["exchange_mic"].astype(str).str.upper()
+    frame["currency"] = frame["currency"].astype(str).str.upper()
     frame["last_validated_at"] = pd.to_datetime(frame["last_validated_at"], utc=True, errors="coerce").fillna(now_utc)
     frame["updated_at"] = pd.to_datetime(frame["updated_at"], utc=True, errors="coerce").fillna(now_utc)
     frame["market_supported"] = frame["market_supported"].fillna(False).astype(bool)
@@ -51,7 +55,7 @@ def build_ticker_registry_payload(rows: list[dict[str, Any]]) -> list[dict[str, 
 
     payload = frame[REGISTRY_COLUMNS].to_dict(orient="records")
     for row in payload:
-        for nullable in ("exchange", "notes", "normalized_symbol"):
+        for nullable in ("exchange", "exchange_mic", "currency", "notes", "normalized_symbol"):
             if row.get(nullable) in {"", "NONE", "NULL"}:
                 row[nullable] = None
     return payload

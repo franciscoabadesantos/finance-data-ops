@@ -26,4 +26,6 @@ aggregation/
 # Local credentials
 key.json
 .env
+.vars
+*.vars
 worker.env.yaml

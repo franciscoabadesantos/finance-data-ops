@@ -21,6 +21,8 @@ TICKER_REGISTRY_COLUMNS = [
     "normalized_symbol",
     "region",
     "exchange",
+    "exchange_mic",
+    "currency",
     "instrument_type",
     "status",
     "market_supported",
@@ -74,6 +76,8 @@ def upsert_ticker_registry_rows(*, cache_root: str | Path, rows: list[dict[str, 
     frame["normalized_symbol"] = frame["normalized_symbol"].astype(str).str.upper()
     frame["region"] = frame["region"].astype(str).str.lower().replace({"none": "", "null": ""})
     frame["exchange"] = frame["exchange"].astype(str).str.upper().replace({"NONE": "", "NULL": ""})
+    frame["exchange_mic"] = frame["exchange_mic"].astype(str).str.upper().replace({"NONE": "", "NULL": ""})
+    frame["currency"] = frame["currency"].astype(str).str.upper().replace({"NONE": "", "NULL": ""})
     frame["last_validated_at"] = frame["last_validated_at"].fillna(now_iso)
     frame["updated_at"] = frame["updated_at"].fillna(now_iso)
 
@@ -108,6 +112,8 @@ def build_pending_registry_row(
         "normalized_symbol": None,
         "region": normalized_region,
         "exchange": normalized_exchange,
+        "exchange_mic": None,
+        "currency": None,
         "instrument_type": str(instrument_type or "unknown").strip().lower() or "unknown",
         "status": "pending_validation",
         "market_supported": False,

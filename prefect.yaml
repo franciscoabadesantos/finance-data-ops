@@ -207,3 +207,33 @@ deployments:
           SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
           SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
           DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
+
+  - name: trading-calendar
+    version: null
+    tags:
+      - dataops
+      - market
+      - trading-calendar
+    description: Data Ops exchange trading-calendar orchestration.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_trading_calendar_daily_flow
+    parameters:
+      start_date: null
+      end_date: null
+    schedules:
+      - cron: "0 4 1 * *"
+        timezone: "UTC"
+        active: true
+    work_pool:
+      name: dataops-managed-pool
+      work_queue_name: default
+      job_variables:
+        pip_packages:
+          - "numpy>=1.24"
+          - "pandas>=2.0"
+          - "pyarrow>=10.0"
+          - "exchange-calendars>=4.5"
+          - "PyYAML>=6.0"
+        env:
+          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
+          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
+          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"

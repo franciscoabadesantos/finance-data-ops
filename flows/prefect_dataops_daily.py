@@ -32,6 +32,7 @@ from flows.dataops_fundamentals_daily import run_dataops_fundamentals_daily
 from flows.dataops_macro_daily import run_dataops_macro_daily
 from flows.dataops_market_daily import run_dataops_market_daily
 from flows.dataops_release_calendar_daily import run_dataops_release_calendar_daily
+from flows.dataops_trading_calendar_daily import run_dataops_trading_calendar_daily
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.publish.client import SupabaseRestPublisher
 from finance_data_ops.publish.ticker_registry import publish_ticker_registry
@@ -534,6 +535,35 @@ def dataops_release_calendar_daily_flow(
     )
     summary["execution"] = execution_plan.as_dict()
     return summary
+
+
+@flow(
+    name="dataops_trading_calendar_daily",
+    retries=1,
+    retry_delay_seconds=120,
+    log_prints=True,
+)
+def dataops_trading_calendar_daily_flow(
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    cache_root: str | None = None,
+    publish_enabled: bool = True,
+    allow_unhealthy: bool = False,
+) -> dict[str, Any]:
+    logger = get_run_logger()
+    logger.info(
+        "Running trading-calendar flow (start_date=%s, end_date=%s).",
+        str(start_date or "1990-01-01"),
+        str(end_date or "today+366d"),
+    )
+    return run_dataops_trading_calendar_daily(
+        start_date=start_date,
+        end_date=end_date,
+        cache_root=cache_root,
+        publish_enabled=bool(publish_enabled),
+        raise_on_failed_hard=not bool(allow_unhealthy),
+    )
 
 
 @flow(

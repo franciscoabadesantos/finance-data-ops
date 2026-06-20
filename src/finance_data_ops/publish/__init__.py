@@ -9,6 +9,7 @@ from finance_data_ops.publish.release_calendar import publish_release_calendar_s
 from finance_data_ops.publish.product_metrics import publish_product_metrics
 from finance_data_ops.publish.status import publish_status_surfaces
 from finance_data_ops.publish.ticker_registry import publish_ticker_registry
+from finance_data_ops.publish.trading_calendar import publish_trading_calendar_surfaces
 
 __all__ = [
     "SupabaseRestPublisher",
@@ -21,4 +22,5 @@ __all__ = [
     "publish_release_calendar_surfaces",
     "publish_status_surfaces",
     "publish_ticker_registry",
+    "publish_trading_calendar_surfaces",
 ]

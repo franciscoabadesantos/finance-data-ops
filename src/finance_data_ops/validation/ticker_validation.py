@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from finance_data_ops.providers.earnings import EarningsDataProvider
+from finance_data_ops.providers.exchange_calendar import mic_for_symbol
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
 from finance_data_ops.providers.market import MarketDataProvider
 from finance_data_ops.providers.symbols import (
@@ -206,6 +207,8 @@ def run_single_ticker_validation(
         "normalized_symbol": selected.candidate_symbol,
         "region": normalized_region,
         "exchange": normalized_exchange,
+        "exchange_mic": _selected_exchange_mic(selected),
+        "currency": _selected_currency(selected),
         "instrument_type": selected.instrument_type,
         "status": "active" if selected.validation_status != "rejected" else "rejected",
         "market_supported": bool(selected.market.supported),
@@ -308,6 +311,9 @@ def validate_market_support(*, candidate_symbol: str, provider: MarketDataProvid
         details={
             "daily_rows": int(len(prices.index)),
             "quote_rows": int(len(quotes.index)),
+            "exchange_mic": _quote_value(quotes, candidate_symbol, "exchange_mic") or mic_for_symbol(candidate_symbol),
+            "currency": _quote_value(quotes, candidate_symbol, "currency"),
+            "exchange": _quote_value(quotes, candidate_symbol, "exchange"),
         },
     )
 
@@ -608,6 +614,47 @@ def _build_notes(*, candidates: list[str], selected: CandidateValidation, policy
         f"fundamentals={selected.fundamentals.reason};"
         f"earnings={selected.earnings.reason}"
     )
+
+
+def _selected_exchange_mic(selected: CandidateValidation) -> str:
+    value = selected.market.details.get("exchange_mic")
+    token = _optional_text(value, upper=True)
+    return token or mic_for_symbol(selected.candidate_symbol)
+
+
+def _selected_currency(selected: CandidateValidation) -> str | None:
+    value = selected.market.details.get("currency")
+    token = _optional_text(value, upper=True)
+    if not token or token in {"NAN", "NONE", "NULL"}:
+        return None
+    return token
+
+
+def _quote_value(quotes: pd.DataFrame, candidate_symbol: str, column: str) -> str | None:
+    if quotes.empty or column not in quotes.columns:
+        return None
+    local = quotes.copy()
+    if "symbol" in local.columns:
+        matches = local.loc[local["symbol"].astype(str).str.upper() == str(candidate_symbol).strip().upper()]
+        if not matches.empty:
+            value = matches.iloc[-1].get(column)
+            return _optional_text(value)
+    value = local.iloc[-1].get(column)
+    return _optional_text(value)
+
+
+def _optional_text(value: object, *, upper: bool = False) -> str | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    token = str(value).strip()
+    if upper:
+        token = token.upper()
+    return token or None
 
 
 def _is_missing(value: object) -> bool:
