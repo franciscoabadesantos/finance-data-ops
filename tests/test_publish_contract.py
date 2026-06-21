@@ -36,6 +36,9 @@ def test_publish_contract_writes_expected_tables() -> None:
                 "quote_ts": "2026-04-10T21:00:00+00:00",
                 "price": 505.0,
                 "previous_close": 500.0,
+                "name": "SPDR S&P 500 ETF Trust",
+                "sector": None,
+                "industry": None,
                 "open": 500.0,
                 "high": 510.0,
                 "low": 495.0,
@@ -143,6 +146,8 @@ def test_publish_contract_writes_expected_tables() -> None:
     assert set(quote_row.keys()) == {
         "ticker",
         "name",
+        "sector",
+        "industry",
         "price",
         "change",
         "change_percent",
@@ -154,7 +159,9 @@ def test_publish_contract_writes_expected_tables() -> None:
     }
     assert quote_row["ticker"] == "SPY"
     assert quote_row["source"] == "yahoo_finance"
-    assert quote_row["name"] == "SPY"
+    assert quote_row["name"] == "SPDR S&P 500 ETF Trust"
+    assert quote_row["sector"] is None
+    assert quote_row["industry"] is None
     assert isinstance(quote_row["change"], float)
     assert isinstance(quote_row["change_percent"], float)
     quotes_history_call = next(call for call in publisher.upserts if call["table"] == "market_quotes_history")
@@ -241,6 +248,8 @@ def test_quote_rows_are_json_safe_before_upsert() -> None:
                 "quote_ts": pd.Timestamp("2026-04-10T21:00:00+00:00"),
                 "price": np.float64(505.0),
                 "previous_close": np.float64(500.0),
+                "sector": "Technology",
+                "industry": "Consumer Electronics",
                 "provider": "yahoo_finance",
                 "ingested_at": pd.Timestamp("2026-04-10T21:00:00+00:00"),
             }
@@ -259,6 +268,8 @@ def test_quote_rows_are_json_safe_before_upsert() -> None:
     assert set(row.keys()) == {
         "ticker",
         "name",
+        "sector",
+        "industry",
         "price",
         "change",
         "change_percent",
@@ -272,6 +283,8 @@ def test_quote_rows_are_json_safe_before_upsert() -> None:
     assert isinstance(row["fetched_at"], str)
     assert isinstance(row["created_at"], str)
     assert isinstance(row["updated_at"], str)
+    assert row["sector"] == "Technology"
+    assert row["industry"] == "Consumer Electronics"
     assert isinstance(row["change"], float)
     assert isinstance(row["change_percent"], float)
 

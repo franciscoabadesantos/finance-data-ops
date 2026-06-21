@@ -59,6 +59,8 @@ class FakeMarketProvider:
                     "quote_ts": quote_timestamp,
                     "price": 101.5,
                     "previous_close": 100.5,
+                    "sector": "Technology",
+                    "industry": "Software - Infrastructure",
                     "open": 101.0,
                     "high": 102.0,
                     "low": 100.0,
@@ -129,6 +131,8 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     assert set(quote_row.keys()) == {
         "ticker",
         "name",
+        "sector",
+        "industry",
         "price",
         "change",
         "change_percent",
@@ -138,6 +142,8 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
         "created_at",
         "updated_at",
     }
+    assert quote_row["sector"] == "Technology"
+    assert quote_row["industry"] == "Software - Infrastructure"
     assert "high" not in quote_row
 
     quotes_history_upsert = next(call for call in publisher.upserts if call["table"] == "market_quotes_history")

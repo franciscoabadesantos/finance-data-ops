@@ -9,6 +9,8 @@ import pandas as pd
 
 from finance_data_ops.publish.client import Publisher
 
+NULL_TEXT_TOKENS = {"", "nan", "NaN", "NAN", "none", "None", "NONE", "null", "Null", "NULL"}
+
 
 def build_market_price_daily_payload(prices_frame: pd.DataFrame) -> list[dict[str, Any]]:
     if prices_frame.empty:
@@ -101,11 +103,23 @@ def build_market_quotes_payload(quotes_frame: pd.DataFrame) -> list[dict[str, An
         "market_cap",
         pd.Series(index=frame.index, dtype=object),
     )
+    sector = (
+        _nullable_text_series(frame["sector"])
+        if "sector" in frame.columns
+        else pd.Series(index=frame.index, dtype=object)
+    )
+    industry = (
+        _nullable_text_series(frame["industry"])
+        if "industry" in frame.columns
+        else pd.Series(index=frame.index, dtype=object)
+    )
 
     payload = pd.DataFrame(
         {
             "ticker": ticker.astype(str).str.upper(),
             "name": name,
+            "sector": sector,
+            "industry": industry,
             "price": price,
             "change": change,
             "change_percent": change_percent,
@@ -127,6 +141,8 @@ def build_market_quotes_payload(quotes_frame: pd.DataFrame) -> list[dict[str, An
         [
             "ticker",
             "name",
+            "sector",
+            "industry",
             "price",
             "change",
             "change_percent",
@@ -240,6 +256,11 @@ def _coerce_market_cap_series(values: pd.Series) -> pd.Series:
     parsed_numeric = pd.to_numeric(values, errors="coerce")
     parsed_suffix = values.apply(_parse_market_cap_value)
     return parsed_numeric.where(parsed_numeric.notna(), parsed_suffix)
+
+
+def _nullable_text_series(values: pd.Series) -> pd.Series:
+    normalized = values.astype("string").str.strip()
+    return normalized.mask(normalized.isin(NULL_TEXT_TOKENS))
 
 
 def _parse_market_cap_value(value: Any) -> float | None:

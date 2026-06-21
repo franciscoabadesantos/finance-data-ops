@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -89,7 +91,11 @@ def test_fetch_latest_quotes_normalizes_fields() -> None:
             "low": 499.0,
             "volume": 3_200_000,
             "name": "SPDR S&P 500 ETF Trust",
+            "sector": None,
+            "industry": None,
             "market_cap": 520_000_000_000,
+            "currency": "USD",
+            "exchange": "NYSEARCA",
             "quote_ts": quote_ts,
         }
 
@@ -100,9 +106,42 @@ def test_fetch_latest_quotes_normalizes_fields() -> None:
     row = out.iloc[0]
     assert row["symbol"] == "SPY"
     assert row["name"] == "SPDR S&P 500 ETF Trust"
+    assert row["sector"] is None
+    assert row["industry"] is None
+    assert row["currency"] == "USD"
+    assert row["exchange"] == "NYSEARCA"
     assert float(row["price"]) == 505.12
     assert float(row["market_cap"]) == 520_000_000_000
     assert pd.Timestamp(row["quote_ts"]).tzinfo is not None
+
+
+def test_default_quote_fn_extracts_sector_and_industry_from_info(monkeypatch) -> None:
+    quote_ts = pd.Timestamp("2026-04-10T20:00:00+00:00")
+
+    class FakeTicker:
+        fast_info = {"lastPrice": 189.5, "previousClose": 188.0, "currency": "usd", "exchange": "nasdaq"}
+        info = {
+            "longName": "Apple Inc.",
+            "marketCap": 3_200_000_000_000,
+            "sector": "Technology",
+            "industry": "Consumer Electronics",
+        }
+
+        def history(self, **_: object) -> pd.DataFrame:
+            return pd.DataFrame(
+                [{"Close": 188.0}, {"Close": 189.5}],
+                index=pd.DatetimeIndex([quote_ts - pd.Timedelta(days=1), quote_ts]),
+            )
+
+    monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(Ticker=lambda _symbol: FakeTicker()))
+
+    provider = MarketDataProvider(download_fn=lambda *_args, **_kwargs: pd.DataFrame())
+    payload = provider._default_quote_fn("AAPL")
+
+    assert payload["name"] == "Apple Inc."
+    assert payload["sector"] == "Technology"
+    assert payload["industry"] == "Consumer Electronics"
+    assert payload["market_cap"] == 3_200_000_000_000
 
 
 def test_fetch_daily_prices_uses_provider_symbol_candidates() -> None:
