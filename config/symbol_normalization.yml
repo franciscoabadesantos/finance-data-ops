@@ -12,6 +12,8 @@ suffix_by_exchange:
   LIS: ".LS"
   CSE: ".CO"
   BIT: ".MI"
+  SHG: ".SS"
+  SHE: ".SZ"
 
 explicit_overrides:
   ANZ:

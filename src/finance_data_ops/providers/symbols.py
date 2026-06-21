@@ -29,6 +29,8 @@ DEFAULT_NORMALIZATION_CONFIG: dict[str, Any] = {
         "LIS": ".LS",
         "CSE": ".CO",
         "BIT": ".MI",
+        "SHG": ".SS",
+        "SHE": ".SZ",
     },
     "explicit_overrides": {
         "ANZ": ["ANZ.AX", "ANZ"],
@@ -73,7 +75,7 @@ DEFAULT_NORMALIZATION_CONFIG: dict[str, Any] = {
     "region_defaults": {
         "us": {"exchanges": []},
         "eu": {"exchanges": ["LSE", "ETR", "AMS", "EPA", "LIS", "CSE", "BIT"]},
-        "apac": {"exchanges": ["ASX", "HKEX", "TSE"]},
+        "apac": {"exchanges": ["ASX", "HKEX", "TSE", "NSE", "SHG", "SHE"]},
     },
 }
 

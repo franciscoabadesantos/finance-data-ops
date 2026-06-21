@@ -30,6 +30,8 @@ def test_mic_for_symbol_maps_yfinance_suffixes() -> None:
     assert mic_for_symbol("EDP.LS") == "XLIS"
     assert mic_for_symbol("NOVO-B.CO") == "XCSE"
     assert mic_for_symbol("BP.L") == "XLON"
+    assert mic_for_symbol("600519.SS") == "XSHG"
+    assert mic_for_symbol("000858.SZ") == "XSHG"
 
 
 def test_trading_session_rows_uses_exchange_calendar_sessions() -> None:

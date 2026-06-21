@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 
@@ -58,7 +58,7 @@ class FakeReleaseCalendarProvider:
 
 def test_smoke_release_calendar_refresh_publish_status(tmp_path) -> None:
     publisher = RecordingPublisher()
-    today = datetime.now(UTC).date()
+    today = datetime.now(UTC).date() - timedelta(days=1)
     start_date = today.isoformat()
     end_date = today.isoformat()
     summary = run_dataops_release_calendar_daily(

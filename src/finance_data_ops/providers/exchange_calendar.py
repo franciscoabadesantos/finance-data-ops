@@ -19,6 +19,9 @@ _SUFFIX_TO_MIC: dict[str, str] = {
     ".PA": "XPAR",
     ".LS": "XLIS",
     ".CO": "XCSE",
+    ".SS": "XSHG",
+    # exchange_calendars 4.13.2 has no XSHE calendar; Shenzhen uses XSHG as the China-market proxy.
+    ".SZ": "XSHG",
 }
 
 SUPPORTED_MICS: tuple[str, ...] = (
@@ -33,6 +36,7 @@ SUPPORTED_MICS: tuple[str, ...] = (
     "XPAR",
     "XLIS",
     "XCSE",
+    "XSHG",
 )
 DEFAULT_MIC = "XNYS"
 
