@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
@@ -63,6 +65,40 @@ def test_fetch_symbol_fundamentals_normalizes_metrics() -> None:
     assert "market_cap" in metrics
     assert "shares_outstanding" in metrics
     assert set(out["period_type"].tolist()).issuperset({"annual", "quarterly", "point_in_time"})
+
+
+def test_optional_yahoo_surfaces_do_not_block_statement_fundamentals(caplog) -> None:
+    annual_income = pd.DataFrame({"2025-12-31": {"Total Revenue": 550.0}})
+
+    def fail_optional_surface(_symbol: str) -> object:
+        raise RuntimeError("optional surface failed")
+
+    provider = FundamentalsDataProvider(
+        income_statements_fn=lambda _symbol: (pd.DataFrame(), annual_income),
+        cashflow_statements_fn=lambda _symbol: (pd.DataFrame(), pd.DataFrame()),
+        balance_sheet_statements_fn=lambda _symbol: (pd.DataFrame(), pd.DataFrame()),
+        info_fn=fail_optional_surface,
+        fast_info_fn=fail_optional_surface,
+        dividends_fn=fail_optional_surface,
+        funds_data_fn=fail_optional_surface,
+        provider_name="fake",
+    )
+
+    caplog.set_level(logging.WARNING, logger="finance_data_ops.providers.fundamentals")
+    fundamentals = provider.fetch_symbol_fundamentals("ko")
+    profile = provider.fetch_symbol_profile("ko")
+    holdings, sectors = provider.fetch_symbol_etf_funds_data("ko")
+
+    assert fundamentals[["ticker", "metric", "value"]].to_dict(orient="records") == [
+        {"ticker": "KO", "metric": "revenue", "value": 550.0}
+    ]
+    assert profile.empty
+    assert holdings.empty
+    assert sectors.empty
+    assert "Optional fundamentals provider surface failed (symbol=KO surface=info)" in caplog.text
+    assert "Optional fundamentals provider surface failed (symbol=KO surface=fast_info)" in caplog.text
+    assert "Optional fundamentals provider surface failed (symbol=KO surface=dividends)" in caplog.text
+    assert "Optional fundamentals provider surface failed (symbol=KO surface=funds_data)" in caplog.text
 
 
 def test_fetch_symbol_fundamentals_extracts_yahoo_info_additions() -> None:

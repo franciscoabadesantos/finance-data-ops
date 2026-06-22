@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import logging
 
 import pandas as pd
 from freezegun import freeze_time
@@ -125,6 +126,14 @@ class FakeFundamentalsProvider:
         )
 
 
+class FailingOptionalSurfacesProvider(FakeFundamentalsProvider):
+    def fetch_symbol_profile(self, symbol: str) -> pd.DataFrame:
+        raise RuntimeError(f"{symbol}: info failed")
+
+    def fetch_symbol_etf_funds_data(self, symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+        raise RuntimeError(f"{symbol}: No Fund data found")
+
+
 @freeze_time("2026-04-12")
 def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     publisher = RecordingPublisher()
@@ -190,6 +199,31 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_fundamentals_daily")
     assert orchestration_row["status"] == "success"
     assert orchestration_row["symbols_succeeded"] == 2
+
+
+def test_optional_profile_and_etf_failures_do_not_fail_fundamentals_refresh(tmp_path, caplog) -> None:
+    publisher = RecordingPublisher()
+
+    caplog.set_level(logging.WARNING, logger="finance_data_ops.refresh.fundamentals_daily")
+    summary = run_dataops_fundamentals_daily(
+        symbols=["KO"],
+        cache_root=str(tmp_path),
+        publish_enabled=True,
+        provider=FailingOptionalSurfacesProvider(),
+        publisher=publisher,
+        raise_on_failed_hard=True,
+    )
+
+    assert summary["refresh"]["fundamentals_daily"]["status"] == "fresh"
+    assert summary["publish_failures"] == []
+    assert summary["refresh"]["fundamentals_daily"]["symbols_succeeded"] == ["KO"]
+    assert summary["refresh"]["fundamentals_daily"]["symbols_failed"] == []
+    assert any(call["table"] == "market_fundamentals_v2" for call in publisher.upserts)
+    assert not any(call["table"] == "ticker_profile" for call in publisher.upserts)
+    assert not any(call["table"] == "etf_holdings" for call in publisher.upserts)
+    assert not any(call["table"] == "etf_sector_weights" for call in publisher.upserts)
+    assert "Optional fundamentals refresh surface failed (symbol=KO surface=profile)" in caplog.text
+    assert "Optional fundamentals refresh surface failed (symbol=KO surface=etf_funds_data)" in caplog.text
 
 
 def test_fundamentals_coverage_merge_preserves_existing_market_flags(tmp_path) -> None:

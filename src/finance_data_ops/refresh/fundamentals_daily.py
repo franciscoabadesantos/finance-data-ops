@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import logging
+from typing import Callable
 from uuid import uuid4
 
 import pandas as pd
@@ -11,6 +13,8 @@ from finance_data_ops.ops.incidents import classify_failure, run_with_retry
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
 from finance_data_ops.refresh.market_daily import RefreshRunResult
 from finance_data_ops.refresh.storage import write_parquet_table
+
+LOGGER = logging.getLogger("finance_data_ops.refresh.fundamentals_daily")
 
 
 def refresh_fundamentals_daily(
@@ -42,14 +46,18 @@ def refresh_fundamentals_daily(
             if frame.empty:
                 raise RuntimeError(f"{symbol}: provider returned zero fundamentals rows")
             profile_frame = (
-                provider.fetch_symbol_profile(symbol)
+                _optional_frame(lambda: provider.fetch_symbol_profile(symbol), symbol=symbol, surface="profile")
                 if hasattr(provider, "fetch_symbol_profile")
                 else pd.DataFrame()
             )
             holdings_frame = pd.DataFrame()
             sector_weights_frame = pd.DataFrame()
             if hasattr(provider, "fetch_symbol_etf_funds_data"):
-                holdings_frame, sector_weights_frame = provider.fetch_symbol_etf_funds_data(symbol)
+                holdings_frame, sector_weights_frame = _optional_etf_funds_data(
+                    lambda: provider.fetch_symbol_etf_funds_data(symbol),
+                    symbol=symbol,
+                    surface="etf_funds_data",
+                )
             return frame, profile_frame, holdings_frame, sector_weights_frame
 
         result, error, _, exhausted_retry_path = run_with_retry(
@@ -139,3 +147,39 @@ def refresh_fundamentals_daily(
         error_messages=error_messages,
     )
     return merged, refresh_result
+
+
+def _optional_frame(operation: Callable[[], pd.DataFrame], *, symbol: str, surface: str) -> pd.DataFrame:
+    try:
+        result = operation()
+    except Exception as exc:
+        LOGGER.warning(
+            "Optional fundamentals refresh surface failed (symbol=%s surface=%s): %r",
+            symbol,
+            surface,
+            exc,
+        )
+        return pd.DataFrame()
+    return result if isinstance(result, pd.DataFrame) else pd.DataFrame()
+
+
+def _optional_etf_funds_data(
+    operation: Callable[[], tuple[pd.DataFrame, pd.DataFrame]], *, symbol: str, surface: str
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    try:
+        result = operation()
+    except Exception as exc:
+        LOGGER.warning(
+            "Optional fundamentals refresh surface failed (symbol=%s surface=%s): %r",
+            symbol,
+            surface,
+            exc,
+        )
+        return pd.DataFrame(), pd.DataFrame()
+    if not isinstance(result, tuple) or len(result) != 2:
+        return pd.DataFrame(), pd.DataFrame()
+    holdings, sector_weights = result
+    return (
+        holdings if isinstance(holdings, pd.DataFrame) else pd.DataFrame(),
+        sector_weights if isinstance(sector_weights, pd.DataFrame) else pd.DataFrame(),
+    )

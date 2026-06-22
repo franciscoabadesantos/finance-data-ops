@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
+import logging
 import re
 from typing import Any
 
@@ -61,6 +62,8 @@ ETF_SECTOR_WEIGHTS_COLUMNS = [
     "fetched_at",
     "updated_at",
 ]
+
+LOGGER = logging.getLogger("finance_data_ops.providers.fundamentals")
 
 
 class FundamentalsProviderError(RuntimeError):
@@ -121,12 +124,12 @@ class FundamentalsDataProvider:
             return pd.DataFrame(columns=FUNDAMENTALS_COLUMNS)
 
         ingested_at = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC")
-        info_payload = dict(self._info_fn(ticker) or {})
-        fast_info_payload = dict(self._fast_info_fn(ticker) or {})
+        info_payload = _optional_dict(self._info_fn, ticker, surface="info")
+        fast_info_payload = _optional_dict(self._fast_info_fn, ticker, surface="fast_info")
 
         # Dividends come from the actual payment history (reliable), not the flaky `.info` fields.
         dividend_metrics = _dividend_metrics_from_history(
-            self._dividends_fn(ticker),
+            _optional_call(self._dividends_fn, ticker, default=None, surface="dividends"),
             last_price=_first_present_value(
                 _coerce_float(fast_info_payload.get("last_price")),
                 _coerce_float(fast_info_payload.get("lastPrice")),
@@ -311,7 +314,7 @@ class FundamentalsDataProvider:
             return pd.DataFrame(columns=TICKER_PROFILE_COLUMNS)
 
         fetched_at = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC")
-        info_payload = dict(self._info_fn(ticker) or {})
+        info_payload = _optional_dict(self._info_fn, ticker, surface="info")
         description = _coerce_text(
             info_payload.get("longBusinessSummary")
             or info_payload.get("description")
@@ -349,7 +352,7 @@ class FundamentalsDataProvider:
             )
 
         fetched_at = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC")
-        funds_data = self._funds_data_fn(ticker)
+        funds_data = _optional_call(self._funds_data_fn, ticker, default=None, surface="funds_data")
         if funds_data is None:
             return (
                 pd.DataFrame(columns=ETF_HOLDINGS_COLUMNS),
@@ -431,6 +434,27 @@ def _to_frame(value: Any) -> pd.DataFrame:
     if value is None:
         return pd.DataFrame()
     return pd.DataFrame(value)
+
+
+def _optional_call(fn: Callable[[str], Any], symbol: str, *, default: Any, surface: str) -> Any:
+    try:
+        return fn(symbol)
+    except Exception as exc:
+        LOGGER.warning(
+            "Optional fundamentals provider surface failed (symbol=%s surface=%s): %r",
+            symbol,
+            surface,
+            exc,
+        )
+        return default
+
+
+def _optional_dict(fn: Callable[[str], Any], symbol: str, *, surface: str) -> dict[str, Any]:
+    payload = _optional_call(fn, symbol, default={}, surface=surface)
+    try:
+        return dict(payload or {})
+    except (TypeError, ValueError):
+        return {}
 
 
 def _extract_statement_metrics(
