@@ -128,6 +128,7 @@ def _latest_date_for_asset(*, client: Any, asset_key: str) -> str | None:
         "market_quotes": ("market_quotes", "updated_at"),
         "ticker_market_stats_snapshot": ("ticker_market_stats_snapshot", "as_of_date"),
         "market_fundamentals_v2": ("market_fundamentals_v2", "period_end"),
+        "ticker_fundamental_point_in_time": ("ticker_fundamental_point_in_time", "as_of_date"),
         "ticker_fundamental_summary": ("ticker_fundamental_summary", "latest_period_end"),
         "mv_latest_fundamentals": ("mv_latest_fundamentals", "period_end"),
         "market_earnings_events": ("market_earnings_events", "earnings_date"),

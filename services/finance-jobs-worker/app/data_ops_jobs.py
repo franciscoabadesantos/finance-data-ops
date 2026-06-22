@@ -532,6 +532,7 @@ def _tables_for_domain(domain: str) -> list[tuple[str, str | None, str | None]]:
     if domain == "fundamentals":
         return [
             ("market_fundamentals_v2", "period_end", "ticker"),
+            ("ticker_fundamental_point_in_time", "as_of_date", "ticker"),
             ("ticker_fundamental_summary", "latest_period_end", "ticker"),
         ]
     if domain == "earnings":

@@ -9,11 +9,40 @@ import pandas as pd
 from finance_data_ops.publish.client import Publisher
 
 
+POINT_IN_TIME_METRICS = frozenset(
+    {
+        "market_cap",
+        "shares_outstanding",
+        "trailing_pe",
+        "eps",
+        "ebitda",
+        "free_cash_flow",
+        "dividend_yield",
+        "dividend_rate",
+        "trailing_annual_dividend_yield",
+        "trailing_annual_dividend_rate",
+        "payout_ratio",
+        "beta",
+        "beta_3y",
+        "ytd_return",
+        "three_year_avg_return",
+        "five_year_avg_return",
+        "ex_dividend_date",
+        "payout_frequency",
+    }
+)
+
+METRIC_ONLY_POINT_IN_TIME_METRICS = POINT_IN_TIME_METRICS - {"eps", "ebitda", "free_cash_flow"}
+
+
 def build_market_fundamentals_payload(fundamentals_frame: pd.DataFrame) -> list[dict[str, Any]]:
     if fundamentals_frame.empty:
         return []
 
-    frame = fundamentals_frame.copy()
+    frame = _historical_fundamentals_frame(fundamentals_frame)
+    if frame.empty:
+        return []
+
     ticker = frame.get("ticker", frame.get("symbol", pd.Series(index=frame.index, dtype=object)))
     source = frame.get("source", frame.get("provider", pd.Series(index=frame.index, dtype=object)))
     fetched_at = frame.get("fetched_at", frame.get("ingested_at", pd.Series(index=frame.index, dtype=object)))
@@ -58,6 +87,58 @@ def build_market_fundamentals_payload(fundamentals_frame: pd.DataFrame) -> list[
             "value_text",
             "source",
             "fetched_at",
+        ]
+    ].to_dict(orient="records")
+
+
+def build_ticker_fundamental_point_in_time_payload(fundamentals_frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if fundamentals_frame.empty:
+        return []
+
+    frame = _point_in_time_fundamentals_frame(fundamentals_frame)
+    if frame.empty:
+        return []
+
+    ticker = frame.get("ticker", frame.get("symbol", pd.Series(index=frame.index, dtype=object)))
+    source = frame.get("source", frame.get("provider", pd.Series(index=frame.index, dtype=object)))
+    fetched_at = frame.get("fetched_at", frame.get("ingested_at", pd.Series(index=frame.index, dtype=object)))
+    value_text = frame.get("value_text", pd.Series(index=frame.index, dtype=object))
+
+    payload = pd.DataFrame(
+        {
+            "ticker": ticker.astype(str).str.upper(),
+            "metric": frame.get("metric", pd.Series(index=frame.index, dtype=object)).astype(str).str.lower(),
+            "value": pd.to_numeric(frame.get("value"), errors="coerce"),
+            "value_text": value_text,
+            "as_of_date": pd.to_datetime(frame.get("period_end"), errors="coerce").dt.date,
+            "source": source,
+            "fetched_at": pd.to_datetime(fetched_at, utc=True, errors="coerce"),
+        },
+        index=frame.index,
+    )
+    now_utc = pd.Timestamp.now(tz="UTC")
+    payload["fetched_at"] = payload["fetched_at"].fillna(now_utc)
+    payload["updated_at"] = payload["fetched_at"]
+    payload["ticker"] = _normalize_string_series(payload["ticker"])
+    payload["metric"] = _normalize_string_series(payload["metric"])
+    payload["value_text"] = _normalize_string_series(payload["value_text"])
+    payload["source"] = _normalize_string_series(payload["source"])
+
+    payload = payload.dropna(subset=["ticker", "metric", "as_of_date"])
+    payload = payload.loc[payload["value"].notna() | payload["value_text"].notna()].copy()
+    payload = payload.sort_values(["ticker", "metric", "as_of_date", "fetched_at"])
+    payload = payload.drop_duplicates(subset=["ticker", "metric"], keep="last")
+
+    return payload[
+        [
+            "ticker",
+            "metric",
+            "value",
+            "value_text",
+            "as_of_date",
+            "source",
+            "fetched_at",
+            "updated_at",
         ]
     ].to_dict(orient="records")
 
@@ -248,6 +329,24 @@ def _resolve_period(frame: pd.DataFrame) -> pd.Series:
     return out.astype(str).str.strip()
 
 
+def _historical_fundamentals_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    point_mask = _point_in_time_mask(frame)
+    return frame.loc[~point_mask].copy()
+
+
+def _point_in_time_fundamentals_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    point_mask = _point_in_time_mask(frame)
+    return frame.loc[point_mask].copy()
+
+
+def _point_in_time_mask(frame: pd.DataFrame) -> pd.Series:
+    metric = frame.get("metric", pd.Series(index=frame.index, dtype=object)).astype(str).str.lower()
+    if "period_type" in frame.columns:
+        period_type = frame["period_type"].astype(str).str.strip().str.lower()
+        return period_type.eq("point_in_time")
+    return metric.isin(METRIC_ONLY_POINT_IN_TIME_METRICS)
+
+
 def _normalize_string_series(series: pd.Series) -> pd.Series:
     text = series.astype(str).str.strip()
     missing_mask = text.str.lower().isin({"", "nan", "none", "nat", "<na>"})
@@ -311,6 +410,7 @@ def publish_fundamentals_surfaces(
     refresh_materialized_view: bool = True,
 ) -> dict[str, Any]:
     history_rows = build_market_fundamentals_payload(fundamentals_history)
+    point_in_time_rows = build_ticker_fundamental_point_in_time_payload(fundamentals_history)
     summary_rows = build_ticker_fundamental_summary_payload(fundamentals_summary)
     profile_rows = build_ticker_profile_payload(_frame_or_empty(ticker_profile))
     holding_rows = build_etf_holdings_payload(_frame_or_empty(etf_holdings))
@@ -321,6 +421,13 @@ def publish_fundamentals_surfaces(
         history_rows,
         on_conflict="ticker,period,period_end,metric",
     )
+    point_in_time_result: dict[str, Any] | None = None
+    if point_in_time_rows:
+        point_in_time_result = publisher.upsert(
+            "ticker_fundamental_point_in_time",
+            point_in_time_rows,
+            on_conflict="ticker,metric",
+        )
     summary_result = publisher.upsert(
         "ticker_fundamental_summary",
         summary_rows,
@@ -353,6 +460,7 @@ def publish_fundamentals_surfaces(
 
     return {
         "market_fundamentals_v2": history_result,
+        "ticker_fundamental_point_in_time": point_in_time_result,
         "ticker_fundamental_summary": summary_result,
         "ticker_profile": profile_result,
         "etf_holdings": holdings_result,

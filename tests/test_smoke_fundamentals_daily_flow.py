@@ -149,6 +149,7 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     assert summary["publish_failures"] == []
     fundamentals_upsert = next(call for call in publisher.upserts if call["table"] == "market_fundamentals_v2")
     assert fundamentals_upsert["on_conflict"] == "ticker,period,period_end,metric"
+    assert {row["metric"] for row in fundamentals_upsert["rows"]} == {"revenue", "net_income", "eps"}
     fundamentals_row = fundamentals_upsert["rows"][0]
     assert set(fundamentals_row.keys()) == {
         "ticker",
@@ -160,6 +161,10 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
         "source",
         "fetched_at",
     }
+    point_upsert = next(call for call in publisher.upserts if call["table"] == "ticker_fundamental_point_in_time")
+    assert point_upsert["on_conflict"] == "ticker,metric"
+    assert {row["metric"] for row in point_upsert["rows"]} == {"market_cap"}
+    assert {row["as_of_date"] for row in point_upsert["rows"]} == {"2026-04-11"}
     assert next(call for call in publisher.upserts if call["table"] == "ticker_profile")["on_conflict"] == "ticker"
     assert (
         next(call for call in publisher.upserts if call["table"] == "etf_holdings")["on_conflict"]

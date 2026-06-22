@@ -3,9 +3,11 @@
 Data Ops writes five product-data domains: market, fundamentals, earnings, macro, and economic release calendar. Fresh projects should bootstrap from the definitive runtime baseline:
 
 - [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
+- [`sql/013_fundamentals_point_in_time_snapshot.sql`](/home/franciscosantos/finance-data-ops/sql/013_fundamentals_point_in_time_snapshot.sql)
 - [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
 
 Historical numbered SQL files remain in the repo for older-instance archaeology, not for fresh installs.
+The next definitive baseline should fold the point-in-time snapshot migration into `000`.
 
 ## Market surfaces
 
@@ -31,8 +33,14 @@ Historical numbered SQL files remain in the repo for older-instance archaeology,
 ## Fundamentals surfaces
 
 - `market_fundamentals_v2` (canonical normalized history)
+- `ticker_fundamental_point_in_time` (current non-fiscal snapshot per `(ticker, metric)`)
 - `mv_latest_fundamentals` (latest per `(ticker, metric)`)
 - `ticker_fundamental_summary` (frontend snapshot)
+
+`market_fundamentals_v2` is for fiscal statement history. Point-in-time vendor metrics such as
+`market_cap`, `trailing_pe`, `dividend_yield`, and `beta` belong in
+`ticker_fundamental_point_in_time` and are upserted by `(ticker, metric)` so daily refreshes replace
+the current snapshot instead of accumulating one row per ingestion date.
 
 ## Earnings surfaces
 

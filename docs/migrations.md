@@ -9,9 +9,11 @@ Prepare a fresh Supabase project for current Data Ops-owned runtime surfaces wit
 Apply in order on an empty project:
 
 - [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
+- [`sql/013_fundamentals_point_in_time_snapshot.sql`](/home/franciscosantos/finance-data-ops/sql/013_fundamentals_point_in_time_snapshot.sql)
 - [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
 
-Historical numbered SQL files (`001..007`) are retained only for older-instance archaeology and should not be used as the bootstrap path for new environments.
+Historical numbered SQL files are retained for older-instance archaeology. The next baseline
+consolidation should fold `013` and the later runtime additions into a single definitive schema file.
 
 ## Surfaces created/owned by migrations
 
@@ -24,6 +26,7 @@ Historical numbered SQL files (`001..007`) are retained only for older-instance 
   - `data_asset_status`
   - `symbol_data_coverage`
   - `market_fundamentals_v2`
+  - `ticker_fundamental_point_in_time`
   - `mv_latest_fundamentals` + `refresh_mv_latest_fundamentals`
   - `ticker_fundamental_summary`
   - `market_earnings_events`

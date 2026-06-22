@@ -6,7 +6,10 @@ import pandas as pd
 
 from finance_data_ops.publish.client import RecordingPublisher
 from finance_data_ops.publish.earnings import publish_earnings_surfaces
-from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
+from finance_data_ops.publish.fundamentals import (
+    build_ticker_fundamental_point_in_time_payload,
+    publish_fundamentals_surfaces,
+)
 
 
 def test_publish_v2_contract_writes_expected_tables() -> None:
@@ -231,12 +234,20 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
     assert conflicts["etf_holdings"] == "etf_ticker,holding_symbol,as_of"
     assert conflicts["etf_sector_weights"] == "etf_ticker,sector,as_of"
 
-    fundamentals_row = next(call for call in publisher.upserts if call["table"] == "market_fundamentals_v2")[
+    assert conflicts["ticker_fundamental_point_in_time"] == "ticker,metric"
+
+    fundamentals_rows = next(call for call in publisher.upserts if call["table"] == "market_fundamentals_v2")[
+        "rows"
+    ]
+    assert fundamentals_rows == []
+
+    point_row = next(call for call in publisher.upserts if call["table"] == "ticker_fundamental_point_in_time")[
         "rows"
     ][0]
-    assert fundamentals_row["metric"] == "ex_dividend_date"
-    assert fundamentals_row["value"] is None
-    assert fundamentals_row["value_text"] == "2026-06-20"
+    assert point_row["metric"] == "ex_dividend_date"
+    assert point_row["value"] is None
+    assert point_row["value_text"] == "2026-06-20"
+    assert point_row["as_of_date"] == "2026-06-22"
 
     profile_row = next(call for call in publisher.upserts if call["table"] == "ticker_profile")["rows"][0]
     assert profile_row["ticker"] == "SPY"
@@ -251,3 +262,36 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
     sector_row = next(call for call in publisher.upserts if call["table"] == "etf_sector_weights")["rows"][0]
     assert sector_row["sector"] == "technology"
     assert sector_row["weight"] == 0.32
+
+
+def test_point_in_time_payload_keeps_latest_snapshot_per_ticker_metric() -> None:
+    payload = build_ticker_fundamental_point_in_time_payload(
+        pd.DataFrame(
+            [
+                {
+                    "ticker": "SPY",
+                    "metric": "market_cap",
+                    "value": 100.0,
+                    "period_end": "2026-06-21",
+                    "period_type": "point_in_time",
+                    "source": "fake",
+                    "fetched_at": datetime(2026, 6, 21, 12, 0, tzinfo=UTC),
+                },
+                {
+                    "ticker": "SPY",
+                    "metric": "market_cap",
+                    "value": 110.0,
+                    "period_end": "2026-06-22",
+                    "period_type": "point_in_time",
+                    "source": "fake",
+                    "fetched_at": datetime(2026, 6, 22, 12, 0, tzinfo=UTC),
+                },
+            ]
+        )
+    )
+
+    assert len(payload) == 1
+    assert payload[0]["ticker"] == "SPY"
+    assert payload[0]["metric"] == "market_cap"
+    assert payload[0]["value"] == 110.0
+    assert payload[0]["as_of_date"] == pd.Timestamp("2026-06-22").date()
