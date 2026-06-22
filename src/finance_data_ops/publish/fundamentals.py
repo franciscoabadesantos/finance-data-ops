@@ -40,7 +40,8 @@ def build_market_fundamentals_payload(fundamentals_frame: pd.DataFrame) -> list[
     payload["value_text"] = _normalize_string_series(payload["value_text"])
     payload["source"] = _normalize_string_series(payload["source"])
 
-    payload = payload.dropna(subset=["ticker", "period", "period_end", "metric", "value"])
+    payload = payload.dropna(subset=["ticker", "period", "period_end", "metric"])
+    payload = payload.loc[payload["value"].notna() | payload["value_text"].notna()].copy()
     payload = payload.sort_values(["ticker", "period", "period_end", "metric", "fetched_at"])
     payload = payload.drop_duplicates(
         subset=["ticker", "period", "period_end", "metric"],
@@ -57,6 +58,171 @@ def build_market_fundamentals_payload(fundamentals_frame: pd.DataFrame) -> list[
             "value_text",
             "source",
             "fetched_at",
+        ]
+    ].to_dict(orient="records")
+
+
+def build_ticker_profile_payload(profile_frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if profile_frame.empty:
+        return []
+
+    frame = profile_frame.copy()
+    now_utc = pd.Timestamp.now(tz="UTC")
+    payload = pd.DataFrame(
+        {
+            "ticker": frame.get("ticker", frame.get("symbol", pd.Series(index=frame.index, dtype=object)))
+            .astype(str)
+            .str.upper(),
+            "description": frame.get(
+                "description",
+                frame.get("long_business_summary", pd.Series(index=frame.index, dtype=object)),
+            ),
+            "long_business_summary": frame.get(
+                "long_business_summary",
+                frame.get("description", pd.Series(index=frame.index, dtype=object)),
+            ),
+            "etf_category": frame.get(
+                "etf_category",
+                frame.get("category_name", pd.Series(index=frame.index, dtype=object)),
+            ),
+            "fund_family": frame.get("fund_family", pd.Series(index=frame.index, dtype=object)),
+            "expense_ratio": pd.to_numeric(
+                frame.get(
+                    "expense_ratio",
+                    frame.get("fees_expense_ratio", pd.Series(index=frame.index, dtype=object)),
+                ),
+                errors="coerce",
+            ),
+            "inception_date": pd.to_datetime(
+                frame.get("inception_date", frame.get("fund_inception_date", pd.Series(index=frame.index))),
+                errors="coerce",
+            ).dt.date,
+            "legal_type": frame.get("legal_type", pd.Series(index=frame.index, dtype=object)),
+            "beta": pd.to_numeric(frame.get("beta"), errors="coerce"),
+            "beta_3y": pd.to_numeric(frame.get("beta_3y"), errors="coerce"),
+            "source": frame.get("source", frame.get("provider", "data_ops")),
+            "fetched_at": pd.to_datetime(
+                frame.get("fetched_at", frame.get("updated_at", now_utc)),
+                utc=True,
+                errors="coerce",
+            ),
+            "updated_at": pd.to_datetime(frame.get("updated_at", now_utc), utc=True, errors="coerce"),
+        },
+        index=frame.index,
+    )
+    payload["ticker"] = _normalize_string_series(payload["ticker"])
+    for column in ["description", "long_business_summary", "etf_category", "fund_family", "legal_type", "source"]:
+        payload[column] = _normalize_string_series(payload[column])
+    payload["fetched_at"] = payload["fetched_at"].fillna(now_utc)
+    payload["updated_at"] = payload["updated_at"].fillna(now_utc)
+    payload = payload.dropna(subset=["ticker"])
+    payload = payload.drop_duplicates(subset=["ticker"], keep="last")
+    return payload[
+        [
+            "ticker",
+            "description",
+            "long_business_summary",
+            "etf_category",
+            "fund_family",
+            "expense_ratio",
+            "inception_date",
+            "legal_type",
+            "beta",
+            "beta_3y",
+            "source",
+            "fetched_at",
+            "updated_at",
+        ]
+    ].to_dict(orient="records")
+
+
+def build_etf_holdings_payload(holdings_frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if holdings_frame.empty:
+        return []
+    frame = holdings_frame.copy()
+    now_utc = pd.Timestamp.now(tz="UTC")
+    payload = pd.DataFrame(
+        {
+            "etf_ticker": frame.get("etf_ticker", frame.get("ticker", pd.Series(index=frame.index, dtype=object)))
+            .astype(str)
+            .str.upper(),
+            "holding_symbol": frame.get("holding_symbol", pd.Series(index=frame.index, dtype=object))
+            .astype(str)
+            .str.upper(),
+            "holding_name": frame.get("holding_name", pd.Series(index=frame.index, dtype=object)),
+            "weight": pd.to_numeric(frame.get("weight"), errors="coerce"),
+            "as_of": pd.to_datetime(frame.get("as_of"), errors="coerce").dt.date,
+            "source": frame.get("source", frame.get("provider", "data_ops")),
+            "fetched_at": pd.to_datetime(
+                frame.get("fetched_at", frame.get("updated_at", now_utc)),
+                utc=True,
+                errors="coerce",
+            ),
+            "updated_at": pd.to_datetime(frame.get("updated_at", now_utc), utc=True, errors="coerce"),
+        },
+        index=frame.index,
+    )
+    payload["etf_ticker"] = _normalize_string_series(payload["etf_ticker"])
+    payload["holding_symbol"] = _normalize_string_series(payload["holding_symbol"])
+    payload["holding_name"] = _normalize_string_series(payload["holding_name"])
+    payload["source"] = _normalize_string_series(payload["source"])
+    payload["fetched_at"] = payload["fetched_at"].fillna(now_utc)
+    payload["updated_at"] = payload["updated_at"].fillna(now_utc)
+    payload = payload.dropna(subset=["etf_ticker", "holding_symbol", "as_of"])
+    payload = payload.drop_duplicates(subset=["etf_ticker", "holding_symbol", "as_of"], keep="last")
+    return payload[
+        [
+            "etf_ticker",
+            "holding_symbol",
+            "holding_name",
+            "weight",
+            "as_of",
+            "source",
+            "fetched_at",
+            "updated_at",
+        ]
+    ].to_dict(orient="records")
+
+
+def build_etf_sector_weights_payload(sector_weights_frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if sector_weights_frame.empty:
+        return []
+    frame = sector_weights_frame.copy()
+    now_utc = pd.Timestamp.now(tz="UTC")
+    payload = pd.DataFrame(
+        {
+            "etf_ticker": frame.get("etf_ticker", frame.get("ticker", pd.Series(index=frame.index, dtype=object)))
+            .astype(str)
+            .str.upper(),
+            "sector": frame.get("sector", pd.Series(index=frame.index, dtype=object)),
+            "weight": pd.to_numeric(frame.get("weight"), errors="coerce"),
+            "as_of": pd.to_datetime(frame.get("as_of"), errors="coerce").dt.date,
+            "source": frame.get("source", frame.get("provider", "data_ops")),
+            "fetched_at": pd.to_datetime(
+                frame.get("fetched_at", frame.get("updated_at", now_utc)),
+                utc=True,
+                errors="coerce",
+            ),
+            "updated_at": pd.to_datetime(frame.get("updated_at", now_utc), utc=True, errors="coerce"),
+        },
+        index=frame.index,
+    )
+    payload["etf_ticker"] = _normalize_string_series(payload["etf_ticker"])
+    payload["sector"] = _normalize_string_series(payload["sector"])
+    payload["source"] = _normalize_string_series(payload["source"])
+    payload["fetched_at"] = payload["fetched_at"].fillna(now_utc)
+    payload["updated_at"] = payload["updated_at"].fillna(now_utc)
+    payload = payload.dropna(subset=["etf_ticker", "sector", "as_of", "weight"])
+    payload = payload.drop_duplicates(subset=["etf_ticker", "sector", "as_of"], keep="last")
+    return payload[
+        [
+            "etf_ticker",
+            "sector",
+            "weight",
+            "as_of",
+            "source",
+            "fetched_at",
+            "updated_at",
         ]
     ].to_dict(orient="records")
 
@@ -139,10 +305,16 @@ def publish_fundamentals_surfaces(
     publisher: Publisher,
     fundamentals_history: pd.DataFrame,
     fundamentals_summary: pd.DataFrame,
+    ticker_profile: pd.DataFrame | None = None,
+    etf_holdings: pd.DataFrame | None = None,
+    etf_sector_weights: pd.DataFrame | None = None,
     refresh_materialized_view: bool = True,
 ) -> dict[str, Any]:
     history_rows = build_market_fundamentals_payload(fundamentals_history)
     summary_rows = build_ticker_fundamental_summary_payload(fundamentals_summary)
+    profile_rows = build_ticker_profile_payload(_frame_or_empty(ticker_profile))
+    holding_rows = build_etf_holdings_payload(_frame_or_empty(etf_holdings))
+    sector_weight_rows = build_etf_sector_weights_payload(_frame_or_empty(etf_sector_weights))
 
     history_result = publisher.upsert(
         "market_fundamentals_v2",
@@ -154,6 +326,27 @@ def publish_fundamentals_surfaces(
         summary_rows,
         on_conflict="ticker",
     )
+    profile_result: dict[str, Any] | None = None
+    if profile_rows:
+        profile_result = publisher.upsert(
+            "ticker_profile",
+            profile_rows,
+            on_conflict="ticker",
+        )
+    holdings_result: dict[str, Any] | None = None
+    if holding_rows:
+        holdings_result = publisher.upsert(
+            "etf_holdings",
+            holding_rows,
+            on_conflict="etf_ticker,holding_symbol,as_of",
+        )
+    sector_weights_result: dict[str, Any] | None = None
+    if sector_weight_rows:
+        sector_weights_result = publisher.upsert(
+            "etf_sector_weights",
+            sector_weight_rows,
+            on_conflict="etf_ticker,sector,as_of",
+        )
     rpc_result: dict[str, Any] | None = None
     if refresh_materialized_view:
         rpc_result = publisher.rpc("refresh_mv_latest_fundamentals", {})
@@ -161,5 +354,12 @@ def publish_fundamentals_surfaces(
     return {
         "market_fundamentals_v2": history_result,
         "ticker_fundamental_summary": summary_result,
+        "ticker_profile": profile_result,
+        "etf_holdings": holdings_result,
+        "etf_sector_weights": sector_weights_result,
         "mv_latest_fundamentals": rpc_result,
     }
+
+
+def _frame_or_empty(frame: pd.DataFrame | None) -> pd.DataFrame:
+    return frame if frame is not None else pd.DataFrame()

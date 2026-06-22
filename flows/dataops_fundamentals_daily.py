@@ -64,6 +64,13 @@ def run_dataops_fundamentals_daily(
     )
 
     cached_fundamentals = read_parquet_table("market_fundamentals_v2", cache_root=settings.cache_root, required=False)
+    cached_ticker_profile = read_parquet_table("ticker_profile", cache_root=settings.cache_root, required=False)
+    cached_etf_holdings = read_parquet_table("etf_holdings", cache_root=settings.cache_root, required=False)
+    cached_etf_sector_weights = read_parquet_table(
+        "etf_sector_weights",
+        cache_root=settings.cache_root,
+        required=False,
+    )
     fundamentals_summary = compute_ticker_fundamental_summary(cached_fundamentals)
     write_parquet_table(
         "ticker_fundamental_summary",
@@ -131,6 +138,9 @@ def run_dataops_fundamentals_daily(
                 publisher=publisher_impl,
                 fundamentals_history=cached_fundamentals,
                 fundamentals_summary=fundamentals_summary,
+                ticker_profile=cached_ticker_profile,
+                etf_holdings=cached_etf_holdings,
+                etf_sector_weights=cached_etf_sector_weights,
                 refresh_materialized_view=bool(publish_enabled),
             ),
             failures=publish_failures,
@@ -242,6 +252,9 @@ def run_dataops_fundamentals_daily(
         "rows": {
             "market_fundamentals_v2": int(len(cached_fundamentals.index)),
             "ticker_fundamental_summary": int(len(fundamentals_summary.index)),
+            "ticker_profile": int(len(cached_ticker_profile.index)),
+            "etf_holdings": int(len(cached_etf_holdings.index)),
+            "etf_sector_weights": int(len(cached_etf_sector_weights.index)),
         },
     }
 

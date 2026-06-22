@@ -14,6 +14,7 @@ FUNDAMENTALS_COLUMNS = [
     "ticker",
     "metric",
     "value",
+    "value_text",
     "period_end",
     "period_type",
     "fiscal_year",
@@ -22,6 +23,43 @@ FUNDAMENTALS_COLUMNS = [
     "source",
     "fetched_at",
     "ingested_at",
+]
+
+TICKER_PROFILE_COLUMNS = [
+    "ticker",
+    "description",
+    "long_business_summary",
+    "etf_category",
+    "fund_family",
+    "expense_ratio",
+    "inception_date",
+    "legal_type",
+    "beta",
+    "beta_3y",
+    "source",
+    "fetched_at",
+    "updated_at",
+]
+
+ETF_HOLDINGS_COLUMNS = [
+    "etf_ticker",
+    "holding_symbol",
+    "holding_name",
+    "weight",
+    "as_of",
+    "source",
+    "fetched_at",
+    "updated_at",
+]
+
+ETF_SECTOR_WEIGHTS_COLUMNS = [
+    "etf_ticker",
+    "sector",
+    "weight",
+    "as_of",
+    "source",
+    "fetched_at",
+    "updated_at",
 ]
 
 
@@ -43,6 +81,7 @@ class FundamentalsDataProvider:
         balance_sheet_statements_fn: Callable[[str], tuple[pd.DataFrame, pd.DataFrame]] | None = None,
         info_fn: Callable[[str], dict[str, Any]] | None = None,
         fast_info_fn: Callable[[str], dict[str, Any]] | None = None,
+        funds_data_fn: Callable[[str], Any] | None = None,
         provider_name: str = "yahoo_finance",
     ) -> None:
         self._income_statements_fn = income_statements_fn or self._default_income_statements_fn
@@ -52,6 +91,7 @@ class FundamentalsDataProvider:
         )
         self._info_fn = info_fn or self._default_info_fn
         self._fast_info_fn = fast_info_fn or self._default_fast_info_fn
+        self._funds_data_fn = funds_data_fn or self._default_funds_data_fn
         self.provider_name = str(provider_name).strip() or "unknown_provider"
 
     def fetch_fundamentals(self, symbols: Iterable[str]) -> pd.DataFrame:
@@ -171,6 +211,20 @@ class FundamentalsDataProvider:
             "eps": _coerce_float(info_payload.get("trailingEps") or info_payload.get("epsTrailingTwelveMonths")),
             "ebitda": _coerce_float(info_payload.get("ebitda")),
             "free_cash_flow": _coerce_float(info_payload.get("freeCashflow")),
+            "dividend_yield": _coerce_float(info_payload.get("dividendYield")),
+            "dividend_rate": _coerce_float(info_payload.get("dividendRate")),
+            "trailing_annual_dividend_yield": _coerce_float(info_payload.get("trailingAnnualDividendYield")),
+            "trailing_annual_dividend_rate": _coerce_float(info_payload.get("trailingAnnualDividendRate")),
+            "payout_ratio": _coerce_float(info_payload.get("payoutRatio")),
+            "beta": _coerce_float(info_payload.get("beta")),
+            "beta_3y": _coerce_float(info_payload.get("beta3Year") or info_payload.get("beta3y")),
+            "ytd_return": _coerce_float(info_payload.get("ytdReturn")),
+            "three_year_avg_return": _coerce_float(info_payload.get("threeYearAverageReturn")),
+            "five_year_avg_return": _coerce_float(info_payload.get("fiveYearAverageReturn")),
+        }
+        text_point_metrics = {
+            "ex_dividend_date": _coerce_date_text(info_payload.get("exDividendDate")),
+            "payout_frequency": _coerce_text(info_payload.get("payoutFrequency")),
         }
         point_period_end = ingested_at.date()
         point_fiscal_quarter = _fiscal_quarter(point_period_end)
@@ -182,6 +236,26 @@ class FundamentalsDataProvider:
                     "ticker": ticker,
                     "metric": metric,
                     "value": float(value),
+                    "value_text": None,
+                    "period_end": point_period_end,
+                    "period_type": "point_in_time",
+                    "fiscal_year": int(point_period_end.year),
+                    "fiscal_quarter": point_fiscal_quarter,
+                    "currency": currency,
+                    "source": self.provider_name,
+                    "fetched_at": ingested_at,
+                    "ingested_at": ingested_at,
+                }
+            )
+        for metric, value_text in text_point_metrics.items():
+            if value_text is None:
+                continue
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "metric": metric,
+                    "value": None,
+                    "value_text": value_text,
                     "period_end": point_period_end,
                     "period_type": "point_in_time",
                     "fiscal_year": int(point_period_end.year),
@@ -197,13 +271,88 @@ class FundamentalsDataProvider:
             return pd.DataFrame(columns=FUNDAMENTALS_COLUMNS)
         out = pd.DataFrame(rows, columns=FUNDAMENTALS_COLUMNS)
         out["period_end"] = pd.to_datetime(out["period_end"], errors="coerce").dt.date
-        out = out.dropna(subset=["ticker", "metric", "period_end", "value"])
+        out = out.dropna(subset=["ticker", "metric", "period_end"])
+        has_numeric = pd.to_numeric(out["value"], errors="coerce").notna()
+        has_text = out["value_text"].astype(str).str.strip().replace({"nan": "", "None": "", "NaT": ""}) != ""
+        out = out.loc[has_numeric | has_text].copy()
         out = out.sort_values(["ticker", "metric", "period_end", "period_type", "fetched_at"])
         out = out.drop_duplicates(
             subset=["ticker", "metric", "period_end", "period_type"],
             keep="last",
         )
         return out.reset_index(drop=True)
+
+    def fetch_symbol_profile(self, symbol: str) -> pd.DataFrame:
+        ticker = str(symbol).strip().upper()
+        if not ticker:
+            return pd.DataFrame(columns=TICKER_PROFILE_COLUMNS)
+
+        fetched_at = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC")
+        info_payload = dict(self._info_fn(ticker) or {})
+        description = _coerce_text(
+            info_payload.get("longBusinessSummary")
+            or info_payload.get("description")
+            or info_payload.get("summary")
+        )
+        row = {
+            "ticker": ticker,
+            "description": description,
+            "long_business_summary": description,
+            "etf_category": _coerce_text(info_payload.get("category") or info_payload.get("categoryName")),
+            "fund_family": _coerce_text(info_payload.get("fundFamily")),
+            "expense_ratio": _coerce_float(
+                info_payload.get("feesExpensesInvestment")
+                or info_payload.get("expenseRatio")
+                or info_payload.get("annualReportExpenseRatio")
+            ),
+            "inception_date": _coerce_date(info_payload.get("fundInceptionDate")),
+            "legal_type": _coerce_text(info_payload.get("legalType")),
+            "beta": _coerce_float(info_payload.get("beta")),
+            "beta_3y": _coerce_float(info_payload.get("beta3Year") or info_payload.get("beta3y")),
+            "source": self.provider_name,
+            "fetched_at": fetched_at,
+            "updated_at": fetched_at,
+        }
+        if not any(row.get(column) is not None for column in TICKER_PROFILE_COLUMNS if column not in {"ticker", "source", "fetched_at", "updated_at"}):
+            return pd.DataFrame(columns=TICKER_PROFILE_COLUMNS)
+        return pd.DataFrame([row], columns=TICKER_PROFILE_COLUMNS)
+
+    def fetch_symbol_etf_funds_data(self, symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+        ticker = str(symbol).strip().upper()
+        if not ticker:
+            return (
+                pd.DataFrame(columns=ETF_HOLDINGS_COLUMNS),
+                pd.DataFrame(columns=ETF_SECTOR_WEIGHTS_COLUMNS),
+            )
+
+        fetched_at = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC")
+        funds_data = self._funds_data_fn(ticker)
+        if funds_data is None:
+            return (
+                pd.DataFrame(columns=ETF_HOLDINGS_COLUMNS),
+                pd.DataFrame(columns=ETF_SECTOR_WEIGHTS_COLUMNS),
+            )
+
+        as_of = (
+            _coerce_date(_funds_value(funds_data, "as_of_date"))
+            or _coerce_date(_funds_value(funds_data, "asOfDate"))
+            or fetched_at.date()
+        )
+        holdings = _extract_etf_holdings(
+            ticker=ticker,
+            funds_data=funds_data,
+            as_of=as_of,
+            source=self.provider_name,
+            fetched_at=fetched_at,
+        )
+        sector_weights = _extract_etf_sector_weights(
+            ticker=ticker,
+            funds_data=funds_data,
+            as_of=as_of,
+            source=self.provider_name,
+            fetched_at=fetched_at,
+        )
+        return holdings, sector_weights
 
     def _default_income_statements_fn(self, symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         ticker = _load_ticker(symbol)
@@ -232,6 +381,13 @@ class FundamentalsDataProvider:
         ticker = _load_ticker(symbol)
         payload = getattr(ticker, "fast_info", {})
         return dict(payload or {})
+
+    def _default_funds_data_fn(self, symbol: str) -> Any:
+        ticker = _load_ticker(symbol)
+        getter = getattr(ticker, "get_funds_data", None)
+        if callable(getter):
+            return getter()
+        return getattr(ticker, "funds_data", None)
 
 
 def _load_ticker(symbol: str) -> Any:
@@ -292,6 +448,7 @@ def _extract_statement_metrics(
                     "ticker": ticker,
                     "metric": metric,
                     "value": float(value),
+                    "value_text": None,
                     "period_end": period_date,
                     "period_type": period_type,
                     "fiscal_year": int(period_date.year),
@@ -333,6 +490,41 @@ def _coerce_float(value: Any) -> float | None:
     return float(casted)
 
 
+def _coerce_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return pd.Timestamp(value).date().isoformat()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        numeric = float(value)
+        return str(int(numeric)) if numeric.is_integer() else str(numeric)
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "nat", "<na>"}:
+        return None
+    return text
+
+
+def _coerce_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        parsed = pd.to_datetime(value, unit="s", utc=True, errors="coerce")
+    else:
+        parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return pd.Timestamp(parsed).date()
+
+
+def _coerce_date_text(value: Any) -> str | None:
+    parsed = _coerce_date(value)
+    if parsed is not None:
+        return parsed.isoformat()
+    return _coerce_text(value)
+
+
 def _fiscal_quarter(period_end: date) -> str:
     quarter = ((int(period_end.month) - 1) // 3) + 1
     return f"Q{quarter}"
@@ -345,6 +537,169 @@ def _count_date_like(values: Any) -> int:
         if not pd.isna(parsed):
             count += 1
     return count
+
+
+def _funds_value(funds_data: Any, name: str) -> Any:
+    if funds_data is None:
+        return None
+    if isinstance(funds_data, dict):
+        value = funds_data.get(name)
+    else:
+        value = getattr(funds_data, name, None)
+    if callable(value):
+        try:
+            return value()
+        except TypeError:
+            return None
+    return value
+
+
+def _extract_etf_holdings(
+    *,
+    ticker: str,
+    funds_data: Any,
+    as_of: date,
+    source: str,
+    fetched_at: pd.Timestamp,
+) -> pd.DataFrame:
+    raw = _first_present_value(
+        _funds_value(funds_data, "top_holdings"),
+        _funds_value(funds_data, "topHoldings"),
+    )
+    frame = _records_frame(raw)
+    if frame.empty:
+        return pd.DataFrame(columns=ETF_HOLDINGS_COLUMNS)
+
+    symbol_column = _first_existing_column(
+        frame,
+        ["symbol", "Symbol", "holding_symbol", "holdingSymbol", "ticker", "Ticker"],
+    )
+    name_column = _first_existing_column(
+        frame,
+        ["name", "Name", "holding_name", "holdingName", "Holding", "Company Name"],
+    )
+    weight_column = _first_existing_column(
+        frame,
+        ["weight", "Weight", "holdingPercent", "Holding Percent", "holding_percent", "% Assets"],
+    )
+
+    rows: list[dict[str, Any]] = []
+    for index, row in frame.iterrows():
+        holding_symbol = _coerce_text(row.get(symbol_column)) if symbol_column else _coerce_text(index)
+        if holding_symbol is None:
+            continue
+        holding_name = _coerce_text(row.get(name_column)) if name_column else None
+        weight = _coerce_float(row.get(weight_column)) if weight_column else None
+        rows.append(
+            {
+                "etf_ticker": ticker,
+                "holding_symbol": holding_symbol.upper(),
+                "holding_name": holding_name,
+                "weight": weight,
+                "as_of": as_of,
+                "source": source,
+                "fetched_at": fetched_at,
+                "updated_at": fetched_at,
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=ETF_HOLDINGS_COLUMNS)
+    out = pd.DataFrame(rows, columns=ETF_HOLDINGS_COLUMNS)
+    out = out.drop_duplicates(subset=["etf_ticker", "holding_symbol", "as_of"], keep="last")
+    return out.reset_index(drop=True)
+
+
+def _extract_etf_sector_weights(
+    *,
+    ticker: str,
+    funds_data: Any,
+    as_of: date,
+    source: str,
+    fetched_at: pd.Timestamp,
+) -> pd.DataFrame:
+    raw = _first_present_value(
+        _funds_value(funds_data, "sector_weightings"),
+        _funds_value(funds_data, "sectorWeightings"),
+    )
+    frame = _sector_weights_frame(raw)
+    if frame.empty:
+        return pd.DataFrame(columns=ETF_SECTOR_WEIGHTS_COLUMNS)
+
+    sector_column = _first_existing_column(frame, ["sector", "Sector", "name", "Name"])
+    weight_column = _first_existing_column(frame, ["weight", "Weight", "value", "Value"])
+    rows: list[dict[str, Any]] = []
+    for index, row in frame.iterrows():
+        sector = _coerce_text(row.get(sector_column)) if sector_column else _coerce_text(index)
+        weight = _coerce_float(row.get(weight_column)) if weight_column else None
+        if sector is None or weight is None:
+            continue
+        rows.append(
+            {
+                "etf_ticker": ticker,
+                "sector": sector,
+                "weight": weight,
+                "as_of": as_of,
+                "source": source,
+                "fetched_at": fetched_at,
+                "updated_at": fetched_at,
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=ETF_SECTOR_WEIGHTS_COLUMNS)
+    out = pd.DataFrame(rows, columns=ETF_SECTOR_WEIGHTS_COLUMNS)
+    out = out.drop_duplicates(subset=["etf_ticker", "sector", "as_of"], keep="last")
+    return out.reset_index(drop=True)
+
+
+def _records_frame(value: Any) -> pd.DataFrame:
+    if isinstance(value, pd.DataFrame):
+        return value.copy()
+    if isinstance(value, pd.Series):
+        return value.to_frame().transpose()
+    if isinstance(value, list):
+        return pd.DataFrame(value)
+    if isinstance(value, dict):
+        try:
+            return pd.DataFrame(value)
+        except ValueError:
+            return pd.DataFrame([value])
+    return pd.DataFrame()
+
+
+def _sector_weights_frame(value: Any) -> pd.DataFrame:
+    if isinstance(value, pd.DataFrame):
+        frame = value.copy()
+        if len(frame.index) == 1 and not {"sector", "Sector", "weight", "Weight"}.intersection(frame.columns):
+            row = frame.iloc[0]
+            return pd.DataFrame({"sector": row.index.astype(str), "weight": row.values})
+        return frame
+    if isinstance(value, pd.Series):
+        return pd.DataFrame({"sector": value.index.astype(str), "weight": value.values})
+    if isinstance(value, dict):
+        return pd.DataFrame({"sector": list(value.keys()), "weight": list(value.values())})
+    if isinstance(value, list):
+        return pd.DataFrame(value)
+    return pd.DataFrame()
+
+
+def _first_existing_column(frame: pd.DataFrame, candidates: list[str]) -> str | None:
+    for candidate in candidates:
+        if candidate in frame.columns:
+            return candidate
+    normalized = {_normalize_token(column): str(column) for column in frame.columns}
+    for candidate in candidates:
+        token = _normalize_token(candidate)
+        if token in normalized:
+            return normalized[token]
+    return None
+
+
+def _first_present_value(*values: Any) -> Any:
+    for value in values:
+        if value is None:
+            continue
+        return value
+    return None
 
 
 _INCOME_METRICS: MetricAliases = {

@@ -24,6 +24,9 @@ def refresh_fundamentals_daily(
     run_id = f"run_fundamentals_daily_{uuid4().hex[:12]}"
 
     rows: list[pd.DataFrame] = []
+    profile_rows: list[pd.DataFrame] = []
+    holding_rows: list[pd.DataFrame] = []
+    sector_weight_rows: list[pd.DataFrame] = []
     symbols_succeeded: list[str] = []
     symbols_failed: list[str] = []
     retry_exhausted_symbols: list[str] = []
@@ -34,11 +37,20 @@ def refresh_fundamentals_daily(
         if not symbol:
             continue
 
-        def _fetch_one() -> pd.DataFrame:
+        def _fetch_one() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             frame = provider.fetch_symbol_fundamentals(symbol)
             if frame.empty:
                 raise RuntimeError(f"{symbol}: provider returned zero fundamentals rows")
-            return frame
+            profile_frame = (
+                provider.fetch_symbol_profile(symbol)
+                if hasattr(provider, "fetch_symbol_profile")
+                else pd.DataFrame()
+            )
+            holdings_frame = pd.DataFrame()
+            sector_weights_frame = pd.DataFrame()
+            if hasattr(provider, "fetch_symbol_etf_funds_data"):
+                holdings_frame, sector_weights_frame = provider.fetch_symbol_etf_funds_data(symbol)
+            return frame, profile_frame, holdings_frame, sector_weights_frame
 
         result, error, _, exhausted_retry_path = run_with_retry(
             _fetch_one,
@@ -53,7 +65,14 @@ def refresh_fundamentals_daily(
             error_messages.append(f"{symbol}: {classification.message}")
             continue
 
-        rows.append(result)
+        fundamentals_frame, profile_frame, holdings_frame, sector_weights_frame = result
+        rows.append(fundamentals_frame)
+        if not profile_frame.empty:
+            profile_rows.append(profile_frame)
+        if not holdings_frame.empty:
+            holding_rows.append(holdings_frame)
+        if not sector_weights_frame.empty:
+            sector_weight_rows.append(sector_weights_frame)
         symbols_succeeded.append(symbol)
 
     merged = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
@@ -65,6 +84,38 @@ def refresh_fundamentals_daily(
             cache_root=cache_root,
             mode="append",
             dedupe_subset=["ticker", "metric", "period_end", "period_type"],
+        )
+
+    merged_profiles = pd.concat(profile_rows, ignore_index=True) if profile_rows else pd.DataFrame()
+    if not merged_profiles.empty:
+        write_parquet_table(
+            "ticker_profile",
+            merged_profiles,
+            cache_root=cache_root,
+            mode="append",
+            dedupe_subset=["ticker"],
+        )
+
+    merged_holdings = pd.concat(holding_rows, ignore_index=True) if holding_rows else pd.DataFrame()
+    if not merged_holdings.empty:
+        write_parquet_table(
+            "etf_holdings",
+            merged_holdings,
+            cache_root=cache_root,
+            mode="append",
+            dedupe_subset=["etf_ticker", "holding_symbol", "as_of"],
+        )
+
+    merged_sector_weights = (
+        pd.concat(sector_weight_rows, ignore_index=True) if sector_weight_rows else pd.DataFrame()
+    )
+    if not merged_sector_weights.empty:
+        write_parquet_table(
+            "etf_sector_weights",
+            merged_sector_weights,
+            cache_root=cache_root,
+            mode="append",
+            dedupe_subset=["etf_ticker", "sector", "as_of"],
         )
 
     if symbols_failed and symbols_succeeded:

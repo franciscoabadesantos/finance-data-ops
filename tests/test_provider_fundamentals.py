@@ -63,3 +63,96 @@ def test_fetch_symbol_fundamentals_normalizes_metrics() -> None:
     assert "market_cap" in metrics
     assert "shares_outstanding" in metrics
     assert set(out["period_type"].tolist()).issuperset({"annual", "quarterly", "point_in_time"})
+
+
+def test_fetch_symbol_fundamentals_extracts_yahoo_info_additions() -> None:
+    provider = FundamentalsDataProvider(
+        income_statements_fn=lambda _symbol: (pd.DataFrame(), pd.DataFrame()),
+        cashflow_statements_fn=lambda _symbol: (pd.DataFrame(), pd.DataFrame()),
+        balance_sheet_statements_fn=lambda _symbol: (pd.DataFrame(), pd.DataFrame()),
+        info_fn=lambda _symbol: {
+            "financialCurrency": "USD",
+            "marketCap": 2200.0,
+            "dividendYield": 0.012,
+            "dividendRate": 6.1,
+            "trailingAnnualDividendYield": 0.011,
+            "trailingAnnualDividendRate": 5.9,
+            "payoutRatio": 0.43,
+            "exDividendDate": 1_765_843_200,
+            "payoutFrequency": 4,
+            "beta": 1.05,
+            "beta3Year": 0.98,
+            "ytdReturn": 0.07,
+            "threeYearAverageReturn": 0.11,
+            "fiveYearAverageReturn": 0.12,
+        },
+        fast_info_fn=lambda _symbol: {},
+        provider_name="fake",
+    )
+
+    out = provider.fetch_symbol_fundamentals("spy")
+    values = {row["metric"]: row for row in out.to_dict(orient="records")}
+
+    assert values["dividend_yield"]["value"] == 0.012
+    assert values["dividend_rate"]["value"] == 6.1
+    assert values["trailing_annual_dividend_yield"]["value"] == 0.011
+    assert values["trailing_annual_dividend_rate"]["value"] == 5.9
+    assert values["payout_ratio"]["value"] == 0.43
+    assert values["ex_dividend_date"]["value_text"] == "2025-12-16"
+    assert values["payout_frequency"]["value_text"] == "4"
+    assert values["beta"]["value"] == 1.05
+    assert values["beta_3y"]["value"] == 0.98
+    assert values["ytd_return"]["value"] == 0.07
+    assert values["three_year_avg_return"]["value"] == 0.11
+    assert values["five_year_avg_return"]["value"] == 0.12
+
+
+def test_fetch_symbol_profile_and_etf_funds_data() -> None:
+    funds_data = {
+        "top_holdings": pd.DataFrame(
+            [
+                {"Symbol": "AAPL", "Name": "Apple Inc.", "Holding Percent": 0.071},
+                {"Symbol": "MSFT", "Name": "Microsoft Corp.", "Holding Percent": 0.065},
+            ]
+        ),
+        "sector_weightings": {"technology": 0.32, "healthcare": 0.12},
+        "as_of_date": "2026-06-22",
+    }
+    provider = FundamentalsDataProvider(
+        income_statements_fn=lambda _symbol: (pd.DataFrame(), pd.DataFrame()),
+        cashflow_statements_fn=lambda _symbol: (pd.DataFrame(), pd.DataFrame()),
+        balance_sheet_statements_fn=lambda _symbol: (pd.DataFrame(), pd.DataFrame()),
+        info_fn=lambda _symbol: {
+            "longBusinessSummary": "Tracks large US companies.",
+            "category": "Large Blend",
+            "fundFamily": "Example Funds",
+            "feesExpensesInvestment": 0.0009,
+            "fundInceptionDate": 728524800,
+            "legalType": "ETF",
+            "beta": 1.0,
+            "beta3Year": 0.95,
+        },
+        fast_info_fn=lambda _symbol: {},
+        funds_data_fn=lambda _symbol: funds_data,
+        provider_name="fake",
+    )
+
+    profile = provider.fetch_symbol_profile("spy")
+    holdings, sectors = provider.fetch_symbol_etf_funds_data("spy")
+
+    profile_row = profile.iloc[0]
+    assert profile_row["ticker"] == "SPY"
+    assert profile_row["description"] == "Tracks large US companies."
+    assert profile_row["etf_category"] == "Large Blend"
+    assert profile_row["fund_family"] == "Example Funds"
+    assert profile_row["expense_ratio"] == 0.0009
+    assert str(profile_row["inception_date"]) == "1993-02-01"
+    assert profile_row["legal_type"] == "ETF"
+    assert profile_row["beta_3y"] == 0.95
+
+    assert holdings[["etf_ticker", "holding_symbol", "holding_name", "weight"]].to_dict(orient="records") == [
+        {"etf_ticker": "SPY", "holding_symbol": "AAPL", "holding_name": "Apple Inc.", "weight": 0.071},
+        {"etf_ticker": "SPY", "holding_symbol": "MSFT", "holding_name": "Microsoft Corp.", "weight": 0.065},
+    ]
+    assert set(sectors["sector"].tolist()) == {"technology", "healthcare"}
+    assert set(sectors["as_of"].astype(str).tolist()) == {"2026-06-22"}

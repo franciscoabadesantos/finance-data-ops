@@ -70,6 +70,60 @@ class FakeFundamentalsProvider:
             ]
         )
 
+    def fetch_symbol_profile(self, symbol: str) -> pd.DataFrame:
+        ticker = str(symbol).strip().upper()
+        return pd.DataFrame(
+            [
+                {
+                    "ticker": ticker,
+                    "description": f"{ticker} profile",
+                    "long_business_summary": f"{ticker} profile",
+                    "etf_category": "Large Blend",
+                    "fund_family": "Example Funds",
+                    "expense_ratio": 0.0009,
+                    "inception_date": "1993-02-01",
+                    "legal_type": "ETF",
+                    "beta": 1.0,
+                    "beta_3y": 0.95,
+                    "source": "fake",
+                    "fetched_at": datetime(2026, 4, 11, 10, 0, tzinfo=UTC),
+                    "updated_at": datetime(2026, 4, 11, 10, 0, tzinfo=UTC),
+                }
+            ]
+        )
+
+    def fetch_symbol_etf_funds_data(self, symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+        ticker = str(symbol).strip().upper()
+        return (
+            pd.DataFrame(
+                [
+                    {
+                        "etf_ticker": ticker,
+                        "holding_symbol": "AAPL",
+                        "holding_name": "Apple Inc.",
+                        "weight": 0.071,
+                        "as_of": "2026-04-11",
+                        "source": "fake",
+                        "fetched_at": datetime(2026, 4, 11, 10, 0, tzinfo=UTC),
+                        "updated_at": datetime(2026, 4, 11, 10, 0, tzinfo=UTC),
+                    }
+                ]
+            ),
+            pd.DataFrame(
+                [
+                    {
+                        "etf_ticker": ticker,
+                        "sector": "technology",
+                        "weight": 0.32,
+                        "as_of": "2026-04-11",
+                        "source": "fake",
+                        "fetched_at": datetime(2026, 4, 11, 10, 0, tzinfo=UTC),
+                        "updated_at": datetime(2026, 4, 11, 10, 0, tzinfo=UTC),
+                    }
+                ]
+            ),
+        )
+
 
 @freeze_time("2026-04-12")
 def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
@@ -86,6 +140,9 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
 
     assert table_path("market_fundamentals_v2", cache_root=tmp_path).exists()
     assert table_path("ticker_fundamental_summary", cache_root=tmp_path).exists()
+    assert table_path("ticker_profile", cache_root=tmp_path).exists()
+    assert table_path("etf_holdings", cache_root=tmp_path).exists()
+    assert table_path("etf_sector_weights", cache_root=tmp_path).exists()
 
     assert summary["refresh"]["fundamentals_daily"]["status"] == "fresh"
     assert summary["coverage"]["status"] == "fresh"
@@ -103,6 +160,15 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
         "source",
         "fetched_at",
     }
+    assert next(call for call in publisher.upserts if call["table"] == "ticker_profile")["on_conflict"] == "ticker"
+    assert (
+        next(call for call in publisher.upserts if call["table"] == "etf_holdings")["on_conflict"]
+        == "etf_ticker,holding_symbol,as_of"
+    )
+    assert (
+        next(call for call in publisher.upserts if call["table"] == "etf_sector_weights")["on_conflict"]
+        == "etf_ticker,sector,as_of"
+    )
 
     status_upsert = next(call for call in publisher.upserts if call["table"] == "symbol_data_coverage")
     coverage_row = status_upsert["rows"][0]
