@@ -6,14 +6,20 @@ Prepare a fresh Supabase project for current Data Ops-owned runtime surfaces wit
 
 ## SQL sources
 
-Apply in order on an empty project:
+Preferred path for a fresh empty project:
+
+- [`sql/000_definitive_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_definitive_runtime_schema.sql)
+
+This is the single-file bootstrap for empty projects: current tables, materialized views, refresh
+functions, indexes, RLS enablement, and minimal runtime seed data.
+
+Historical migration path, retained for older-instance archaeology:
 
 - [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
 - [`sql/013_fundamentals_point_in_time_snapshot.sql`](/home/franciscosantos/finance-data-ops/sql/013_fundamentals_point_in_time_snapshot.sql)
 - [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
 
-Historical numbered SQL files are retained for older-instance archaeology. The next baseline
-consolidation should fold `013` and the later runtime additions into a single definitive schema file.
+Historical numbered SQL files are retained for older-instance archaeology.
 
 ## Surfaces created/owned by migrations
 
@@ -48,7 +54,7 @@ consolidation should fold `013` and the later runtime additions into a single de
 ## Apply steps
 
 1. Open Supabase SQL editor for a new project.
-2. Execute the two runtime baseline files in order.
+2. Execute `sql/000_definitive_runtime_schema.sql`.
 3. Run dry flows:
    - `python scripts/run_market_daily.py --symbols SPY --no-publish`
    - `python scripts/run_fundamentals_daily.py --symbols SPY --no-publish`

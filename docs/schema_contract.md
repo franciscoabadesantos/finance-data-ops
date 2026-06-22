@@ -2,12 +2,18 @@
 
 Data Ops writes five product-data domains: market, fundamentals, earnings, macro, and economic release calendar. Fresh projects should bootstrap from the definitive runtime baseline:
 
+- [`sql/000_definitive_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_definitive_runtime_schema.sql)
+
+The definitive baseline is a single-file bootstrap for empty projects: current tables, materialized
+views, refresh functions, indexes, RLS enablement, and minimal runtime seed data.
+
+Historical migration path, retained for older-instance archaeology:
+
 - [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
 - [`sql/013_fundamentals_point_in_time_snapshot.sql`](/home/franciscosantos/finance-data-ops/sql/013_fundamentals_point_in_time_snapshot.sql)
 - [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
 
 Historical numbered SQL files remain in the repo for older-instance archaeology, not for fresh installs.
-The next definitive baseline should fold the point-in-time snapshot migration into `000`.
 
 ## Market surfaces
 
@@ -25,6 +31,7 @@ The next definitive baseline should fold the point-in-time snapshot migration in
 - `high`
 - `low`
 - `close`
+- `adj_close`
 - `volume`
 - `source`
 - `fetched_at`
