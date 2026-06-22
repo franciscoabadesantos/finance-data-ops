@@ -87,6 +87,7 @@ def test_fetch_symbol_fundamentals_extracts_yahoo_info_additions() -> None:
             "fiveYearAverageReturn": 0.12,
         },
         fast_info_fn=lambda _symbol: {},
+        dividends_fn=lambda _symbol: None,  # no payment history -> falls back to .info fields
         provider_name="fake",
     )
 
@@ -105,6 +106,40 @@ def test_fetch_symbol_fundamentals_extracts_yahoo_info_additions() -> None:
     assert values["ytd_return"]["value"] == 0.07
     assert values["three_year_avg_return"]["value"] == 0.11
     assert values["five_year_avg_return"]["value"] == 0.12
+
+
+def test_dividend_metrics_computed_from_payment_history() -> None:
+    now = pd.Timestamp.now(tz="UTC")
+    dividends = pd.Series(
+        [0.50, 0.485, 0.485, 0.485, 0.485],
+        index=[
+            now - pd.Timedelta(days=400),  # older than 12 months -> excluded
+            now - pd.Timedelta(days=300),
+            now - pd.Timedelta(days=200),
+            now - pd.Timedelta(days=100),
+            now - pd.Timedelta(days=10),
+        ],
+    )
+    provider = FundamentalsDataProvider(
+        income_statements_fn=lambda _s: (pd.DataFrame(), pd.DataFrame()),
+        cashflow_statements_fn=lambda _s: (pd.DataFrame(), pd.DataFrame()),
+        balance_sheet_statements_fn=lambda _s: (pd.DataFrame(), pd.DataFrame()),
+        # .info has a bad/unscaled dividendYield (99.0) — the history must override it.
+        info_fn=lambda _s: {"dividendYield": 99.0, "dividendRate": 1.0, "trailingEps": 2.5},
+        fast_info_fn=lambda _s: {"last_price": 63.0},
+        dividends_fn=lambda _s: dividends,
+        provider_name="fake",
+    )
+
+    out = provider.fetch_symbol_fundamentals("ko")
+    values = {row["metric"]: row["value"] for row in out.to_dict(orient="records")}
+
+    # trailing 12m = 0.485 * 4 = 1.94 (the 0.50 at -400d is excluded)
+    assert abs(values["dividend_rate"] - 1.94) < 1e-9
+    # yield is a FRACTION (rate / price), overriding the bad .info 99.0
+    assert abs(values["dividend_yield"] - (1.94 / 63.0)) < 1e-9
+    # payout = rate / eps
+    assert abs(values["payout_ratio"] - (1.94 / 2.5)) < 1e-9
 
 
 def test_fetch_symbol_profile_and_etf_funds_data() -> None:

@@ -82,6 +82,7 @@ class FundamentalsDataProvider:
         info_fn: Callable[[str], dict[str, Any]] | None = None,
         fast_info_fn: Callable[[str], dict[str, Any]] | None = None,
         funds_data_fn: Callable[[str], Any] | None = None,
+        dividends_fn: Callable[[str], Any] | None = None,
         provider_name: str = "yahoo_finance",
     ) -> None:
         self._income_statements_fn = income_statements_fn or self._default_income_statements_fn
@@ -92,6 +93,7 @@ class FundamentalsDataProvider:
         self._info_fn = info_fn or self._default_info_fn
         self._fast_info_fn = fast_info_fn or self._default_fast_info_fn
         self._funds_data_fn = funds_data_fn or self._default_funds_data_fn
+        self._dividends_fn = dividends_fn or self._default_dividends_fn
         self.provider_name = str(provider_name).strip() or "unknown_provider"
 
     def fetch_fundamentals(self, symbols: Iterable[str]) -> pd.DataFrame:
@@ -121,6 +123,21 @@ class FundamentalsDataProvider:
         ingested_at = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC")
         info_payload = dict(self._info_fn(ticker) or {})
         fast_info_payload = dict(self._fast_info_fn(ticker) or {})
+
+        # Dividends come from the actual payment history (reliable), not the flaky `.info` fields.
+        dividend_metrics = _dividend_metrics_from_history(
+            self._dividends_fn(ticker),
+            last_price=_first_present_value(
+                _coerce_float(fast_info_payload.get("last_price")),
+                _coerce_float(fast_info_payload.get("lastPrice")),
+                _coerce_float(fast_info_payload.get("last_close")),
+                _coerce_float(info_payload.get("currentPrice")),
+                _coerce_float(info_payload.get("regularMarketPrice")),
+            ),
+            eps=_coerce_float(
+                info_payload.get("trailingEps") or info_payload.get("epsTrailingTwelveMonths")
+            ),
+        )
 
         income_quarterly, income_annual = self._income_statements_fn(ticker)
         cashflow_quarterly, cashflow_annual = self._cashflow_statements_fn(ticker)
@@ -211,11 +228,17 @@ class FundamentalsDataProvider:
             "eps": _coerce_float(info_payload.get("trailingEps") or info_payload.get("epsTrailingTwelveMonths")),
             "ebitda": _coerce_float(info_payload.get("ebitda")),
             "free_cash_flow": _coerce_float(info_payload.get("freeCashflow")),
-            "dividend_yield": _coerce_float(info_payload.get("dividendYield")),
-            "dividend_rate": _coerce_float(info_payload.get("dividendRate")),
+            "dividend_yield": _first_present_value(
+                dividend_metrics["dividend_yield"], _coerce_float(info_payload.get("dividendYield"))
+            ),
+            "dividend_rate": _first_present_value(
+                dividend_metrics["dividend_rate"], _coerce_float(info_payload.get("dividendRate"))
+            ),
             "trailing_annual_dividend_yield": _coerce_float(info_payload.get("trailingAnnualDividendYield")),
             "trailing_annual_dividend_rate": _coerce_float(info_payload.get("trailingAnnualDividendRate")),
-            "payout_ratio": _coerce_float(info_payload.get("payoutRatio")),
+            "payout_ratio": _first_present_value(
+                dividend_metrics["payout_ratio"], _coerce_float(info_payload.get("payoutRatio"))
+            ),
             "beta": _coerce_float(info_payload.get("beta")),
             "beta_3y": _coerce_float(info_payload.get("beta3Year") or info_payload.get("beta3y")),
             "ytd_return": _coerce_float(info_payload.get("ytdReturn")),
@@ -388,6 +411,10 @@ class FundamentalsDataProvider:
         if callable(getter):
             return getter()
         return getattr(ticker, "funds_data", None)
+
+    def _default_dividends_fn(self, symbol: str) -> Any:
+        ticker = _load_ticker(symbol)
+        return getattr(ticker, "dividends", None)
 
 
 def _load_ticker(symbol: str) -> Any:
@@ -700,6 +727,45 @@ def _first_present_value(*values: Any) -> Any:
             continue
         return value
     return None
+
+
+def _dividend_metrics_from_history(
+    dividends: Any,
+    *,
+    last_price: float | None,
+    eps: float | None,
+) -> dict[str, float | None]:
+    """Trailing-12-month dividend rate/yield/payout from the actual dividend history
+    (yfinance `.dividends`), which is far more reliable than the flaky `.info` fields and avoids
+    the bad scaling they sometimes return. `dividend_yield` is a FRACTION (rate / price)."""
+    result: dict[str, float | None] = {
+        "dividend_rate": None,
+        "dividend_yield": None,
+        "payout_ratio": None,
+    }
+    if dividends is None:
+        return result
+    try:
+        series = pd.Series(dividends).dropna()
+    except (TypeError, ValueError):
+        return result
+    if series.empty:
+        return result
+    series.index = pd.to_datetime(series.index, utc=True, errors="coerce")
+    series = series[series.index.notna()]
+    if series.empty:
+        return result
+    cutoff = pd.Timestamp(datetime.now(UTC)) - pd.Timedelta(days=365)
+    trailing = series[series.index >= cutoff]
+    rate = float(trailing.sum()) if not trailing.empty else 0.0
+    if rate <= 0:
+        return result
+    result["dividend_rate"] = rate
+    if last_price and last_price > 0:
+        result["dividend_yield"] = rate / float(last_price)
+    if eps and eps > 0:
+        result["payout_ratio"] = rate / float(eps)
+    return result
 
 
 _INCOME_METRICS: MetricAliases = {
