@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import logging
+import time
 from typing import Callable
 from uuid import uuid4
 
@@ -23,6 +24,7 @@ def refresh_fundamentals_daily(
     provider: FundamentalsDataProvider,
     cache_root: str,
     max_attempts: int = 3,
+    inter_symbol_delay_seconds: float = 0.5,
 ) -> tuple[pd.DataFrame, RefreshRunResult]:
     started_at = datetime.now(UTC)
     run_id = f"run_fundamentals_daily_{uuid4().hex[:12]}"
@@ -36,10 +38,15 @@ def refresh_fundamentals_daily(
     retry_exhausted_symbols: list[str] = []
     error_messages: list[str] = []
 
-    for raw_symbol in symbols:
+    for index, raw_symbol in enumerate(symbols):
         symbol = str(raw_symbol).strip().upper()
         if not symbol:
             continue
+
+        # Space out tickers so Yahoo doesn't throttle the burst of .info/.dividends/funds calls
+        # (the cause of missing dividends/beta/sector when running the full universe at once).
+        if index > 0 and inter_symbol_delay_seconds > 0:
+            time.sleep(inter_symbol_delay_seconds)
 
         def _fetch_one() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             frame = provider.fetch_symbol_fundamentals(symbol)
@@ -63,7 +70,7 @@ def refresh_fundamentals_daily(
         result, error, _, exhausted_retry_path = run_with_retry(
             _fetch_one,
             max_attempts=max_attempts,
-            sleep_seconds=0.0,
+            sleep_seconds=1.5,  # back off between retries so a throttled ticker can recover
         )
         if error is not None or result is None:
             symbols_failed.append(symbol)
