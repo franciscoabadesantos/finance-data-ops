@@ -221,7 +221,13 @@ class FundamentalsDataProvider:
         )
 
         point_metrics = {
-            "market_cap": _coerce_float(info_payload.get("marketCap") or fast_info_payload.get("market_cap")),
+            # ETFs/funds report no marketCap — their "size" is AUM (`.info['totalAssets']`).
+            # Fall back to it for funds so every ETF has a reliable size (page + network sizing).
+            "market_cap": _coerce_float(
+                info_payload.get("marketCap")
+                or fast_info_payload.get("market_cap")
+                or (info_payload.get("totalAssets") if _is_fund(info_payload) else None)
+            ),
             "shares_outstanding": _coerce_float(
                 info_payload.get("sharesOutstanding")
                 or fast_info_payload.get("shares")
@@ -751,6 +757,12 @@ def _first_present_value(*values: Any) -> Any:
             continue
         return value
     return None
+
+
+def _is_fund(info_payload: dict[str, Any]) -> bool:
+    """True for ETFs / mutual funds (which report AUM, not marketCap)."""
+    quote_type = str(info_payload.get("quoteType") or info_payload.get("typeDisp") or "").strip().upper()
+    return quote_type in {"ETF", "MUTUALFUND", "FUND"}
 
 
 def _dividend_metrics_from_history(

@@ -178,6 +178,28 @@ def test_dividend_metrics_computed_from_payment_history() -> None:
     assert abs(values["payout_ratio"] - (1.94 / 2.5)) < 1e-9
 
 
+def test_market_cap_falls_back_to_aum_for_funds() -> None:
+    common = dict(
+        income_statements_fn=lambda _s: (pd.DataFrame(), pd.DataFrame()),
+        cashflow_statements_fn=lambda _s: (pd.DataFrame(), pd.DataFrame()),
+        balance_sheet_statements_fn=lambda _s: (pd.DataFrame(), pd.DataFrame()),
+        fast_info_fn=lambda _s: {},
+        dividends_fn=lambda _s: None,
+        funds_data_fn=lambda _s: None,
+        provider_name="fake",
+    )
+
+    # ETF: no marketCap but has AUM (totalAssets) -> market_cap uses the AUM.
+    etf = FundamentalsDataProvider(info_fn=lambda _s: {"quoteType": "ETF", "totalAssets": 1.4e12}, **common)
+    etf_values = {r["metric"]: r["value"] for r in etf.fetch_symbol_fundamentals("voo").to_dict(orient="records")}
+    assert etf_values["market_cap"] == 1.4e12
+
+    # Equity: .info totalAssets is balance-sheet assets, NOT market cap -> must not leak into market_cap.
+    eq = FundamentalsDataProvider(info_fn=lambda _s: {"quoteType": "EQUITY", "totalAssets": 3.7e11}, **common)
+    eq_values = {r["metric"]: r["value"] for r in eq.fetch_symbol_fundamentals("aapl").to_dict(orient="records")}
+    assert "market_cap" not in eq_values
+
+
 def test_fetch_symbol_profile_and_etf_funds_data() -> None:
     funds_data = {
         "top_holdings": pd.DataFrame(
