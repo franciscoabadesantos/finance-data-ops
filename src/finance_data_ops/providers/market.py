@@ -221,6 +221,8 @@ class MarketDataProvider:
                 fast.get("market_cap"),
                 fast.get("marketCap"),
                 info.get("marketCap"),
+                # ETFs/funds report no marketCap — their size is AUM (`.info['totalAssets']`).
+                info.get("totalAssets") if _is_fund(info) else None,
             ),
             "currency": _first_text(
                 fast.get("currency"),
@@ -336,6 +338,12 @@ def _first_float(*values: Any) -> float | None:
         if casted is not None:
             return casted
     return None
+
+
+def _is_fund(info: dict[str, Any]) -> bool:
+    """True for ETFs / mutual funds (which report AUM, not marketCap)."""
+    quote_type = str(info.get("quoteType") or info.get("typeDisp") or "").strip().upper()
+    return quote_type in {"ETF", "MUTUALFUND", "FUND"}
 
 
 def _first_text(*values: Any) -> str | None:
