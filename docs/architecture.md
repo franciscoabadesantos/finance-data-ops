@@ -51,6 +51,9 @@ Those remain in the `Finance` repository.
 - `mv_latest_fundamentals` (latest per `(ticker, metric)`)
 - `ticker_fundamental_summary` (frontend-serving denormalized snapshot)
 
+Current market size is intentionally duplicated across market and fundamentals surfaces for
+compatibility with existing consumers. See `docs/market_cap_contract.md`.
+
 ### Earnings
 
 - `market_earnings_events` (upcoming/scheduled events)

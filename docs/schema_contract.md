@@ -49,6 +49,10 @@ Historical numbered SQL files remain in the repo for older-instance archaeology,
 `ticker_fundamental_point_in_time` and are upserted by `(ticker, metric)` so daily refreshes replace
 the current snapshot instead of accumulating one row per ingestion date.
 
+`market_cap` is currently also present in market quote surfaces for quote/header/network consumers.
+See [`docs/market_cap_contract.md`](/home/franciscosantos/finance-data-ops/docs/market_cap_contract.md)
+for the compatibility contract and future cleanup path.
+
 ## Earnings surfaces
 
 - `market_earnings_events` (upcoming/scheduled)
