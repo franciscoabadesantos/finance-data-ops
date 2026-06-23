@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import urllib.error
@@ -41,6 +42,7 @@ from finance_data_ops.validation.coverage import (
 from finance_data_ops.validation.freshness import FreshnessState, classify_freshness
 
 _PROMOTABLE_STATUSES = frozenset({"validated_market_only", "validated_full"})
+LOGGER = logging.getLogger("finance_data_ops.flows.dataops_market_daily")
 
 
 def run_dataops_market_daily(
@@ -259,8 +261,6 @@ def run_dataops_market_daily(
         service_role_key=settings.supabase_secret_key,
     )
     publish_results["ticker_signal_v1_jobs"] = signal_jobs_result
-    if str(signal_jobs_result.get("status") or "").strip().lower() == "failed":
-        raise RuntimeError(str(signal_jobs_result.get("error") or "ticker_signal_v1 dispatch failed"))
 
     if raise_on_failed_hard and hard_failure:
         payload = build_alert_payload(
@@ -656,6 +656,7 @@ def _dispatch_ticker_signal_jobs_after_market_publish(
     )
     submitted_jobs: list[dict[str, Any]] = []
     skipped_jobs: list[dict[str, Any]] = []
+    failed_jobs: list[dict[str, Any]] = []
     for row in registry_rows:
         ticker = str(row.get("ticker") or "").strip().upper()
         region = str(row.get("region") or "").strip().lower() or None
@@ -671,13 +672,31 @@ def _dispatch_ticker_signal_jobs_after_market_publish(
                 }
             )
             continue
-        response = _submit_ticker_signal_job(
-            backend_base_url=backend_base_url,
-            backend_service_token=backend_service_token,
-            ticker=ticker,
-            region=region,
-            exchange=exchange,
-        )
+        try:
+            response = _submit_ticker_signal_job(
+                backend_base_url=backend_base_url,
+                backend_service_token=backend_service_token,
+                ticker=ticker,
+                region=region,
+                exchange=exchange,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Ticker signal job submission failed after market publish (ticker=%s region=%s exchange=%s): %r",
+                ticker,
+                region,
+                exchange,
+                exc,
+            )
+            failed_jobs.append(
+                {
+                    "ticker": ticker,
+                    "region": region,
+                    "exchange": exchange,
+                    "error": repr(exc),
+                }
+            )
+            continue
         completed_today.add(dedupe_key)
         submitted_jobs.append(
             {
@@ -690,12 +709,14 @@ def _dispatch_ticker_signal_jobs_after_market_publish(
         )
 
     return {
-        "status": "ok",
+        "status": "partial" if failed_jobs else "ok",
         "requested": len(registry_rows),
         "submitted": len(submitted_jobs),
         "skipped_existing": len(skipped_jobs),
+        "failed": len(failed_jobs),
         "submitted_jobs": submitted_jobs,
         "skipped_jobs": skipped_jobs,
+        "failed_jobs": failed_jobs,
     }
 
 

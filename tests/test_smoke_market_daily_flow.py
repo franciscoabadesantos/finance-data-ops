@@ -7,6 +7,7 @@ import pandas as pd
 
 from finance_data_ops.publish.client import RecordingPublisher
 from finance_data_ops.refresh.storage import table_path
+from flows import dataops_market_daily as market_flow
 from flows.dataops_market_daily import run_dataops_market_daily
 
 TEST_RUN_NOW = datetime.now(UTC).replace(microsecond=0)
@@ -269,3 +270,43 @@ def test_market_coverage_merge_preserves_existing_fundamentals_and_earnings(tmp_
     assert rows_by_ticker["SPY"]["coverage_status"] == "fresh"
     assert rows_by_ticker["SPY"]["reason"] == "market_fundamentals_earnings_available"
     assert rows_by_ticker["SPY"]["next_earnings_date"] == TEST_END_DATE
+
+
+def test_ticker_signal_dispatch_is_best_effort_after_market_publish(monkeypatch) -> None:
+    monkeypatch.setenv("BACKEND_BASE_URL", "https://backend.example")
+    monkeypatch.setenv("BACKEND_SERVICE_TOKEN", "token")
+    monkeypatch.setattr(
+        market_flow,
+        "_fetch_promotable_registry_rows",
+        lambda **_kwargs: [
+            {"ticker": "ADBE", "region": "us", "exchange": None},
+            {"ticker": "SPY", "region": "us", "exchange": None},
+        ],
+    )
+    monkeypatch.setattr(
+        market_flow,
+        "_fetch_completed_signal_jobs_for_date",
+        lambda **_kwargs: set(),
+    )
+
+    def _submit(**kwargs):
+        if kwargs["ticker"] == "ADBE":
+            raise RuntimeError("HTTP 500")
+        return {"job_id": "job-spy", "status": "queued"}
+
+    monkeypatch.setattr(market_flow, "_submit_ticker_signal_job", _submit)
+
+    result = market_flow._dispatch_ticker_signal_jobs_after_market_publish(
+        publish_enabled=True,
+        hard_failure=False,
+        as_of_date=TEST_END_DATE,
+        supabase_url="https://supabase.example",
+        service_role_key="secret",
+    )
+
+    assert result["status"] == "partial"
+    assert result["requested"] == 2
+    assert result["submitted"] == 1
+    assert result["failed"] == 1
+    assert result["submitted_jobs"][0]["ticker"] == "SPY"
+    assert result["failed_jobs"][0]["ticker"] == "ADBE"
