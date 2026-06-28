@@ -1,13 +1,9 @@
-"""Supabase publishing client primitives."""
+"""Postgres publishing client primitives."""
 
 from __future__ import annotations
 
 from datetime import date, datetime
 import json
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from numbers import Integral, Real
 from typing import Any, Protocol
@@ -74,23 +70,17 @@ def _is_missing_scalar(value: Any) -> bool:
     return False
 
 
-class SupabaseRestPublisher:
+class PostgresPublisher:
     def __init__(
         self,
         *,
-        supabase_url: str,
-        service_role_key: str,
-        timeout_seconds: int = 300,
-        max_retries: int = 3,
+        database_dsn: str,
+        application_name: str = "finance-data-ops",
     ) -> None:
-        self.supabase_url = str(supabase_url).strip().rstrip("/")
-        self.service_role_key = str(service_role_key).strip()
-        self.timeout_seconds = int(timeout_seconds)
-        self.max_retries = max(int(max_retries), 1)
-        if not self.supabase_url:
-            raise ValueError("SUPABASE_URL is required.")
-        if not self.service_role_key:
-            raise ValueError("SUPABASE_SECRET_KEY is required.")
+        self.database_dsn = str(database_dsn).strip()
+        self.application_name = str(application_name).strip() or "finance-data-ops"
+        if not self.database_dsn:
+            raise ValueError("DATA_OPS_DATABASE_URL is required.")
 
     def upsert(
         self,
@@ -102,68 +92,132 @@ class SupabaseRestPublisher:
         if not rows:
             return {"table": table, "status": "skipped", "rows": 0}
         normalized_rows = to_json_safe(rows)
-        query = {}
-        if on_conflict:
-            query["on_conflict"] = str(on_conflict)
-        path = f"/rest/v1/{str(table).strip()}"
-        if query:
-            path = f"{path}?{urllib.parse.urlencode(query)}"
-        response = self._request(
-            path=path,
-            method="POST",
-            payload=normalized_rows,
-            prefer="resolution=merge-duplicates,return=minimal",
+        schema_name, table_name = _parse_table_name(table)
+        conflict_columns = _parse_identifier_list(on_conflict)
+        if not conflict_columns:
+            raise ValueError(f"on_conflict is required for Postgres upsert into {table}.")
+
+        columns = _ordered_columns(normalized_rows)
+        values = [[_adapt_postgres_value(row.get(column)) for column in columns] for row in normalized_rows]
+        update_columns = [column for column in columns if column not in set(conflict_columns)]
+        query = _build_upsert_sql(
+            schema_name=schema_name,
+            table_name=table_name,
+            columns=columns,
+            conflict_columns=conflict_columns,
+            update_columns=update_columns,
         )
-        response.update({"table": table, "rows": len(normalized_rows)})
-        return response
+        with _connect(self.database_dsn, self.application_name) as conn:
+            with conn.cursor() as cur:
+                cur.executemany(query, values)
+        return {"table": table, "status": "ok", "rows": len(normalized_rows), "status_code": 200}
 
     def rpc(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._request(
-            path=f"/rest/v1/rpc/{str(name).strip()}",
-            method="POST",
-            payload=args or {},
-            prefer="return=minimal",
-        )
+        function_name = _parse_function_name(name)
+        with _connect(self.database_dsn, self.application_name) as conn:
+            with conn.cursor() as cur:
+                if args:
+                    cur.execute(f"select public.{function_name}(%s)", (_adapt_postgres_value(args),))
+                else:
+                    cur.execute(f"select public.{function_name}()")
+        return {"status": "ok", "name": name, "status_code": 200}
 
-    def _request(
-        self,
-        *,
-        path: str,
-        method: str,
-        payload: Any,
-        prefer: str | None = None,
-    ) -> dict[str, Any]:
-        url = f"{self.supabase_url}{path}"
-        body = json.dumps(payload).encode("utf-8")
-        headers = {
-            "apikey": self.service_role_key,
-            "Authorization": f"Bearer {self.service_role_key}",
-            "Content-Type": "application/json",
-        }
-        if prefer:
-            headers["Prefer"] = prefer
-        request = urllib.request.Request(url=url, data=body, headers=headers, method=method)
-        attempt = 1
-        while True:
-            try:
-                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                    raw = response.read().decode("utf-8")
-                    parsed = json.loads(raw) if raw else None
-                    return {"status_code": int(response.status), "data": parsed}
-            except urllib.error.HTTPError as exc:
-                detail = exc.read().decode("utf-8", errors="replace")
-                retryable_codes = {408, 429, 500, 502, 503, 504, 520, 521, 522, 524}
-                if int(exc.code) in retryable_codes and attempt < self.max_retries:
-                    time.sleep(float(2 ** (attempt - 1)))
-                    attempt += 1
-                    continue
-                raise RuntimeError(f"Supabase request failed ({method} {path}): HTTP {exc.code} {detail}") from exc
-            except (TimeoutError, urllib.error.URLError) as exc:
-                if attempt < self.max_retries:
-                    time.sleep(float(2 ** (attempt - 1)))
-                    attempt += 1
-                    continue
-                raise RuntimeError(f"Supabase request failed ({method} {path}): {exc!r}") from exc
+
+def _connect(database_dsn: str, application_name: str):
+    try:
+        import psycopg
+    except ImportError as exc:  # pragma: no cover - exercised in deployment env
+        raise RuntimeError("psycopg[binary] is required for Postgres publishing.") from exc
+    return psycopg.connect(database_dsn, autocommit=True, application_name=application_name)
+
+
+def _adapt_postgres_value(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        try:
+            from psycopg.types.json import Jsonb
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError("psycopg JSON adapters are unavailable.") from exc
+        return Jsonb(value)
+    return value
+
+
+def _build_upsert_sql(
+    *,
+    schema_name: str,
+    table_name: str,
+    columns: list[str],
+    conflict_columns: list[str],
+    update_columns: list[str],
+) -> str:
+    column_sql = ", ".join(_quote_ident(column) for column in columns)
+    placeholders = ", ".join(["%s"] * len(columns))
+    conflict_sql = ", ".join(_quote_ident(column) for column in conflict_columns)
+    if update_columns:
+        update_sql = ", ".join(f"{_quote_ident(column)} = excluded.{_quote_ident(column)}" for column in update_columns)
+        conflict_action = f"do update set {update_sql}"
+    else:
+        conflict_action = "do nothing"
+    return (
+        f"insert into {_quote_ident(schema_name)}.{_quote_ident(table_name)} ({column_sql}) "
+        f"values ({placeholders}) on conflict ({conflict_sql}) {conflict_action}"
+    )
+
+
+def _ordered_columns(rows: list[dict[str, Any]]) -> list[str]:
+    columns: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            column = str(key).strip()
+            if column and column not in seen:
+                _validate_identifier(column)
+                seen.add(column)
+                columns.append(column)
+    if not columns:
+        raise ValueError("Cannot upsert rows without columns.")
+    return columns
+
+
+def _parse_table_name(raw: str) -> tuple[str, str]:
+    text = str(raw).strip()
+    parts = text.split(".")
+    if len(parts) == 1:
+        schema_name, table_name = "public", parts[0]
+    elif len(parts) == 2:
+        schema_name, table_name = parts
+    else:
+        raise ValueError(f"Invalid table name: {raw!r}")
+    _validate_identifier(schema_name)
+    _validate_identifier(table_name)
+    return schema_name, table_name
+
+
+def _parse_function_name(raw: str) -> str:
+    text = str(raw).strip()
+    _validate_identifier(text)
+    return _quote_ident(text)
+
+
+def _parse_identifier_list(raw: str | None) -> list[str]:
+    if raw is None:
+        return []
+    out: list[str] = []
+    for part in str(raw).split(","):
+        value = part.strip()
+        if value:
+            _validate_identifier(value)
+            out.append(value)
+    return out
+
+
+def _validate_identifier(value: str) -> None:
+    if not value.replace("_", "a").isalnum() or value[0].isdigit():
+        raise ValueError(f"Invalid SQL identifier: {value!r}")
+
+
+def _quote_ident(value: str) -> str:
+    _validate_identifier(value)
+    return '"' + value.replace('"', '""') + '"'
 
 
 @dataclass(slots=True)

@@ -5,11 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -26,7 +22,7 @@ from finance_data_ops.derived.market_stats import compute_ticker_market_stats
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.ops.incidents import classify_failure
 from finance_data_ops.providers.market import MarketDataProvider
-from finance_data_ops.publish.client import Publisher, RecordingPublisher, SupabaseRestPublisher
+from finance_data_ops.publish.client import Publisher, RecordingPublisher, PostgresPublisher
 from finance_data_ops.publish.prices import publish_prices_surfaces
 from finance_data_ops.publish.product_metrics import publish_product_metrics
 from finance_data_ops.publish.status import fetch_symbol_data_coverage_rows, publish_status_surfaces
@@ -100,8 +96,7 @@ def run_dataops_market_daily(
     existing_coverage_rows = list(existing_symbol_coverage_rows or [])
     if publish_enabled and publisher is None and not existing_coverage_rows:
         existing_coverage_rows = _load_existing_symbol_coverage_rows(
-            supabase_url=settings.supabase_url,
-            service_role_key=settings.supabase_secret_key,
+            database_dsn=settings.database_dsn,
             symbols=normalized_symbols,
         )
 
@@ -147,11 +142,8 @@ def run_dataops_market_daily(
         if publisher is not None:
             publisher_impl = publisher
         else:
-            settings.require_supabase()
-            publisher_impl = SupabaseRestPublisher(
-                supabase_url=settings.supabase_url,
-                service_role_key=settings.supabase_secret_key,
-            )
+            settings.require_database()
+            publisher_impl = PostgresPublisher(database_dsn=settings.database_dsn)
     else:
         publisher_impl = publisher or RecordingPublisher()
 
@@ -253,14 +245,7 @@ def run_dataops_market_daily(
         FreshnessState.FAILED_HARD,
         FreshnessState.FAILED_RETRYING,
     }
-    signal_jobs_result = _dispatch_ticker_signal_jobs_after_market_publish(
-        publish_enabled=bool(publish_enabled),
-        hard_failure=hard_failure,
-        as_of_date=datetime.now(UTC).date().isoformat(),
-        supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_secret_key,
-    )
-    publish_results["ticker_signal_v1_jobs"] = signal_jobs_result
+    publish_results["ticker_signal_v1_jobs"] = {"status": "skipped", "reason": "replaced_by_daily_production_inference"}
 
     if raise_on_failed_hard and hard_failure:
         payload = build_alert_payload(
@@ -597,16 +582,14 @@ def _parse_symbols(raw: str) -> list[str]:
 
 def _load_existing_symbol_coverage_rows(
     *,
-    supabase_url: str,
-    service_role_key: str,
+    database_dsn: str,
     symbols: list[str],
 ) -> list[dict[str, object]]:
-    if not str(supabase_url).strip() or not str(service_role_key).strip():
+    if not str(database_dsn).strip():
         return []
     try:
         rows = fetch_symbol_data_coverage_rows(
-            supabase_url=supabase_url,
-            service_role_key=service_role_key,
+            database_dsn=database_dsn,
             tickers=symbols,
         )
         return [row for row in rows if isinstance(row, dict)]
@@ -619,247 +602,11 @@ def _dispatch_ticker_signal_jobs_after_market_publish(
     publish_enabled: bool,
     hard_failure: bool,
     as_of_date: str,
-    supabase_url: str,
-    service_role_key: str,
+    registry_url: str = "",
+    registry_token: str = "",
+    **_ignored: Any,
 ) -> dict[str, Any]:
-    if not publish_enabled:
-        return {"status": "skipped", "reason": "publish_disabled"}
-    if hard_failure:
-        return {"status": "skipped", "reason": "market_publish_unhealthy"}
-
-    backend_base_url = str(
-        os.environ.get("BACKEND_BASE_URL")
-        or os.environ.get("FINANCE_BACKEND_URL")
-        or ""
-    ).strip()
-    backend_service_token = str(
-        os.environ.get("BACKEND_SERVICE_TOKEN")
-        or os.environ.get("FINANCE_BACKEND_SERVICE_TOKEN")
-        or ""
-    ).strip()
-    if not backend_base_url or not backend_service_token:
-        return {"status": "skipped", "reason": "backend_env_missing"}
-    if not str(supabase_url).strip() or not str(service_role_key).strip():
-        return {"status": "skipped", "reason": "supabase_env_missing"}
-
-    registry_rows = _fetch_promotable_registry_rows(
-        supabase_url=supabase_url,
-        service_role_key=service_role_key,
-    )
-    if not registry_rows:
-        return {"status": "ok", "requested": 0, "submitted": 0, "skipped_existing": 0}
-
-    completed_today = _fetch_completed_signal_jobs_for_date(
-        supabase_url=supabase_url,
-        service_role_key=service_role_key,
-        as_of_date=as_of_date,
-    )
-    submitted_jobs: list[dict[str, Any]] = []
-    skipped_jobs: list[dict[str, Any]] = []
-    failed_jobs: list[dict[str, Any]] = []
-    for row in registry_rows:
-        ticker = str(row.get("ticker") or "").strip().upper()
-        region = str(row.get("region") or "").strip().lower() or None
-        exchange = (str(row.get("exchange") or "").strip().upper() or None)
-        dedupe_key = (ticker, region, exchange)
-        if dedupe_key in completed_today:
-            skipped_jobs.append(
-                {
-                    "ticker": ticker,
-                    "region": region,
-                    "exchange": exchange,
-                    "reason": "completed_today",
-                }
-            )
-            continue
-        try:
-            response = _submit_ticker_signal_job(
-                backend_base_url=backend_base_url,
-                backend_service_token=backend_service_token,
-                ticker=ticker,
-                region=region,
-                exchange=exchange,
-            )
-        except Exception as exc:
-            LOGGER.warning(
-                "Ticker signal job submission failed after market publish (ticker=%s region=%s exchange=%s): %r",
-                ticker,
-                region,
-                exchange,
-                exc,
-            )
-            failed_jobs.append(
-                {
-                    "ticker": ticker,
-                    "region": region,
-                    "exchange": exchange,
-                    "error": repr(exc),
-                }
-            )
-            continue
-        completed_today.add(dedupe_key)
-        submitted_jobs.append(
-            {
-                "ticker": ticker,
-                "region": region,
-                "exchange": exchange,
-                "job_id": response.get("job_id"),
-                "status": response.get("status"),
-            }
-        )
-
-    return {
-        "status": "partial" if failed_jobs else "ok",
-        "requested": len(registry_rows),
-        "submitted": len(submitted_jobs),
-        "skipped_existing": len(skipped_jobs),
-        "failed": len(failed_jobs),
-        "submitted_jobs": submitted_jobs,
-        "skipped_jobs": skipped_jobs,
-        "failed_jobs": failed_jobs,
-    }
-
-
-def _fetch_promotable_registry_rows(
-    *,
-    supabase_url: str,
-    service_role_key: str,
-    timeout_seconds: int = 30,
-) -> list[dict[str, Any]]:
-    params = {
-        "select": "normalized_symbol,region,exchange,status,promotion_status",
-        "status": "eq.active",
-        "promotion_status": "in.(validated_market_only,validated_full)",
-        "normalized_symbol": "not.is.null",
-    }
-    url = f"{str(supabase_url).strip().rstrip('/')}/rest/v1/ticker_registry?{urllib.parse.urlencode(params)}"
-    payload = _supabase_get_json(
-        url=url,
-        service_role_key=service_role_key,
-        timeout_seconds=timeout_seconds,
-    )
-    rows: list[dict[str, Any]] = []
-    seen: set[tuple[str, str | None, str | None]] = set()
-    for item in payload:
-        if not isinstance(item, dict):
-            continue
-        ticker = str(item.get("normalized_symbol") or "").strip().upper()
-        region = str(item.get("region") or "").strip().lower() or None
-        exchange = str(item.get("exchange") or "").strip().upper() or None
-        if not ticker or ticker in {"NAN", "NONE", "NULL"}:
-            continue
-        if str(item.get("status") or "").strip().lower() != "active":
-            continue
-        if str(item.get("promotion_status") or "").strip().lower() not in _PROMOTABLE_STATUSES:
-            continue
-        dedupe_key = (ticker, region, exchange)
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
-        rows.append({"ticker": ticker, "region": region, "exchange": exchange})
-    rows.sort(key=lambda row: (str(row.get("region") or ""), str(row.get("exchange") or ""), str(row.get("ticker") or "")))
-    return rows
-
-
-def _fetch_completed_signal_jobs_for_date(
-    *,
-    supabase_url: str,
-    service_role_key: str,
-    as_of_date: str,
-    timeout_seconds: int = 30,
-) -> set[tuple[str, str | None, str | None]]:
-    start_date = pd.Timestamp(as_of_date).date()
-    end_date = start_date + timedelta(days=1)
-    params = [
-        ("select", "ticker,region,exchange"),
-        ("analysis_type", "eq.ticker_signal_v1"),
-        ("status", "eq.completed"),
-        ("finished_at", f"gte.{start_date.isoformat()}T00:00:00+00:00"),
-        ("finished_at", f"lt.{end_date.isoformat()}T00:00:00+00:00"),
-        ("limit", "200000"),
-    ]
-    url = f"{str(supabase_url).strip().rstrip('/')}/rest/v1/analysis_jobs?{urllib.parse.urlencode(params)}"
-    payload = _supabase_get_json(
-        url=url,
-        service_role_key=service_role_key,
-        timeout_seconds=timeout_seconds,
-    )
-    completed: set[tuple[str, str | None, str | None]] = set()
-    for item in payload:
-        if not isinstance(item, dict):
-            continue
-        ticker = str(item.get("ticker") or "").strip().upper()
-        region = str(item.get("region") or "").strip().lower() or None
-        exchange = str(item.get("exchange") or "").strip().upper() or None
-        if not ticker:
-            continue
-        completed.add((ticker, region, exchange))
-    return completed
-
-
-def _supabase_get_json(
-    *,
-    url: str,
-    service_role_key: str,
-    timeout_seconds: int,
-) -> list[Any]:
-    key = str(service_role_key).strip()
-    request = urllib.request.Request(
-        url=url,
-        headers={
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Accept": "application/json",
-        },
-        method="GET",
-    )
-    with urllib.request.urlopen(request, timeout=int(timeout_seconds)) as response:
-        raw = response.read().decode("utf-8")
-    parsed = json.loads(raw) if raw else []
-    if isinstance(parsed, list):
-        return parsed
-    return []
-
-
-def _submit_ticker_signal_job(
-    *,
-    backend_base_url: str,
-    backend_service_token: str,
-    ticker: str,
-    region: str | None,
-    exchange: str | None,
-    timeout_seconds: int = 60,
-) -> dict[str, Any]:
-    payload = {
-        "ticker": str(ticker).strip().upper(),
-        "region": region,
-        "exchange": exchange,
-        "analysis_type": "ticker_signal_v1",
-    }
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url=f"{str(backend_base_url).strip().rstrip('/')}/analyst/jobs",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {str(backend_service_token).strip()}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=int(timeout_seconds)) as response:
-            raw = response.read().decode("utf-8")
-            parsed = json.loads(raw) if raw else {}
-            if isinstance(parsed, dict):
-                return parsed
-            return {}
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"Failed to submit ticker_signal_v1 job for {ticker}/{region or 'default'}"
-            f"{('/' + exchange) if exchange else ''}: HTTP {exc.code} {detail}"
-        ) from exc
+    return {"status": "skipped", "reason": "replaced_by_daily_production_inference"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -875,7 +622,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Symbol batch size used by quote refresh calls.",
     )
-    parser.add_argument("--no-publish", action="store_true", help="Skip Supabase publishing (local dry-run).")
+    parser.add_argument("--no-publish", action="store_true", help="Skip Postgres publishing (local dry-run).")
     parser.add_argument(
         "--allow-unhealthy",
         action="store_true",

@@ -98,6 +98,23 @@ def build_macro_daily_payload(macro_daily: pd.DataFrame) -> list[dict[str, Any]]
     return payload.to_dict(orient="records")
 
 
+def build_source_cache_macro_daily_payload(macro_daily: pd.DataFrame) -> list[dict[str, Any]]:
+    rows = build_macro_daily_payload(macro_daily)
+    return [
+        {
+            "as_of_date": row.get("as_of_date"),
+            "series_key": row.get("series_key"),
+            "value": row.get("value"),
+            "source_updated_at": row.get("available_at_utc"),
+            "alignment_mode": row.get("alignment_mode"),
+            "is_stale": row.get("is_stale"),
+            "staleness_bdays": row.get("staleness_bdays"),
+            "ingested_at": row.get("ingested_at"),
+        }
+        for row in rows
+    ]
+
+
 def publish_macro_surfaces(
     *,
     publisher: Publisher,
@@ -120,6 +137,7 @@ def publish_macro_surfaces(
     catalog_rows = build_macro_series_catalog_payload(series_catalog)
     observation_rows = build_macro_observations_payload(macro_observations)
     daily_rows = build_macro_daily_payload(macro_daily)
+    source_cache_daily_rows = build_source_cache_macro_daily_payload(macro_daily)
 
     catalog_result = publisher.upsert("macro_series_catalog", catalog_rows, on_conflict="series_key")
     observations_result = _chunked_upsert(
@@ -136,6 +154,13 @@ def publish_macro_surfaces(
         on_conflict="as_of_date,series_key",
         chunk_size=2500,
     )
+    source_cache_daily_result = _chunked_upsert(
+        publisher=publisher,
+        table="source_cache.macro_daily",
+        rows=source_cache_daily_rows,
+        on_conflict="as_of_date,series_key",
+        chunk_size=2500,
+    )
 
     mv_latest_obs_result: dict[str, Any] | None = None
     mv_latest_rel_result: dict[str, Any] | None = None
@@ -147,6 +172,7 @@ def publish_macro_surfaces(
         "macro_series_catalog": catalog_result,
         "macro_observations": observations_result,
         "macro_daily": daily_result,
+        "source_cache.macro_daily": source_cache_daily_result,
         "mv_latest_macro_observations": mv_latest_obs_result,
         "mv_latest_economic_release_calendar": mv_latest_rel_result,
     }

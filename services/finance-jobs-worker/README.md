@@ -1,6 +1,6 @@
 # finance-jobs-worker
 
-Cloud Run worker for request-driven ticker jobs.
+Legacy request-driven ticker job worker.
 
 This service is intentionally separate from the public backend API. It executes
 job payloads delivered by Cloud Tasks and calls `finance-data-ops` logic for:
@@ -23,8 +23,7 @@ defense-in-depth for app-layer bearer verification.
 
 ## Required env vars
 
-- `SUPABASE_URL`
-- `SUPABASE_SECRET_KEY`
+- `DATABASE_URL`
 
 ## Optional env vars
 

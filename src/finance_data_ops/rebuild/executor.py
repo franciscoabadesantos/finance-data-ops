@@ -6,7 +6,7 @@ from dataclasses import asdict
 import time
 from typing import Any
 
-from finance_data_ops.publish.client import SupabaseRestPublisher
+from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.providers.earnings import EarningsDataProvider
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
 from finance_data_ops.providers.market import MarketDataProvider
@@ -26,7 +26,7 @@ from finance_data_ops.rebuild.progress import NullRebuildProgressStore, RebuildP
 def execute_rebuild_plan(
     *,
     client: Any,
-    publisher: SupabaseRestPublisher,
+    publisher: PostgresPublisher,
     cache_root: str,
     plan: RebuildPlan,
     progress: RebuildProgressStore | NullRebuildProgressStore | None,

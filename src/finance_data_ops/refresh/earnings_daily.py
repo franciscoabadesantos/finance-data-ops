@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-import json
-import urllib.parse
-import urllib.request
 from uuid import uuid4
 
 import pandas as pd
@@ -39,8 +36,7 @@ def refresh_earnings_daily(
     error_messages: list[str] = []
     registry_metadata = _fetch_ticker_registry_metadata(
         cache_root=cache_root,
-        supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_secret_key,
+        database_dsn=settings.database_dsn,
         tickers=symbols_requested,
     )
 
@@ -128,8 +124,7 @@ def refresh_earnings_daily(
 def _fetch_ticker_registry_metadata(
     *,
     cache_root: str,
-    supabase_url: str,
-    service_role_key: str,
+    database_dsn: str,
     tickers: list[str],
     timeout_seconds: int = 30,
 ) -> dict[str, dict[str, object]]:
@@ -138,30 +133,28 @@ def _fetch_ticker_registry_metadata(
     if not normalized_tickers:
         return metadata
 
-    remote_rows: list[dict[str, object]] = []
-    if str(supabase_url).strip() and str(service_role_key).strip():
+    database_rows: list[dict[str, object]] = []
+    if str(database_dsn).strip():
         try:
-            remote_rows = _fetch_registry_rows_from_supabase(
-                supabase_url=supabase_url,
-                service_role_key=service_role_key,
+            database_rows = _fetch_registry_rows_from_postgres(
+                database_dsn=database_dsn,
                 tickers=normalized_tickers,
                 column="normalized_symbol",
                 timeout_seconds=timeout_seconds,
             )
-            remote_rows.extend(
-                _fetch_registry_rows_from_supabase(
-                    supabase_url=supabase_url,
-                    service_role_key=service_role_key,
+            database_rows.extend(
+                _fetch_registry_rows_from_postgres(
+                    database_dsn=database_dsn,
                     tickers=normalized_tickers,
                     column="input_symbol",
                     timeout_seconds=timeout_seconds,
                 )
             )
         except Exception:
-            remote_rows = []
+            database_rows = []
 
-    if remote_rows:
-        return _index_registry_rows(remote_rows, normalized_tickers)
+    if database_rows:
+        return _index_registry_rows(database_rows, normalized_tickers)
 
     local_frame = read_parquet_table("ticker_registry", cache_root=cache_root, required=False)
     if local_frame.empty:
@@ -170,35 +163,34 @@ def _fetch_ticker_registry_metadata(
     return _index_registry_rows(local_rows, normalized_tickers)
 
 
-def _fetch_registry_rows_from_supabase(
+def _fetch_registry_rows_from_postgres(
     *,
-    supabase_url: str,
-    service_role_key: str,
+    database_dsn: str,
     tickers: list[str],
     column: str,
     timeout_seconds: int,
 ) -> list[dict[str, object]]:
-    encoded_tickers = ",".join(str(value).strip().upper() for value in tickers if str(value).strip())
-    if not encoded_tickers:
+    normalized = [str(value).strip().upper() for value in tickers if str(value).strip()]
+    if not normalized:
         return []
-    params = {
-        "select": "input_symbol,normalized_symbol,instrument_type,earnings_supported",
-        column: f"in.({encoded_tickers})",
-    }
-    base = str(supabase_url).strip().rstrip("/")
-    url = f"{base}/rest/v1/ticker_registry?{urllib.parse.urlencode(params)}"
-    headers = {
-        "apikey": str(service_role_key).strip(),
-        "Authorization": f"Bearer {str(service_role_key).strip()}",
-        "Accept": "application/json",
-    }
-    request = urllib.request.Request(url=url, headers=headers, method="GET")
-    with urllib.request.urlopen(request, timeout=int(timeout_seconds)) as response:
-        raw = response.read().decode("utf-8")
-    parsed = json.loads(raw) if raw else []
-    if not isinstance(parsed, list):
-        return []
-    return [row for row in parsed if isinstance(row, dict)]
+    if column not in {"input_symbol", "normalized_symbol"}:
+        raise ValueError(f"Unsupported ticker registry lookup column: {column}")
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("psycopg[binary] is required to read ticker registry from Postgres.") from exc
+    with psycopg.connect(database_dsn, connect_timeout=int(timeout_seconds), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                select input_symbol, normalized_symbol, instrument_type, earnings_supported
+                from public.ticker_registry
+                where {column} = any(%s)
+                """,
+                (normalized,),
+            )
+            return [dict(row) for row in cur.fetchall()]
 
 
 def _index_registry_rows(rows: list[dict[str, object]], tickers: list[str]) -> dict[str, dict[str, object]]:

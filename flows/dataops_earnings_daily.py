@@ -21,7 +21,7 @@ from finance_data_ops.derived.earnings_summary import compute_next_earnings
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.ops.incidents import classify_failure
 from finance_data_ops.providers.earnings import EarningsDataProvider
-from finance_data_ops.publish.client import Publisher, RecordingPublisher, SupabaseRestPublisher
+from finance_data_ops.publish.client import Publisher, RecordingPublisher, PostgresPublisher
 from finance_data_ops.publish.earnings import publish_earnings_surfaces
 from finance_data_ops.publish.status import fetch_symbol_data_coverage_rows, publish_status_surfaces
 from finance_data_ops.refresh.earnings_daily import refresh_earnings_daily
@@ -91,8 +91,7 @@ def run_dataops_earnings_daily(
     existing_coverage_rows = list(existing_symbol_coverage_rows or [])
     if publish_enabled and publisher is None and not existing_coverage_rows:
         existing_coverage_rows = _load_existing_symbol_coverage_rows(
-            supabase_url=settings.supabase_url,
-            service_role_key=settings.supabase_secret_key,
+            database_dsn=settings.database_dsn,
             symbols=normalized_symbols,
         )
 
@@ -128,11 +127,8 @@ def run_dataops_earnings_daily(
         if publisher is not None:
             publisher_impl = publisher
         else:
-            settings.require_supabase()
-            publisher_impl = SupabaseRestPublisher(
-                supabase_url=settings.supabase_url,
-                service_role_key=settings.supabase_secret_key,
-            )
+            settings.require_database()
+            publisher_impl = PostgresPublisher(database_dsn=settings.database_dsn)
     else:
         publisher_impl = publisher or RecordingPublisher()
 
@@ -568,16 +564,14 @@ def _parse_symbols(raw: str) -> list[str]:
 
 def _load_existing_symbol_coverage_rows(
     *,
-    supabase_url: str,
-    service_role_key: str,
+    database_dsn: str,
     symbols: list[str],
 ) -> list[dict[str, object]]:
-    if not str(supabase_url).strip() or not str(service_role_key).strip():
+    if not str(database_dsn).strip():
         return []
     try:
         rows = fetch_symbol_data_coverage_rows(
-            supabase_url=supabase_url,
-            service_role_key=service_role_key,
+            database_dsn=database_dsn,
             tickers=symbols,
         )
         return [row for row in rows if isinstance(row, dict)]
@@ -591,7 +585,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-root", type=str, default=None, help="Override canonical local cache root.")
     parser.add_argument("--max-attempts", type=int, default=None, help="Retry attempts for retryable failures.")
     parser.add_argument("--history-limit", type=int, default=12, help="Rows to request from provider earnings history.")
-    parser.add_argument("--no-publish", action="store_true", help="Skip Supabase publishing (local dry-run).")
+    parser.add_argument("--no-publish", action="store_true", help="Skip Postgres publishing (local dry-run).")
     parser.add_argument(
         "--allow-unhealthy",
         action="store_true",

@@ -8,14 +8,26 @@ pull:
       repository: https://github.com/franciscoabadesantos/finance-data-ops.git
       branch: main
 
+definitions:
+  work_pool: &self_host_pool
+    name: finance-ops-self-host
+    work_queue_name: default
+    job_variables:
+      env:
+        DATA_OPS_DATABASE_URL: "{{ prefect.blocks.secret.finance-data-ops-database-url }}"
+        DATA_OPS_CACHE_ROOT: "/var/lib/finance-data-ops/cache"
+        DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
+        DATA_OPS_SYMBOL_BATCH_SIZE: "100"
+        DATA_OPS_DAILY_INFERENCE_COMMAND: "{{ prefect.blocks.secret.data-ops-daily-inference-command }}"
+        DATA_OPS_DAILY_INFERENCE_CONFIG_REF: "{{ prefect.blocks.secret.data-ops-daily-inference-config-ref }}"
+        DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK-B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM,VGK,EZU,EWI,EWP,EWU,FEZ,BABA,TSM,JD,BIDU,NTES,MELI,VALE,PBR,EWJ,FXI,MCHI,INDA,EWA,EWZ"
+        DATA_OPS_SYMBOLS_EU: "SAP.DE,DBK.DE,ASML.AS,TTE.PA,SAN.PA,SHEL.L,HSBA.L,AZN.L,BP.L,ULVR.L,GSK.L,NOVO-B.CO,EDP.LS,GALP.LS,JMT.LS,BCP.LS,SON.LS,NOS.LS,EGL.LS,COR.LS,RENE.LS,NVG.LS"
+        DATA_OPS_SYMBOLS_APAC: "ANZ.AX,WBC.AX,WOW.AX,BHP.AX,CBA.AX,CSL.AX,NAB.AX,WES.AX,MQG.AX,RIO.AX,TLS.AX,7203.T,6758.T,9984.T,6861.T,8306.T,9433.T,7974.T,0700.HK,9988.HK,1299.HK,0005.HK,3690.HK,0941.HK,1810.HK,RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,ICICIBANK.NS,BHARTIARTL.NS,SBIN.NS,LT.NS,600519.SS,601398.SS,600036.SS,601318.SS,000858.SZ,300750.SZ"
+
 deployments:
   - name: market-daily
-    version: null
-    tags:
-      - dataops
-      - market
-      - daily
-    description: Data Ops market daily orchestration.
+    tags: [dataops, market, daily, self-host]
+    description: Daily price/quote ingestion into local Postgres.
     entrypoint: flows/prefect_dataops_daily.py:dataops_market_daily_flow
     parameters:
       symbols: null
@@ -23,51 +35,40 @@ deployments:
       end: null
       lookback_days: null
       region: us
+      symbol_batch_size: 100
     schedules:
       - cron: "30 11 * * 1-5"
         timezone: "UTC"
         active: true
-        parameters:
-          region: apac
+        parameters: {region: apac}
       - cron: "0 18 * * 1-5"
         timezone: "UTC"
         active: true
-        parameters:
-          region: eu
+        parameters: {region: eu}
       - cron: "30 22 * * 1-5"
         timezone: "UTC"
         active: true
-        parameters:
-          region: us
-    work_pool:
-      name: dataops-managed-pool
-      work_queue_name: default
-      job_variables:
-        pip_packages:
-          - "numpy>=1.24"
-          - "pandas>=2.0"
-          - "pyarrow>=10.0"
-          - "exchange-calendars>=4.5"
-          - "yfinance>=0.2"
-          - "lxml>=4.9"
-          - "PyYAML>=6.0"
-        env:
-          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
-          BACKEND_BASE_URL: "{{ prefect.blocks.secret.backend-base-url }}"
-          BACKEND_SERVICE_TOKEN: "{{ prefect.blocks.secret.backend-service-token }}"
-          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
-          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK-B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM,VGK,EZU,EWI,EWP,EWU,FEZ,BABA,TSM,JD,BIDU,NTES,MELI,VALE,PBR,EWJ,FXI,MCHI,INDA,EWA,EWZ"
-          DATA_OPS_SYMBOLS_EU: "SAP.DE,DBK.DE,ASML.AS,TTE.PA,SAN.PA,SHEL.L,HSBA.L,AZN.L,BP.L,ULVR.L,GSK.L,NOVO-B.CO,EDP.LS,GALP.LS,JMT.LS,BCP.LS,SON.LS,NOS.LS,EGL.LS,COR.LS,RENE.LS,NVG.LS"
-          DATA_OPS_SYMBOLS_APAC: "ANZ.AX,WBC.AX,WOW.AX,BHP.AX,CBA.AX,CSL.AX,NAB.AX,WES.AX,MQG.AX,RIO.AX,TLS.AX,7203.T,6758.T,9984.T,6861.T,8306.T,9433.T,7974.T,0700.HK,9988.HK,1299.HK,0005.HK,3690.HK,0941.HK,1810.HK,RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,ICICIBANK.NS,BHARTIARTL.NS,SBIN.NS,LT.NS,600519.SS,601398.SS,600036.SS,601318.SS,000858.SZ,300750.SZ"
+        parameters: {region: us}
+    work_pool: *self_host_pool
+
+  - name: market-daily-ramp
+    tags: [dataops, market, ramp, self-host]
+    description: Parameterized universe ramp; server agent supplies batch symbols.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_market_daily_flow
+    parameters:
+      symbols: null
+      start: null
+      end: null
+      lookback_days: 400
+      region: null
+      symbol_batch_size: 75
+      allow_unhealthy: true
+    schedules: []
+    work_pool: *self_host_pool
 
   - name: fundamentals-daily
-    version: null
-    tags:
-      - dataops
-      - fundamentals
-      - daily
-    description: Data Ops fundamentals daily orchestration.
+    tags: [dataops, fundamentals, daily, self-host]
+    description: Daily fundamentals ingestion into local Postgres.
     entrypoint: flows/prefect_dataops_daily.py:dataops_fundamentals_daily_flow
     parameters:
       symbols: null
@@ -76,33 +77,11 @@ deployments:
       - cron: "0 3 * * 1-5"
         timezone: "UTC"
         active: true
-    work_pool:
-      name: dataops-managed-pool
-      work_queue_name: default
-      job_variables:
-        pip_packages:
-          - "numpy>=1.24"
-          - "pandas>=2.0"
-          - "pyarrow>=10.0"
-          - "exchange-calendars>=4.5"
-          - "yfinance>=0.2"
-          - "lxml>=4.9"
-          - "PyYAML>=6.0"
-        env:
-          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
-          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
-          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK-B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM,VGK,EZU,EWI,EWP,EWU,FEZ,BABA,TSM,JD,BIDU,NTES,MELI,VALE,PBR,EWJ,FXI,MCHI,INDA,EWA,EWZ"
-          DATA_OPS_SYMBOLS_EU: "SAP.DE,DBK.DE,ASML.AS,TTE.PA,SAN.PA,SHEL.L,HSBA.L,AZN.L,BP.L,ULVR.L,GSK.L,NOVO-B.CO,EDP.LS,GALP.LS,JMT.LS,BCP.LS,SON.LS,NOS.LS,EGL.LS,COR.LS,RENE.LS,NVG.LS"
-          DATA_OPS_SYMBOLS_APAC: "ANZ.AX,WBC.AX,WOW.AX,BHP.AX,CBA.AX,CSL.AX,NAB.AX,WES.AX,MQG.AX,RIO.AX,TLS.AX,7203.T,6758.T,9984.T,6861.T,8306.T,9433.T,7974.T,0700.HK,9988.HK,1299.HK,0005.HK,3690.HK,0941.HK,1810.HK,RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,ICICIBANK.NS,BHARTIARTL.NS,SBIN.NS,LT.NS,600519.SS,601398.SS,600036.SS,601318.SS,000858.SZ,300750.SZ"
+    work_pool: *self_host_pool
 
   - name: earnings-daily
-    version: null
-    tags:
-      - dataops
-      - earnings
-      - daily
-    description: Data Ops earnings daily orchestration.
+    tags: [dataops, earnings, daily, self-host]
+    description: Twice-daily earnings ingestion into local Postgres.
     entrypoint: flows/prefect_dataops_daily.py:dataops_earnings_daily_flow
     parameters:
       symbols: null
@@ -115,33 +94,11 @@ deployments:
       - cron: "0 20 * * 1-5"
         timezone: "UTC"
         active: true
-    work_pool:
-      name: dataops-managed-pool
-      work_queue_name: default
-      job_variables:
-        pip_packages:
-          - "numpy>=1.24"
-          - "pandas>=2.0"
-          - "pyarrow>=10.0"
-          - "exchange-calendars>=4.5"
-          - "yfinance>=0.2"
-          - "lxml>=4.9"
-          - "PyYAML>=6.0"
-        env:
-          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
-          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
-          DATA_OPS_SYMBOLS_US: "AAPL,ADBE,AMD,AMZN,AVGO,BRK-B,COST,DIA,GOOGL,INTC,IWM,JPM,KO,MA,META,MSFT,NFLX,NVDA,PFE,PG,PLTR,QQQ,SPY,TSLA,UBER,UNH,V,VOO,VTI,XOM,VGK,EZU,EWI,EWP,EWU,FEZ,BABA,TSM,JD,BIDU,NTES,MELI,VALE,PBR,EWJ,FXI,MCHI,INDA,EWA,EWZ"
-          DATA_OPS_SYMBOLS_EU: "SAP.DE,DBK.DE,ASML.AS,TTE.PA,SAN.PA,SHEL.L,HSBA.L,AZN.L,BP.L,ULVR.L,GSK.L,NOVO-B.CO,EDP.LS,GALP.LS,JMT.LS,BCP.LS,SON.LS,NOS.LS,EGL.LS,COR.LS,RENE.LS,NVG.LS"
-          DATA_OPS_SYMBOLS_APAC: "ANZ.AX,WBC.AX,WOW.AX,BHP.AX,CBA.AX,CSL.AX,NAB.AX,WES.AX,MQG.AX,RIO.AX,TLS.AX,7203.T,6758.T,9984.T,6861.T,8306.T,9433.T,7974.T,0700.HK,9988.HK,1299.HK,0005.HK,3690.HK,0941.HK,1810.HK,RELIANCE.NS,TCS.NS,HDFCBANK.NS,INFY.NS,ICICIBANK.NS,BHARTIARTL.NS,SBIN.NS,LT.NS,600519.SS,601398.SS,600036.SS,601318.SS,000858.SZ,300750.SZ"
+    work_pool: *self_host_pool
 
   - name: macro-daily
-    version: null
-    tags:
-      - dataops
-      - macro
-      - daily
-    description: Data Ops macro daily orchestration.
+    tags: [dataops, macro, daily, self-host]
+    description: US macro daily refresh into local Postgres.
     entrypoint: flows/prefect_dataops_daily.py:dataops_macro_daily_flow
     parameters:
       start: null
@@ -158,32 +115,11 @@ deployments:
       - cron: "45 22 * * 1-5"
         timezone: "UTC"
         active: true
-    work_pool:
-      name: dataops-managed-pool
-      work_queue_name: default
-      job_variables:
-        pip_packages:
-          - "numpy>=1.24"
-          - "pandas>=2.0"
-          - "pyarrow>=10.0"
-          - "exchange-calendars>=4.5"
-          - "yfinance>=0.2"
-          - "lxml>=4.9"
-          - "PyYAML>=6.0"
-          - "pandas-datareader>=0.10"
-        env:
-          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
-          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
+    work_pool: *self_host_pool
 
   - name: release-calendar-daily
-    version: null
-    tags:
-      - dataops
-      - macro
-      - release-calendar
-      - daily
-    description: Data Ops economic release-calendar daily orchestration.
+    tags: [dataops, macro, release-calendar, daily, self-host]
+    description: Economic release calendar refresh into local Postgres.
     entrypoint: flows/prefect_dataops_daily.py:dataops_release_calendar_daily_flow
     parameters:
       start_date: null
@@ -200,20 +136,35 @@ deployments:
       - cron: "0 15 * * 1-5"
         timezone: "UTC"
         active: true
-    work_pool:
-      name: dataops-managed-pool
-      work_queue_name: default
-      job_variables:
-        pip_packages:
-          - "numpy>=1.24"
-          - "pandas>=2.0"
-          - "pyarrow>=10.0"
-          - "exchange-calendars>=4.5"
-          - "yfinance>=0.2"
-          - "lxml>=4.9"
-          - "PyYAML>=6.0"
-          - "pandas-datareader>=0.10"
-        env:
-          SUPABASE_URL: "{{ prefect.blocks.secret.supabase-url }}"
-          SUPABASE_SECRET_KEY: "{{ prefect.blocks.secret.supabase-service-role-key }}"
-          DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
+    work_pool: *self_host_pool
+
+  - name: trading-calendar-daily
+    tags: [dataops, calendars, daily, self-host]
+    description: Exchange trading calendars into source_cache.calendars.
+    entrypoint: flows/dataops_trading_calendar_daily.py:dataops_trading_calendar_daily_flow
+    parameters:
+      start_date: null
+      end_date: null
+    schedules:
+      - cron: "30 4 * * 1-5"
+        timezone: "UTC"
+        active: true
+    work_pool: *self_host_pool
+
+  - name: daily-production-inference
+    tags: [dataops, production, inference, self-host]
+    description: Resolve registry active pointer, run promoted model pipeline, persist production signals.
+    entrypoint: flows/daily_production_inference.py:daily_production_inference_flow
+    parameters:
+      strategy_family: spy_signal
+      universe: spy
+      environment: production
+      target_date: null
+      orchestrator_command: null
+      orchestrator_config_ref: null
+      dry_run: false
+    schedules:
+      - cron: "15 23 * * 1-5"
+        timezone: "UTC"
+        active: true
+    work_pool: *self_host_pool

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import urllib.parse
-import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -50,8 +47,8 @@ def resolve_gap_aware_window(
     explicit_end: str | None,
     safety_overlap_days: int,
     cache_root: str | Path,
-    supabase_url: str,
-    service_role_key: str,
+    database_dsn: str = "",
+    **_legacy_kwargs: Any,
 ) -> RecurringExecutionPlan:
     target_end = _parse_date_or_today(explicit_end)
     baseline_start = (
@@ -70,8 +67,7 @@ def resolve_gap_aware_window(
         start_date=baseline_start,
         end_date=target_end,
         cache_root=cache_root,
-        supabase_url=supabase_url,
-        service_role_key=service_role_key,
+        database_dsn=database_dsn,
     )
     latest_complete = max(available_dates) if available_dates else None
 
@@ -136,8 +132,8 @@ def resolve_watermark_execution(
     safety_overlap_days: int,
     explicit_end: str | None,
     cache_root: str | Path,
-    supabase_url: str,
-    service_role_key: str,
+    database_dsn: str = "",
+    **_legacy_kwargs: Any,
 ) -> RecurringExecutionPlan:
     target_end = _parse_date_or_today(explicit_end)
     baseline_start = target_end - timedelta(days=max(int(lookback_days), 1))
@@ -150,8 +146,7 @@ def resolve_watermark_execution(
         start_date=baseline_start,
         end_date=target_end,
         cache_root=cache_root,
-        supabase_url=supabase_url,
-        service_role_key=service_role_key,
+        database_dsn=database_dsn,
     )
     latest_complete = max(available_dates) if available_dates else None
 
@@ -194,19 +189,17 @@ def _load_canonical_dates(
     start_date: date,
     end_date: date,
     cache_root: str | Path,
-    supabase_url: str,
-    service_role_key: str,
+    database_dsn: str,
 ) -> tuple[set[date], str]:
-    remote_dates = _fetch_dates_from_supabase(
+    remote_dates = _fetch_dates_from_postgres(
         table_name=table_name,
         date_column=date_column,
         start_date=start_date,
         end_date=end_date,
-        supabase_url=supabase_url,
-        service_role_key=service_role_key,
+        database_dsn=database_dsn,
     )
     if remote_dates is not None:
-        return remote_dates, "supabase"
+        return remote_dates, "postgres"
     return _fetch_dates_from_parquet(
         table_name=table_name,
         date_column=date_column,
@@ -216,56 +209,57 @@ def _load_canonical_dates(
     ), "parquet"
 
 
-def _fetch_dates_from_supabase(
+def _fetch_dates_from_postgres(
     *,
     table_name: str,
     date_column: str,
     start_date: date,
     end_date: date,
-    supabase_url: str,
-    service_role_key: str,
+    database_dsn: str,
 ) -> set[date] | None:
-    base = str(supabase_url).strip().rstrip("/")
-    key = str(service_role_key).strip()
-    if not base or not key:
+    dsn = str(database_dsn).strip()
+    if not dsn:
         return None
-
-    query_items = [
-        ("select", date_column),
-        (date_column, "not.is.null"),
-        (date_column, f"gte.{start_date.isoformat()}"),
-        (date_column, f"lte.{end_date.isoformat()}"),
-        ("limit", "200000"),
-    ]
-    query = urllib.parse.urlencode(query_items)
-    url = f"{base}/rest/v1/{urllib.parse.quote(str(table_name).strip())}?{query}"
-    request = urllib.request.Request(
-        url=url,
-        headers={
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Accept": "application/json",
-        },
-        method="GET",
-    )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            raw = response.read().decode("utf-8")
-        payload = json.loads(raw) if raw else []
-        if not isinstance(payload, list):
-            return set()
+        import psycopg
+    except ImportError:
+        return None
+    try:
+        schema_name, relation_name = _parse_relation_name(table_name)
+        _validate_identifier(date_column)
+        query = (
+            f'select distinct "{date_column}" from "{schema_name}"."{relation_name}" '
+            f'where "{date_column}" is not null and "{date_column}" >= %s and "{date_column}" <= %s'
+        )
         out: set[date] = set()
-        for row in payload:
-            if not isinstance(row, dict):
-                continue
-            parsed = _to_date(row.get(date_column))
-            if parsed is None:
-                continue
-            if start_date <= parsed <= end_date:
-                out.add(parsed)
+        with psycopg.connect(dsn, connect_timeout=30) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (start_date, end_date))
+                for (value,) in cur.fetchall():
+                    parsed = _to_date(value)
+                    if parsed is not None and start_date <= parsed <= end_date:
+                        out.add(parsed)
         return out
     except Exception:
         return None
+
+
+def _parse_relation_name(raw: str) -> tuple[str, str]:
+    parts = str(raw).strip().split(".")
+    if len(parts) == 1:
+        schema_name, relation_name = "public", parts[0]
+    elif len(parts) == 2:
+        schema_name, relation_name = parts
+    else:
+        raise ValueError(f"Invalid table name: {raw!r}")
+    _validate_identifier(schema_name)
+    _validate_identifier(relation_name)
+    return schema_name, relation_name
+
+
+def _validate_identifier(value: str) -> None:
+    if not value or not value.replace("_", "a").isalnum() or value[0].isdigit():
+        raise ValueError(f"Invalid SQL identifier: {value!r}")
 
 
 def _fetch_dates_from_parquet(

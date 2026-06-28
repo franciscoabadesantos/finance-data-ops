@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from finance_data_ops.providers.release_calendar import EconomicReleaseCalendarProvider
-from finance_data_ops.publish.client import SupabaseRestPublisher
+from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.release_calendar import publish_release_calendar_surfaces
 from finance_data_ops.refresh.release_calendar_daily import refresh_release_calendar_daily
 
@@ -22,7 +22,7 @@ def _release_calendar_debug_enabled() -> bool:
 
 def load_release_calendar_chunk(
     *,
-    publisher: SupabaseRestPublisher,
+    publisher: PostgresPublisher,
     provider: EconomicReleaseCalendarProvider,
     cache_root: str,
     start_date: str,

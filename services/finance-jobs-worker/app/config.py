@@ -11,8 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class WorkerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 
-    supabase_url: str
-    supabase_secret_key: str
+    database_url: str
     worker_shared_token: str | None = None
 
     finance_data_ops_root: str = "../.."
@@ -28,8 +27,7 @@ class WorkerSettings(BaseSettings):
     default_backfill_years: int = 5
 
     @field_validator(
-        "supabase_url",
-        "supabase_secret_key",
+        "database_url",
         "worker_shared_token",
         "finance_data_ops_root",
         "gcp_project_id",
@@ -60,4 +58,3 @@ def get_settings() -> WorkerSettings:
     settings = WorkerSettings()
     bootstrap_data_ops_path(settings.finance_data_ops_root)
     return settings
-

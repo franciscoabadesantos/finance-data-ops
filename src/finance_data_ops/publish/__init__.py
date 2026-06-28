@@ -1,6 +1,6 @@
-"""Supabase publication adapters for Data Ops surfaces."""
+"""Postgres publication adapters for Data Ops surfaces."""
 
-from finance_data_ops.publish.client import RecordingPublisher, SupabaseRestPublisher
+from finance_data_ops.publish.client import PostgresPublisher, RecordingPublisher
 from finance_data_ops.publish.earnings import publish_earnings_surfaces
 from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
 from finance_data_ops.publish.macro import publish_macro_surfaces
@@ -12,7 +12,7 @@ from finance_data_ops.publish.ticker_registry import publish_ticker_registry
 from finance_data_ops.publish.trading_calendar import publish_trading_calendar_surfaces
 
 __all__ = [
-    "SupabaseRestPublisher",
+    "PostgresPublisher",
     "RecordingPublisher",
     "publish_prices_surfaces",
     "publish_product_metrics",

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -22,23 +19,20 @@ def load_validated_symbols(
     *,
     require_market: bool = True,
     cache_root: str | Path | None = None,
-    supabase_url: str | None = None,
-    service_role_key: str | None = None,
+    database_dsn: str | None = None,
 ) -> list[str]:
     normalized_region = str(region or "").strip().lower()
     if not normalized_region:
         return []
 
     settings = load_settings(cache_root=cache_root)
-    resolved_supabase_url = str(supabase_url or settings.supabase_url).strip()
-    resolved_service_key = str(service_role_key or settings.supabase_secret_key).strip()
+    resolved_database_dsn = str(database_dsn or settings.database_dsn).strip()
 
     rows: list[dict[str, Any]] = []
-    if resolved_supabase_url and resolved_service_key:
+    if resolved_database_dsn:
         try:
-            rows = _fetch_registry_rows_from_supabase(
-                supabase_url=resolved_supabase_url,
-                service_role_key=resolved_service_key,
+            rows = _fetch_registry_rows_from_postgres(
+                database_dsn=resolved_database_dsn,
                 region=normalized_region,
                 require_market=bool(require_market),
             )
@@ -61,19 +55,16 @@ def load_all_region_universes(
     *,
     require_market: bool = True,
     cache_root: str | Path | None = None,
-    supabase_url: str | None = None,
-    service_role_key: str | None = None,
+    database_dsn: str | None = None,
 ) -> dict[str, list[str]]:
     settings = load_settings(cache_root=cache_root)
-    resolved_supabase_url = str(supabase_url or settings.supabase_url).strip()
-    resolved_service_key = str(service_role_key or settings.supabase_secret_key).strip()
+    resolved_database_dsn = str(database_dsn or settings.database_dsn).strip()
 
     rows: list[dict[str, Any]] = []
-    if resolved_supabase_url and resolved_service_key:
+    if resolved_database_dsn:
         try:
-            rows = _fetch_registry_rows_from_supabase(
-                supabase_url=resolved_supabase_url,
-                service_role_key=resolved_service_key,
+            rows = _fetch_registry_rows_from_postgres(
+                database_dsn=resolved_database_dsn,
                 region=None,
                 require_market=bool(require_market),
             )
@@ -97,39 +88,39 @@ def load_all_region_universes(
     return universes
 
 
-def _fetch_registry_rows_from_supabase(
+def _fetch_registry_rows_from_postgres(
     *,
-    supabase_url: str,
-    service_role_key: str,
+    database_dsn: str,
     region: str | None,
     require_market: bool,
     timeout_seconds: int = 30,
 ) -> list[dict[str, Any]]:
-    params: dict[str, str] = {
-        "select": "input_symbol,normalized_symbol,region,status,promotion_status,market_supported",
-        "status": "eq.active",
-        "promotion_status": "in.(validated_market_only,validated_full)",
-        "normalized_symbol": "not.is.null",
-    }
+    clauses = [
+        "status = 'active'",
+        "promotion_status = any(%s)",
+        "normalized_symbol is not null",
+    ]
+    params: list[Any] = [sorted(ALLOWED_PROMOTION_STATUSES)]
     if region:
-        params["region"] = f"eq.{region}"
+        clauses.append("region = %s")
+        params.append(region)
     if require_market:
-        params["market_supported"] = "eq.true"
-
-    base = str(supabase_url).strip().rstrip("/")
-    url = f"{base}/rest/v1/ticker_registry?{urllib.parse.urlencode(params)}"
-    headers = {
-        "apikey": str(service_role_key).strip(),
-        "Authorization": f"Bearer {str(service_role_key).strip()}",
-        "Accept": "application/json",
-    }
-    request = urllib.request.Request(url=url, headers=headers, method="GET")
-    with urllib.request.urlopen(request, timeout=int(timeout_seconds)) as response:
-        raw = response.read().decode("utf-8")
-    parsed = json.loads(raw) if raw else []
-    if not isinstance(parsed, list):
-        return []
-    return [row for row in parsed if isinstance(row, dict)]
+        clauses.append("market_supported is true")
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("psycopg[binary] is required to read ticker registry from Postgres.") from exc
+    with psycopg.connect(database_dsn, connect_timeout=int(timeout_seconds), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select input_symbol, normalized_symbol, region, status, promotion_status, market_supported
+                from public.ticker_registry
+                where """ + " and ".join(clauses),
+                tuple(params),
+            )
+            return [dict(row) for row in cur.fetchall()]
 
 
 def _rows_from_frame(frame: pd.DataFrame) -> list[dict[str, Any]]:

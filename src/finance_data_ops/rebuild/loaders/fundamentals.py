@@ -8,7 +8,7 @@ import logging
 import pandas as pd
 
 from finance_data_ops.derived.fundamentals_summary import compute_ticker_fundamental_summary
-from finance_data_ops.publish.client import SupabaseRestPublisher
+from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
 from finance_data_ops.refresh.fundamentals_daily import refresh_fundamentals_daily
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 def load_fundamentals_chunk(
     *,
-    publisher: SupabaseRestPublisher,
+    publisher: PostgresPublisher,
     provider: FundamentalsDataProvider,
     cache_root: str,
     tickers: tuple[str, ...],

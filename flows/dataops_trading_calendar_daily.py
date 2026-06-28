@@ -20,11 +20,16 @@ if str(SRC_PATH) not in sys.path:
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.ops.incidents import classify_failure
 from finance_data_ops.providers.exchange_calendar import SUPPORTED_MICS, trading_session_rows
-from finance_data_ops.publish.client import Publisher, RecordingPublisher, SupabaseRestPublisher
+from finance_data_ops.publish.client import Publisher, RecordingPublisher, PostgresPublisher
 from finance_data_ops.publish.status import publish_status_surfaces
 from finance_data_ops.publish.trading_calendar import publish_trading_calendar_surfaces
 from finance_data_ops.settings import load_settings
 from finance_data_ops.validation.freshness import FreshnessState
+
+try:
+    from prefect import flow
+except Exception:  # pragma: no cover - CLI can run without prefect installed
+    flow = None  # type: ignore[assignment]
 
 
 def run_dataops_trading_calendar_daily(
@@ -53,11 +58,8 @@ def run_dataops_trading_calendar_daily(
         if publisher is not None:
             publisher_impl = publisher
         else:
-            settings.require_supabase()
-            publisher_impl = SupabaseRestPublisher(
-                supabase_url=settings.supabase_url,
-                service_role_key=settings.supabase_secret_key,
-            )
+            settings.require_database()
+            publisher_impl = PostgresPublisher(database_dsn=settings.database_dsn)
     else:
         publisher_impl = publisher or RecordingPublisher()
 
@@ -134,6 +136,31 @@ def run_dataops_trading_calendar_daily(
             "exchange_trading_calendar": int(len(calendar_frame.index)),
         },
     }
+
+
+if flow is not None:
+
+    @flow(name="dataops-trading-calendar-daily", retries=0, log_prints=True)
+    def dataops_trading_calendar_daily_flow(
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        cache_root: str | None = None,
+        publish_enabled: bool = True,
+        raise_on_failed_hard: bool = True,
+    ) -> dict[str, Any]:
+        return run_dataops_trading_calendar_daily(
+            start_date=start_date,
+            end_date=end_date,
+            cache_root=cache_root,
+            publish_enabled=publish_enabled,
+            raise_on_failed_hard=raise_on_failed_hard,
+        )
+
+else:
+
+    def dataops_trading_calendar_daily_flow(**kwargs: Any) -> dict[str, Any]:
+        return run_dataops_trading_calendar_daily(**kwargs)
 
 
 def _build_trading_calendar_frame(*, start: date, end: date) -> pd.DataFrame:
@@ -257,7 +284,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-date", default=None, help="Start date (YYYY-MM-DD), defaults to 1990-01-01.")
     parser.add_argument("--end-date", default=None, help="End date (YYYY-MM-DD), defaults to today + 366 days.")
     parser.add_argument("--cache-root", default=None)
-    parser.add_argument("--no-publish", action="store_true", help="Skip Supabase publish steps.")
+    parser.add_argument("--no-publish", action="store_true", help="Skip Postgres publish steps.")
     parser.add_argument("--allow-unhealthy", action="store_true", help="Do not raise on unhealthy completion.")
     return parser
 

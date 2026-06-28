@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 
 from finance_data_ops.derived.market_stats import compute_ticker_market_stats
-from finance_data_ops.publish.client import SupabaseRestPublisher
+from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.product_metrics import publish_product_metrics
 from finance_data_ops.publish.status import publish_status_surfaces
 from finance_data_ops.rebuild.policies import DomainPolicy
@@ -15,7 +15,7 @@ from finance_data_ops.rebuild.policies import DomainPolicy
 
 def finalize_rebuild(
     *,
-    publisher: SupabaseRestPublisher,
+    publisher: PostgresPublisher,
     client: Any,
     policy: DomainPolicy,
     domain: str,

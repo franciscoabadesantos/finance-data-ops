@@ -28,7 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--history-limit", type=int, default=12, help="Earnings history limit for validation checks.")
     parser.add_argument("--cache-root", type=str, default=None, help="Override local cache root.")
-    parser.add_argument("--no-publish", action="store_true", help="Skip remote Supabase ticker_registry publish.")
+    parser.add_argument("--no-publish", action="store_true", help="Skip remote Postgres ticker_registry publish.")
     return parser
 
 

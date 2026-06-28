@@ -34,7 +34,7 @@ from flows.dataops_market_daily import run_dataops_market_daily
 from flows.dataops_release_calendar_daily import run_dataops_release_calendar_daily
 from flows.dataops_trading_calendar_daily import run_dataops_trading_calendar_daily
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
-from finance_data_ops.publish.client import SupabaseRestPublisher
+from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.ticker_registry import publish_ticker_registry
 from finance_data_ops.refresh.gap_repair import resolve_gap_aware_window, resolve_watermark_execution
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
@@ -252,8 +252,7 @@ def dataops_market_daily_flow(
         explicit_end=end,
         safety_overlap_days=2,
         cache_root=settings.cache_root,
-        supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_secret_key,
+        database_dsn=settings.database_dsn,
     )
     resolved_start, resolved_end = execution_plan.start_date, execution_plan.end_date
 
@@ -318,8 +317,7 @@ def dataops_fundamentals_daily_flow(
         safety_overlap_days=14,
         explicit_end=None,
         cache_root=settings.cache_root,
-        supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_secret_key,
+        database_dsn=settings.database_dsn,
     )
     logger.info(
         "Running fundamentals flow (region=%s, symbols=%s, mode=%s, latest_complete=%s, gap_exists=%s).",
@@ -388,8 +386,7 @@ def dataops_earnings_daily_flow(
         safety_overlap_days=14,
         explicit_end=None,
         cache_root=settings.cache_root,
-        supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_secret_key,
+        database_dsn=settings.database_dsn,
     )
     resolved_history_limit = int(history_limit)
     if execution_plan.gap_exists and execution_plan.earliest_missing_date:
@@ -454,8 +451,7 @@ def dataops_macro_daily_flow(
         explicit_end=end,
         safety_overlap_days=2,
         cache_root=settings.cache_root,
-        supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_secret_key,
+        database_dsn=settings.database_dsn,
     )
     resolved_start, resolved_end = execution_plan.start_date, execution_plan.end_date
 
@@ -516,8 +512,7 @@ def dataops_release_calendar_daily_flow(
         safety_overlap_days=3,
         explicit_end=end_date,
         cache_root=settings.cache_root,
-        supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_secret_key,
+        database_dsn=settings.database_dsn,
     )
     resolved_start = str(start_date).strip() if start_date else execution_plan.start_date
     resolved_end = execution_plan.end_date
@@ -732,17 +727,14 @@ def dataops_ticker_validation_flow(
     )
 
     remote_publish_result: dict[str, Any] = {"status": "skipped"}
-    if bool(publish_registry) and settings.supabase_url and settings.supabase_secret_key:
-        publisher = SupabaseRestPublisher(
-            supabase_url=settings.supabase_url,
-            service_role_key=settings.supabase_secret_key,
-        )
+    if bool(publish_registry) and settings.database_dsn:
+        publisher = PostgresPublisher(database_dsn=settings.database_dsn)
         remote_publish_result = publish_ticker_registry(
             publisher=publisher,
             rows=[result["registry_row"]],
         )
     elif bool(publish_registry):
-        logger.info("Ticker registry remote publish skipped: SUPABASE_URL/SUPABASE_SECRET_KEY missing.")
+        logger.info("Ticker registry remote publish skipped: DATA_OPS_DATABASE_URL missing.")
 
     selected = result.get("selected", {})
     if str(selected.get("validation_status")) == "rejected":
@@ -808,11 +800,8 @@ def dataops_ticker_onboarding_flow(
     )
 
     pending_publish_result: dict[str, Any] = {"status": "skipped"}
-    if bool(publish_enabled) and settings.supabase_url and settings.supabase_secret_key:
-        publisher = SupabaseRestPublisher(
-            supabase_url=settings.supabase_url,
-            service_role_key=settings.supabase_secret_key,
-        )
+    if bool(publish_enabled) and settings.database_dsn:
+        publisher = PostgresPublisher(database_dsn=settings.database_dsn)
         pending_publish_result = publish_ticker_registry(
             publisher=publisher,
             rows=[pending_row],
@@ -843,8 +832,7 @@ def dataops_ticker_onboarding_flow(
     registry_row = fetch_registry_row_by_key(
         registry_key=str(pending_row["registry_key"]),
         cache_root=settings.cache_root,
-        supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_secret_key,
+        database_dsn=settings.database_dsn,
     )
     if str(validation_state).lower() != "completed":
         fallback_row = build_pending_registry_row(
@@ -863,11 +851,8 @@ def dataops_ticker_onboarding_flow(
             }
         )
         upsert_ticker_registry_rows(cache_root=settings.cache_root, rows=[fallback_row])
-        if bool(publish_enabled) and settings.supabase_url and settings.supabase_secret_key:
-            publisher = SupabaseRestPublisher(
-                supabase_url=settings.supabase_url,
-                service_role_key=settings.supabase_secret_key,
-            )
+        if bool(publish_enabled) and settings.database_dsn:
+            publisher = PostgresPublisher(database_dsn=settings.database_dsn)
             publish_ticker_registry(publisher=publisher, rows=[fallback_row])
         registry_row = fallback_row
 
@@ -960,7 +945,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--cache-root", type=str, default=None, help="Override local cache root.")
     parser.add_argument("--max-attempts", type=int, default=None, help="Retry attempts override.")
-    parser.add_argument("--no-publish", action="store_true", help="Skip Supabase publishing.")
+    parser.add_argument("--no-publish", action="store_true", help="Skip Postgres publishing.")
     parser.add_argument("--allow-unhealthy", action="store_true", help="Do not raise on unhealthy status.")
     parser.add_argument("--start", type=str, default=None, help="Market only. Start date YYYY-MM-DD.")
     parser.add_argument("--end", type=str, default=None, help="Market only. End date YYYY-MM-DD.")

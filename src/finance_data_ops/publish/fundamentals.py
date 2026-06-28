@@ -308,6 +308,69 @@ def build_etf_sector_weights_payload(sector_weights_frame: pd.DataFrame) -> list
     ].to_dict(orient="records")
 
 
+def build_source_cache_fundamentals_payload(fundamentals_frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if fundamentals_frame.empty:
+        return []
+
+    frame = fundamentals_frame.copy()
+    ticker = frame.get("ticker", frame.get("symbol", pd.Series(index=frame.index, dtype=object)))
+    source = frame.get("source", frame.get("provider", pd.Series(index=frame.index, dtype=object)))
+    fetched_at = frame.get("fetched_at", frame.get("ingested_at", pd.Series(index=frame.index, dtype=object)))
+    period_end = pd.to_datetime(frame.get("period_end"), errors="coerce").dt.date
+    report_date = _resolve_report_date(frame, fallback=period_end)
+    currency = frame.get("currency", pd.Series("USD", index=frame.index, dtype=object))
+
+    payload = pd.DataFrame(
+        {
+            "symbol": ticker.astype(str).str.upper(),
+            "report_date": report_date,
+            "metric": frame.get("metric", pd.Series(index=frame.index, dtype=object)).astype(str).str.lower(),
+            "value": pd.to_numeric(frame.get("value"), errors="coerce"),
+            "value_text": frame.get("value_text", pd.Series(index=frame.index, dtype=object)),
+            "period_end": period_end,
+            "period_type": _resolve_period_type(frame),
+            "fiscal_year": _resolve_fiscal_year(frame, period_end),
+            "fiscal_quarter": _resolve_fiscal_quarter(frame),
+            "currency": currency,
+            "source": source,
+            "source_updated_at": pd.to_datetime(fetched_at, utc=True, errors="coerce"),
+            "ingested_at": pd.to_datetime(fetched_at, utc=True, errors="coerce"),
+        },
+        index=frame.index,
+    )
+    now_utc = pd.Timestamp.now(tz="UTC")
+    payload["source_updated_at"] = payload["source_updated_at"].fillna(now_utc)
+    payload["ingested_at"] = payload["ingested_at"].fillna(payload["source_updated_at"])
+    for column in ["symbol", "metric", "value_text", "period_type", "fiscal_quarter", "currency", "source"]:
+        payload[column] = _normalize_string_series(payload[column])
+    payload["period_type"] = payload["period_type"].fillna("unknown")
+    payload["currency"] = payload["currency"].fillna("USD").astype(str).str.upper()
+    payload = payload.dropna(subset=["symbol", "report_date", "metric", "period_end", "period_type", "currency"])
+    payload = payload.loc[payload["value"].notna() | payload["value_text"].notna()].copy()
+    payload = payload.sort_values(["symbol", "metric", "period_end", "period_type", "report_date", "source_updated_at"])
+    payload = payload.drop_duplicates(
+        subset=["symbol", "metric", "period_end", "period_type", "report_date"],
+        keep="last",
+    )
+    return payload[
+        [
+            "symbol",
+            "report_date",
+            "metric",
+            "value",
+            "value_text",
+            "period_end",
+            "period_type",
+            "fiscal_year",
+            "fiscal_quarter",
+            "currency",
+            "source",
+            "source_updated_at",
+            "ingested_at",
+        ]
+    ].to_dict(orient="records")
+
+
 def _resolve_period(frame: pd.DataFrame) -> pd.Series:
     if "period" in frame.columns:
         return frame["period"].astype(str).str.strip()
@@ -327,6 +390,38 @@ def _resolve_period(frame: pd.DataFrame) -> pd.Series:
     out.loc[fallback_mask] = period_end_year.loc[fallback_mask].astype(str)
 
     return out.astype(str).str.strip()
+
+
+def _resolve_report_date(frame: pd.DataFrame, *, fallback: pd.Series) -> pd.Series:
+    for column in ("report_date", "as_of_date", "filing_date", "fetched_at", "ingested_at"):
+        if column in frame.columns:
+            parsed = pd.to_datetime(frame[column], errors="coerce").dt.date
+            if parsed.notna().any():
+                return parsed.fillna(fallback)
+    return fallback
+
+
+def _resolve_period_type(frame: pd.DataFrame) -> pd.Series:
+    if "period_type" in frame.columns:
+        return frame["period_type"].astype(str).str.strip().str.lower()
+    if "period" in frame.columns:
+        period = frame["period"].astype(str).str.strip().str.lower()
+        return period.where(~period.isin({"", "nan", "none", "nat", "<na>"}), "unknown")
+    return pd.Series("unknown", index=frame.index, dtype=object)
+
+
+def _resolve_fiscal_year(frame: pd.DataFrame, period_end: pd.Series) -> pd.Series:
+    if "fiscal_year" in frame.columns:
+        return pd.to_numeric(frame["fiscal_year"], errors="coerce").astype("Int64")
+    return pd.to_datetime(period_end, errors="coerce").dt.year.astype("Int64")
+
+
+def _resolve_fiscal_quarter(frame: pd.DataFrame) -> pd.Series:
+    if "fiscal_quarter" in frame.columns:
+        return frame["fiscal_quarter"].astype(str).str.strip()
+    if "period" in frame.columns:
+        return frame["period"].astype(str).str.upper().str.extract(r"(Q[1-4])", expand=False)
+    return pd.Series(index=frame.index, dtype=object)
 
 
 def _historical_fundamentals_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -410,6 +505,7 @@ def publish_fundamentals_surfaces(
     refresh_materialized_view: bool = True,
 ) -> dict[str, Any]:
     history_rows = build_market_fundamentals_payload(fundamentals_history)
+    source_cache_rows = build_source_cache_fundamentals_payload(fundamentals_history)
     point_in_time_rows = build_ticker_fundamental_point_in_time_payload(fundamentals_history)
     summary_rows = build_ticker_fundamental_summary_payload(fundamentals_summary)
     profile_rows = build_ticker_profile_payload(_frame_or_empty(ticker_profile))
@@ -420,6 +516,11 @@ def publish_fundamentals_surfaces(
         "market_fundamentals_v2",
         history_rows,
         on_conflict="ticker,period,period_end,metric",
+    )
+    source_cache_result = publisher.upsert(
+        "source_cache.fundamentals",
+        source_cache_rows,
+        on_conflict="symbol,metric,period_end,period_type,report_date",
     )
     point_in_time_result: dict[str, Any] | None = None
     if point_in_time_rows:
@@ -460,6 +561,7 @@ def publish_fundamentals_surfaces(
 
     return {
         "market_fundamentals_v2": history_result,
+        "source_cache.fundamentals": source_cache_result,
         "ticker_fundamental_point_in_time": point_in_time_result,
         "ticker_fundamental_summary": summary_result,
         "ticker_profile": profile_result,

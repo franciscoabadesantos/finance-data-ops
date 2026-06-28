@@ -18,6 +18,7 @@ dependencies = [
     "lxml>=4.9",
     "PyYAML>=6.0",
     "requests>=2.31",
+    "psycopg[binary]>=3.1",
 ]
 
 [project.optional-dependencies]

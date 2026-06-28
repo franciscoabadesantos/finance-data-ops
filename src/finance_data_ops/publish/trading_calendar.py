@@ -41,15 +41,38 @@ def build_exchange_trading_calendar_payload(trading_calendar: pd.DataFrame) -> l
     ].to_dict(orient="records")
 
 
+def build_source_cache_calendars_payload(trading_calendar: pd.DataFrame) -> list[dict[str, Any]]:
+    rows = build_exchange_trading_calendar_payload(trading_calendar)
+    return [
+        {
+            "exchange_mic": row.get("exchange_mic"),
+            "session_date": row.get("session_date"),
+            "is_trading_day": True,
+            "is_half_day": row.get("is_half_day"),
+            "currency": row.get("currency"),
+            "source": "exchange_calendars",
+            "source_updated_at": row.get("ingested_at"),
+            "ingested_at": row.get("ingested_at"),
+        }
+        for row in rows
+    ]
+
+
 def publish_trading_calendar_surfaces(
     *,
     publisher: Publisher,
     trading_calendar: pd.DataFrame,
 ) -> dict[str, Any]:
     rows = build_exchange_trading_calendar_payload(trading_calendar)
+    source_cache_rows = build_source_cache_calendars_payload(trading_calendar)
     table_result = publisher.upsert(
         "exchange_trading_calendar",
         rows,
         on_conflict="exchange_mic,session_date",
     )
-    return {"exchange_trading_calendar": table_result}
+    source_cache_result = publisher.upsert(
+        "source_cache.calendars",
+        source_cache_rows,
+        on_conflict="exchange_mic,session_date",
+    )
+    return {"exchange_trading_calendar": table_result, "source_cache.calendars": source_cache_result}

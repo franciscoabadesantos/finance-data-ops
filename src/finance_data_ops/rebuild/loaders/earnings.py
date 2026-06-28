@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pandas as pd
 
-from finance_data_ops.publish.client import SupabaseRestPublisher
+from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.earnings import publish_earnings_surfaces
 from finance_data_ops.providers.earnings import EarningsDataProvider
 from finance_data_ops.refresh.market_daily import RefreshRunResult
@@ -22,7 +22,7 @@ NON_EARNINGS_INSTRUMENT_TYPES = {"etf", "index_proxy", "country_fund"}
 
 def load_earnings_chunk(
     *,
-    publisher: SupabaseRestPublisher,
+    publisher: PostgresPublisher,
     provider: EarningsDataProvider,
     cache_root: str,
     tickers: tuple[str, ...],

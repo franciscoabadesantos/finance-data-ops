@@ -68,6 +68,27 @@ def build_market_price_daily_payload(prices_frame: pd.DataFrame) -> list[dict[st
     ].to_dict(orient="records")
 
 
+def build_source_cache_market_price_daily_payload(prices_frame: pd.DataFrame) -> list[dict[str, Any]]:
+    rows = build_market_price_daily_payload(prices_frame)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        out.append(
+            {
+                "symbol": row.get("ticker"),
+                "price_date": row.get("date"),
+                "open": row.get("open"),
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "close": row.get("close"),
+                "adj_close": row.get("adj_close"),
+                "volume": _nullable_int(row.get("volume")),
+                "source_updated_at": row.get("fetched_at"),
+                "ingested_at": row.get("created_at") or row.get("fetched_at"),
+            }
+        )
+    return out
+
+
 def build_market_quotes_payload(quotes_frame: pd.DataFrame) -> list[dict[str, Any]]:
     if quotes_frame.empty:
         return []
@@ -223,6 +244,7 @@ def publish_prices_surfaces(
     refresh_materialized_view: bool = True,
 ) -> dict[str, Any]:
     daily_rows = build_market_price_daily_payload(market_price_daily)
+    source_cache_daily_rows = build_source_cache_market_price_daily_payload(market_price_daily)
     quote_rows = build_market_quotes_payload(market_quotes)
     history_rows = build_market_quotes_history_payload(market_quotes)
 
@@ -230,6 +252,11 @@ def publish_prices_surfaces(
         "market_price_daily",
         daily_rows,
         on_conflict="ticker,date",
+    )
+    source_cache_daily_result = publisher.upsert(
+        "source_cache.market_price_daily",
+        source_cache_daily_rows,
+        on_conflict="symbol,price_date",
     )
     quote_result = publisher.upsert(
         "market_quotes",
@@ -246,6 +273,7 @@ def publish_prices_surfaces(
         rpc_result = publisher.rpc("refresh_mv_latest_prices", {})
     return {
         "market_price_daily": daily_result,
+        "source_cache.market_price_daily": source_cache_daily_result,
         "market_quotes": quote_result,
         "market_quotes_history": history_result,
         "mv_latest_prices": rpc_result,
@@ -261,6 +289,15 @@ def _coerce_market_cap_series(values: pd.Series) -> pd.Series:
 def _nullable_text_series(values: pd.Series) -> pd.Series:
     normalized = values.astype("string").str.strip()
     return normalized.mask(normalized.isin(NULL_TEXT_TOKENS))
+
+
+def _nullable_int(value: Any) -> int | None:
+    try:
+        if value is None or pd.isna(value):
+            return None
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _parse_market_cap_value(value: Any) -> float | None:

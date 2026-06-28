@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Reset canonical data tables by domain using Supabase REST deletes.
+"""Reset canonical data tables by domain in local Postgres.
 
-This is an ops-only reset utility for wipe-and-rebuild workflows.
-It does not create/alter schema.
+Ops-only utility for wipe-and-rebuild workflows. It does not create schema and
+must not be used by schedules.
 """
 
 from __future__ import annotations
@@ -10,10 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,64 +17,89 @@ from typing import Any
 @dataclass(frozen=True)
 class TableResetTarget:
     table: str
-    key_column: str
 
 
 DOMAIN_TABLES: dict[str, list[TableResetTarget]] = {
     "market": [
-        TableResetTarget("ticker_market_stats_snapshot", "ticker"),
-        TableResetTarget("market_quotes_history", "ticker"),
-        TableResetTarget("market_quotes", "ticker"),
-        TableResetTarget("market_price_daily", "ticker"),
+        TableResetTarget("source_cache.market_price_daily"),
+        TableResetTarget("public.ticker_market_stats_snapshot"),
+        TableResetTarget("public.market_quotes_history"),
+        TableResetTarget("public.market_quotes"),
+        TableResetTarget("public.market_price_daily"),
     ],
     "fundamentals": [
-        TableResetTarget("ticker_fundamental_summary", "ticker"),
-        TableResetTarget("market_fundamentals_v2", "ticker"),
+        TableResetTarget("source_cache.fundamentals"),
+        TableResetTarget("public.ticker_fundamental_summary"),
+        TableResetTarget("public.ticker_fundamental_point_in_time"),
+        TableResetTarget("public.market_fundamentals_v2"),
     ],
     "earnings": [
-        TableResetTarget("market_earnings_events", "ticker"),
-        TableResetTarget("market_earnings_history", "ticker"),
+        TableResetTarget("source_cache.earnings"),
+        TableResetTarget("public.market_earnings_events"),
+        TableResetTarget("public.market_earnings_history"),
     ],
     "macro": [
-        TableResetTarget("macro_daily", "series_key"),
-        TableResetTarget("macro_observations", "series_key"),
+        TableResetTarget("source_cache.macro_daily"),
+        TableResetTarget("public.macro_daily"),
+        TableResetTarget("public.macro_observations"),
     ],
     "release-calendar": [
-        TableResetTarget("economic_release_calendar", "series_key"),
+        TableResetTarget("public.economic_release_calendar"),
+    ],
+    "calendars": [
+        TableResetTarget("source_cache.calendars"),
+        TableResetTarget("public.exchange_trading_calendar"),
     ],
 }
 
-STATUS_TABLES: list[TableResetTarget] = [
-    TableResetTarget("data_source_runs", "run_id"),
-    TableResetTarget("data_asset_status", "asset_key"),
-    TableResetTarget("symbol_data_coverage", "ticker"),
+STATUS_TABLES = [
+    TableResetTarget("public.data_source_runs"),
+    TableResetTarget("public.data_asset_status"),
+    TableResetTarget("public.symbol_data_coverage"),
 ]
+ALL_DOMAINS = tuple(DOMAIN_TABLES)
 
-ALL_DOMAINS = ("market", "fundamentals", "earnings", "macro", "release-calendar")
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    database_dsn = args.database_dsn or os.environ.get("DATA_OPS_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not database_dsn:
+        raise RuntimeError("DATA_OPS_DATABASE_URL or DATABASE_URL must be set.")
+    domains = _normalize_domains(args.domains)
+    targets = [target for domain in domains for target in DOMAIN_TABLES[domain]]
+    if bool(args.include_status):
+        targets.extend(STATUS_TABLES)
+
+    import psycopg
+
+    summary: dict[str, Any] = {
+        "domains": domains,
+        "include_status": bool(args.include_status),
+        "dry_run": bool(args.dry_run),
+        "tables": [],
+    }
+    with psycopg.connect(database_dsn, autocommit=True) as conn:
+        for target in targets:
+            schema_name, table_name = _parse_table(target.table)
+            rows_before = _count_rows(conn, schema_name=schema_name, table_name=table_name)
+            item = {"table": target.table, "rows_before": rows_before}
+            summary["tables"].append(item)
+            if not args.dry_run:
+                if not args.yes:
+                    raise RuntimeError("Destructive reset requires --yes (or use --dry-run).")
+                conn.execute(f'truncate table "{schema_name}"."{table_name}"')
+                item["rows_deleted"] = rows_before
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Reset canonical domain data tables (ops-only wipe).")
-    parser.add_argument(
-        "--domains",
-        default="all",
-        help="Comma-separated domains: market,fundamentals,earnings,macro,release-calendar or all.",
-    )
-    parser.add_argument(
-        "--include-status",
-        action="store_true",
-        help="Also clear data_source_runs, data_asset_status, symbol_data_coverage.",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print tables/counts only. No deletes executed.",
-    )
-    parser.add_argument(
-        "--yes",
-        action="store_true",
-        help="Required for destructive execution when not using --dry-run.",
-    )
+    parser = argparse.ArgumentParser(description="Reset canonical domain data tables in local Postgres.")
+    parser.add_argument("--database-dsn", default=None)
+    parser.add_argument("--domains", default="all")
+    parser.add_argument("--include-status", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--yes", action="store_true")
     return parser
 
 
@@ -93,131 +114,22 @@ def _normalize_domains(raw: str) -> list[str]:
     return requested
 
 
-def _request(
-    *,
-    supabase_url: str,
-    service_role_key: str,
-    path: str,
-    method: str,
-    timeout_seconds: int = 60,
-) -> tuple[int, dict[str, str], str]:
-    url = f"{supabase_url.rstrip('/')}{path}"
-    headers = {
-        "apikey": service_role_key,
-        "Authorization": f"Bearer {service_role_key}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Prefer": "count=exact,return=representation",
-    }
-    request = urllib.request.Request(url=url, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            body = response.read().decode("utf-8", errors="replace")
-            response_headers = {k.lower(): v for k, v in response.headers.items()}
-            return int(response.status), response_headers, body
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{method} {path} failed: HTTP {exc.code} {detail}") from exc
+def _count_rows(conn, *, schema_name: str, table_name: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute(f'select count(*) from "{schema_name}"."{table_name}"')
+        return int(cur.fetchone()[0])
 
 
-def _count_rows(*, supabase_url: str, service_role_key: str, table: str, key_column: str) -> int:
-    query = urllib.parse.urlencode(
-        {
-            "select": key_column,
-            key_column: "not.is.null",
-            "limit": "1",
-        }
-    )
-    _, headers, _ = _request(
-        supabase_url=supabase_url,
-        service_role_key=service_role_key,
-        path=f"/rest/v1/{table}?{query}",
-        method="GET",
-    )
-    content_range = str(headers.get("content-range") or "").strip()
-    # Expected format: "0-0/1234" or "*/0"
-    if "/" not in content_range:
-        return 0
-    total = content_range.split("/")[-1].strip()
-    try:
-        return int(total)
-    except ValueError:
-        return 0
-
-
-def _delete_all_rows(*, supabase_url: str, service_role_key: str, table: str, key_column: str) -> int:
-    query = urllib.parse.urlencode({key_column: "not.is.null"})
-    _, headers, _ = _request(
-        supabase_url=supabase_url,
-        service_role_key=service_role_key,
-        path=f"/rest/v1/{table}?{query}",
-        method="DELETE",
-    )
-    content_range = str(headers.get("content-range") or "").strip()
-    if "/" not in content_range:
-        return 0
-    total = content_range.split("/")[-1].strip()
-    try:
-        return int(total)
-    except ValueError:
-        return 0
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
-    domains = _normalize_domains(args.domains)
-
-    supabase_url = str(os.environ.get("SUPABASE_URL") or "").strip()
-    service_role_key = str(os.environ.get("SUPABASE_SECRET_KEY") or "").strip()
-    if not supabase_url or not service_role_key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY must be set.")
-
-    targets: list[TableResetTarget] = []
-    for domain in domains:
-        targets.extend(DOMAIN_TABLES[domain])
-    if bool(args.include_status):
-        targets.extend(STATUS_TABLES)
-
-    summary: dict[str, Any] = {
-        "domains": domains,
-        "include_status": bool(args.include_status),
-        "dry_run": bool(args.dry_run),
-        "tables": [],
-    }
-
-    for target in targets:
-        count = _count_rows(
-            supabase_url=supabase_url,
-            service_role_key=service_role_key,
-            table=target.table,
-            key_column=target.key_column,
-        )
-        summary["tables"].append(
-            {
-                "table": target.table,
-                "key_column": target.key_column,
-                "rows_before": count,
-            }
-        )
-
-    if bool(args.dry_run):
-        print(json.dumps(summary, indent=2))
-        return 0
-
-    if not bool(args.yes):
-        raise RuntimeError("Destructive reset requires --yes (or use --dry-run).")
-
-    for row in summary["tables"]:
-        deleted = _delete_all_rows(
-            supabase_url=supabase_url,
-            service_role_key=service_role_key,
-            table=str(row["table"]),
-            key_column=str(row["key_column"]),
-        )
-        row["rows_deleted"] = deleted
-
-    print(json.dumps(summary, indent=2))
-    return 0
+def _parse_table(table_name: str) -> tuple[str, str]:
+    parts = str(table_name).strip().split(".")
+    if len(parts) == 1:
+        parts = ["public", parts[0]]
+    if len(parts) != 2:
+        raise ValueError(f"Invalid table name: {table_name!r}")
+    for part in parts:
+        if not part.replace("_", "a").isalnum() or part[0].isdigit():
+            raise ValueError(f"Invalid identifier in table name: {table_name!r}")
+    return parts[0], parts[1]
 
 
 if __name__ == "__main__":

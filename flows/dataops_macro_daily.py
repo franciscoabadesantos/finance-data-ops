@@ -22,7 +22,7 @@ from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_al
 from finance_data_ops.ops.incidents import classify_failure
 from finance_data_ops.providers.macro import DEFAULT_REQUIRED_SERIES_KEYS, MacroDataProvider
 from finance_data_ops.providers.macro import MacroSeriesSpec
-from finance_data_ops.publish.client import Publisher, RecordingPublisher, SupabaseRestPublisher
+from finance_data_ops.publish.client import Publisher, RecordingPublisher, PostgresPublisher
 from finance_data_ops.publish.macro import publish_macro_surfaces
 from finance_data_ops.publish.status import publish_status_surfaces
 from finance_data_ops.refresh.macro_daily import refresh_macro_daily
@@ -97,12 +97,9 @@ def run_dataops_macro_daily(
         if publisher is not None:
             publisher_impl = publisher
         else:
-            settings.require_supabase()
-            publisher_impl = SupabaseRestPublisher(
-                supabase_url=settings.supabase_url,
-                service_role_key=settings.supabase_secret_key,
-            )
-        LOGGER.info("Using Supabase publisher for macro/status surfaces.")
+            settings.require_database()
+            publisher_impl = PostgresPublisher(database_dsn=settings.database_dsn)
+        LOGGER.info("Using Postgres publisher for macro/status surfaces.")
     else:
         publisher_impl = publisher or RecordingPublisher()
         LOGGER.info("Publish disabled; using recording publisher (dry-run mode).")
@@ -542,7 +539,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end", required=True, help="End date (YYYY-MM-DD).")
     parser.add_argument("--cache-root", default=None)
     parser.add_argument("--max-attempts", type=int, default=3)
-    parser.add_argument("--no-publish", action="store_true", help="Skip Supabase publish steps.")
+    parser.add_argument("--no-publish", action="store_true", help="Skip Postgres publish steps.")
     parser.add_argument("--allow-unhealthy", action="store_true", help="Do not raise on unhealthy completion.")
     parser.add_argument("--force-recompute", action="store_true", help="Rewrite macro parquet outputs for selected range.")
     return parser

@@ -53,8 +53,7 @@ def resolve_symbols(
             normalized_region,
             require_market=True,
             cache_root=settings.cache_root,
-            supabase_url=settings.supabase_url,
-            service_role_key=settings.supabase_secret_key,
+            database_dsn=settings.database_dsn,
         )
         if registry_symbols:
             return registry_symbols

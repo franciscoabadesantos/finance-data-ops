@@ -6,13 +6,13 @@ from typing import Any
 
 from finance_data_ops.providers.macro import MACRO_SERIES_CATALOG, MacroDataProvider
 from finance_data_ops.publish.macro import publish_macro_surfaces
-from finance_data_ops.publish.client import SupabaseRestPublisher
+from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.refresh.macro_daily import refresh_macro_daily
 
 
 def load_macro_chunk(
     *,
-    publisher: SupabaseRestPublisher,
+    publisher: PostgresPublisher,
     provider: MacroDataProvider,
     cache_root: str,
     start_date: str,

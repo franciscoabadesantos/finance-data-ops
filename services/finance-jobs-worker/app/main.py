@@ -6,7 +6,6 @@ from time import perf_counter
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from supabase import create_client
 
 from app.config import get_settings
 from app.executors import JobExecutor
@@ -22,8 +21,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-    supabase = create_client(settings.supabase_url, settings.supabase_secret_key)
-    registry = WorkerRegistryStore(supabase)
+    registry = WorkerRegistryStore(settings.database_url)
     tasks = CloudTasksEnqueuer(settings)
     executor = JobExecutor(settings=settings, registry=registry, tasks=tasks)
 

@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import json
 from pathlib import Path
-import urllib.parse
-import urllib.request
 from typing import Any
 
 import pandas as pd
@@ -132,39 +130,28 @@ def fetch_registry_row_by_key(
     *,
     registry_key: str,
     cache_root: str | Path,
-    supabase_url: str | None = None,
-    service_role_key: str | None = None,
+    database_dsn: str | None = None,
     timeout_seconds: int = 30,
 ) -> dict[str, Any] | None:
     normalized_key = str(registry_key).strip()
     if not normalized_key:
         return None
 
-    url = str(supabase_url or "").strip().rstrip("/")
-    key = str(service_role_key or "").strip()
-    if url and key:
+    dsn = str(database_dsn or "").strip()
+    if dsn:
         try:
-            params = urllib.parse.urlencode(
-                {
-                    "select": ",".join(TICKER_REGISTRY_COLUMNS),
-                    "registry_key": f"eq.{normalized_key}",
-                    "limit": "1",
-                }
-            )
-            request = urllib.request.Request(
-                url=f"{url}/rest/v1/ticker_registry?{params}",
-                headers={
-                    "apikey": key,
-                    "Authorization": f"Bearer {key}",
-                    "Accept": "application/json",
-                },
-                method="GET",
-            )
-            with urllib.request.urlopen(request, timeout=int(timeout_seconds)) as response:
-                raw = response.read().decode("utf-8")
-            parsed = json.loads(raw) if raw else []
-            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
-                return parsed[0]
+            import psycopg
+            from psycopg.rows import dict_row
+
+            with psycopg.connect(dsn, connect_timeout=int(timeout_seconds), row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"select {', '.join(TICKER_REGISTRY_COLUMNS)} from public.ticker_registry where registry_key = %s limit 1",
+                        (normalized_key,),
+                    )
+                    row = cur.fetchone()
+            if row is not None:
+                return dict(row)
         except Exception:
             pass
 

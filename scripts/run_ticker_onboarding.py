@@ -25,7 +25,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end", type=str, default=None, help="Optional market backfill end YYYY-MM-DD.")
     parser.add_argument("--history-limit", type=int, default=24, help="Backfill earnings history limit.")
     parser.add_argument("--cache-root", type=str, default=None, help="Override local cache root.")
-    parser.add_argument("--no-publish", action="store_true", help="Skip remote Supabase publishes.")
+    parser.add_argument("--no-publish", action="store_true", help="Skip remote Postgres publishes.")
     return parser
 
 

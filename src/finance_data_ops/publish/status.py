@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import urllib.parse
-import urllib.request
 from typing import Any
 
 from finance_data_ops.publish.client import Publisher
@@ -41,8 +39,7 @@ def publish_status_surfaces(
 
 def fetch_symbol_data_coverage_rows(
     *,
-    supabase_url: str,
-    service_role_key: str,
+    database_dsn: str,
     tickers: list[str],
     timeout_seconds: int = 30,
 ) -> list[dict[str, Any]]:
@@ -50,24 +47,25 @@ def fetch_symbol_data_coverage_rows(
     if not normalized:
         return []
 
-    encoded_tickers = ",".join(urllib.parse.quote(f'"{ticker}"', safe="") for ticker in normalized)
-    query = (
-        "select=ticker,market_data_available,market_data_last_date,"
-        "fundamentals_available,fundamentals_last_date,"
-        "earnings_available,next_earnings_date,signal_available"
-        f"&ticker=in.({encoded_tickers})"
-    )
-    base = str(supabase_url).strip().rstrip("/")
-    url = f"{base}/rest/v1/symbol_data_coverage?{query}"
-    headers = {
-        "apikey": str(service_role_key).strip(),
-        "Authorization": f"Bearer {str(service_role_key).strip()}",
-        "Accept": "application/json",
-    }
-    request = urllib.request.Request(url=url, headers=headers, method="GET")
-    with urllib.request.urlopen(request, timeout=int(timeout_seconds)) as response:
-        raw = response.read().decode("utf-8")
-    parsed = json.loads(raw) if raw else []
-    if not isinstance(parsed, list):
+    dsn = str(database_dsn or "").strip()
+    if not dsn:
         return []
-    return [row for row in parsed if isinstance(row, dict)]
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("psycopg[binary] is required to read symbol coverage from Postgres.") from exc
+    with psycopg.connect(dsn, connect_timeout=int(timeout_seconds), row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select ticker, market_data_available, market_data_last_date,
+                       fundamentals_available, fundamentals_last_date,
+                       earnings_available, next_earnings_date, signal_available
+                from public.symbol_data_coverage
+                where ticker = any(%s)
+                """,
+                (normalized,),
+            )
+            rows = cur.fetchall()
+    return [dict(row) for row in rows]

@@ -13,7 +13,7 @@ from flows.dataops_market_daily import run_dataops_market_daily
 from flows.dataops_release_calendar_daily import run_dataops_release_calendar_daily
 from finance_data_ops.providers.macro import MacroSeriesSpec
 from finance_data_ops.providers.release_calendar import EconomicReleaseCalendarProvider
-from finance_data_ops.publish.client import SupabaseRestPublisher
+from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.release_calendar import publish_release_calendar_surfaces
 from finance_data_ops.rebuild.executor import execute_rebuild_plan
 from finance_data_ops.rebuild.planner import build_rebuild_plan
@@ -82,10 +82,7 @@ def run_data_ops_rebuild_job(
         }
 
     data_ops_settings = load_settings()
-    publisher = SupabaseRestPublisher(
-        supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_secret_key,
-    )
+    publisher = PostgresPublisher(database_dsn=settings.database_url)
     progress = None
     if job_id:
         progress = RebuildProgressStore(
@@ -318,10 +315,7 @@ def _run_release_calendar_upsert(
             "preview": table_row,
         }
 
-    publisher = SupabaseRestPublisher(
-        supabase_url=settings.supabase_url,
-        service_role_key=settings.supabase_secret_key,
-    )
+    publisher = PostgresPublisher(database_dsn=settings.database_url)
     frame = pd.DataFrame([table_row])
     publish_result = publish_release_calendar_surfaces(
         publisher=publisher,

@@ -21,7 +21,7 @@ if str(SRC_PATH) not in sys.path:
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.ops.incidents import classify_failure
 from finance_data_ops.providers.release_calendar import EconomicReleaseCalendarProvider
-from finance_data_ops.publish.client import Publisher, RecordingPublisher, SupabaseRestPublisher
+from finance_data_ops.publish.client import Publisher, RecordingPublisher, PostgresPublisher
 from finance_data_ops.publish.release_calendar import publish_release_calendar_surfaces
 from finance_data_ops.publish.status import publish_status_surfaces
 from finance_data_ops.refresh.market_daily import RefreshRunResult
@@ -92,11 +92,8 @@ def run_dataops_release_calendar_daily(
         if publisher is not None:
             publisher_impl = publisher
         else:
-            settings.require_supabase()
-            publisher_impl = SupabaseRestPublisher(
-                supabase_url=settings.supabase_url,
-                service_role_key=settings.supabase_secret_key,
-            )
+            settings.require_database()
+            publisher_impl = PostgresPublisher(database_dsn=settings.database_dsn)
     else:
         publisher_impl = publisher or RecordingPublisher()
 
@@ -578,7 +575,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sleep-seconds", type=float, default=0.0)
     parser.add_argument("--official-start-year", type=int, default=None)
     parser.add_argument("--official-end-year", type=int, default=None)
-    parser.add_argument("--no-publish", action="store_true", help="Skip Supabase publish steps.")
+    parser.add_argument("--no-publish", action="store_true", help="Skip Postgres publish steps.")
     parser.add_argument("--allow-unhealthy", action="store_true", help="Do not raise on unhealthy completion.")
     parser.add_argument("--force-recompute", action="store_true", help="Rewrite release-calendar parquet output.")
     return parser

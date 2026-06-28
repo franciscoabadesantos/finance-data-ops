@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from finance_data_ops.publish.client import SupabaseRestPublisher
+from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.prices import publish_prices_surfaces
 from finance_data_ops.providers.market import MarketDataProvider
 from finance_data_ops.refresh.market_daily import refresh_market_daily
@@ -13,7 +13,7 @@ from finance_data_ops.refresh.quotes_latest import refresh_latest_quotes
 
 def load_market_chunk(
     *,
-    publisher: SupabaseRestPublisher,
+    publisher: PostgresPublisher,
     provider: MarketDataProvider,
     cache_root: str,
     tickers: tuple[str, ...],
