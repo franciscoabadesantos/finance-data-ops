@@ -113,10 +113,3 @@ alter table if exists public.etf_sector_weights
 
 create index if not exists idx_etf_sector_weights_ticker_weight
   on public.etf_sector_weights (etf_ticker, as_of desc, weight desc);
-
--- Row Level Security: data-ops (writes) and finance-backend (reads) both use the Supabase
--- service role key, which BYPASSES RLS, so no policies are needed. With RLS enabled and no
--- policies, the anon/public PostgREST API cannot read these tables. (ENABLE is idempotent.)
-alter table public.ticker_profile enable row level security;
-alter table public.etf_holdings enable row level security;
-alter table public.etf_sector_weights enable row level security;

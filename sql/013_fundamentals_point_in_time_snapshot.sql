@@ -20,10 +20,6 @@ create index if not exists idx_ticker_fundamental_point_in_time_as_of
 create index if not exists idx_ticker_fundamental_point_in_time_ticker_as_of
   on public.ticker_fundamental_point_in_time (ticker, as_of_date desc);
 
--- RLS: written by data-ops + read (via the MV) by finance-backend, both using the service role
--- key (which bypasses RLS), so no policies are needed; this just closes the anon/public API.
-alter table public.ticker_fundamental_point_in_time enable row level security;
-
 insert into public.ticker_fundamental_point_in_time (
   ticker,
   metric,

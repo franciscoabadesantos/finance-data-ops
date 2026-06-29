@@ -226,9 +226,6 @@ create index idx_ticker_fundamental_point_in_time_as_of
 create index idx_ticker_fundamental_point_in_time_ticker_as_of
   on public.ticker_fundamental_point_in_time (ticker, as_of_date desc);
 
-alter table public.ticker_fundamental_point_in_time enable row level security;
-
-
 create materialized view public.mv_latest_fundamentals as
 select
   ranked.ticker,
@@ -331,9 +328,6 @@ create table public.ticker_profile (
 create index idx_ticker_profile_updated_at
   on public.ticker_profile (updated_at desc);
 
-alter table public.ticker_profile enable row level security;
-
-
 create table public.etf_holdings (
   etf_ticker text not null,
   holding_symbol text not null,
@@ -349,9 +343,6 @@ create table public.etf_holdings (
 create index idx_etf_holdings_ticker_weight
   on public.etf_holdings (etf_ticker, as_of desc, weight desc);
 
-alter table public.etf_holdings enable row level security;
-
-
 create table public.etf_sector_weights (
   etf_ticker text not null,
   sector text not null,
@@ -365,9 +356,6 @@ create table public.etf_sector_weights (
 
 create index idx_etf_sector_weights_ticker_weight
   on public.etf_sector_weights (etf_ticker, as_of desc, weight desc);
-
-alter table public.etf_sector_weights enable row level security;
-
 
 create table public.market_earnings_events (
   ticker text not null,

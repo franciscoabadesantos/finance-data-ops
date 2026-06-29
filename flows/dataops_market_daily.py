@@ -21,6 +21,7 @@ if str(SRC_PATH) not in sys.path:
 from finance_data_ops.derived.market_stats import compute_ticker_market_stats
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.ops.incidents import classify_failure
+from finance_data_ops.providers.exchange_calendar import mic_for_symbol, trading_sessions
 from finance_data_ops.providers.market import MarketDataProvider
 from finance_data_ops.publish.client import Publisher, RecordingPublisher, PostgresPublisher
 from finance_data_ops.publish.prices import publish_prices_surfaces
@@ -83,6 +84,11 @@ def run_dataops_market_daily(
 
     cached_prices = read_parquet_table("market_price_daily", cache_root=settings.cache_root, required=False)
     cached_quotes = read_parquet_table("market_quotes", cache_root=settings.cache_root, required=False)
+    cached_trading_calendar = read_parquet_table(
+        "exchange_trading_calendar",
+        cache_root=settings.cache_root,
+        required=False,
+    )
     cached_fundamentals = read_parquet_table(
         "market_fundamentals_v2",
         cache_root=settings.cache_root,
@@ -131,6 +137,8 @@ def run_dataops_market_daily(
         market_stats_frame=market_stats,
         prices_run=prices_run,
         quotes_run=quotes_run,
+        trading_calendar_frame=cached_trading_calendar,
+        symbols=normalized_symbols,
     )
     run_rows = [
         _refresh_run_to_row(prices_run),
@@ -400,6 +408,8 @@ def _build_asset_status_rows(
     market_stats_frame: pd.DataFrame,
     prices_run: RefreshRunResult,
     quotes_run: RefreshRunResult,
+    trading_calendar_frame: pd.DataFrame | None = None,
+    symbols: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
     prices_last = _frame_datetime_max(prices_frame, "date")
@@ -407,21 +417,25 @@ def _build_asset_status_rows(
     quotes_last = _frame_datetime_max(quotes_frame, quote_time_column, utc=True)
     stats_last = _frame_datetime_max(market_stats_frame, "updated_at", utc=True)
 
-    price_state = classify_freshness(
+    price_state = _classify_exchange_calendar_freshness(
         last_observed_at=prices_last,
         now=now,
         fresh_within=timedelta(days=2),
         tolerance=timedelta(days=2),
         partial=str(prices_run.status) == FreshnessState.PARTIAL,
         failure_state=prices_run.status,
+        trading_calendar_frame=trading_calendar_frame,
+        symbols=symbols or [],
     )
-    quote_state = classify_freshness(
+    quote_state = _classify_exchange_calendar_freshness(
         last_observed_at=quotes_last,
         now=now,
         fresh_within=timedelta(hours=26),
         tolerance=timedelta(hours=24),
         partial=str(quotes_run.status) == FreshnessState.PARTIAL,
         failure_state=quotes_run.status,
+        trading_calendar_frame=trading_calendar_frame,
+        symbols=symbols or [],
     )
     stats_state = classify_freshness(
         last_observed_at=stats_last,
@@ -481,6 +495,150 @@ def _build_asset_status_rows(
             "updated_at": now_iso,
         },
     ]
+
+
+def _classify_exchange_calendar_freshness(
+    *,
+    last_observed_at: Any,
+    now: datetime,
+    fresh_within: timedelta,
+    tolerance: timedelta,
+    partial: bool,
+    failure_state: str | None,
+    trading_calendar_frame: pd.DataFrame | None,
+    symbols: list[str],
+    tolerated_missing_sessions: int = 1,
+) -> FreshnessState:
+    if partial:
+        return FreshnessState.PARTIAL
+
+    observed_date = _coerce_date(last_observed_at)
+    expected_date = _latest_expected_session_date(
+        trading_calendar_frame=trading_calendar_frame,
+        symbols=symbols,
+        as_of_date=now.date(),
+    )
+    if observed_date is None or expected_date is None:
+        return classify_freshness(
+            last_observed_at=last_observed_at,
+            now=now,
+            fresh_within=fresh_within,
+            tolerance=tolerance,
+            partial=False,
+            failure_state=failure_state,
+        )
+
+    if observed_date >= expected_date:
+        return FreshnessState.FRESH
+
+    missing_sessions = _count_expected_sessions_after(
+        trading_calendar_frame=trading_calendar_frame,
+        symbols=symbols,
+        after_date=observed_date,
+        as_of_date=expected_date,
+    )
+    if missing_sessions <= max(int(tolerated_missing_sessions), 0):
+        return FreshnessState.STALE_WITHIN_TOLERANCE
+
+    failure_token = str(failure_state or "").strip().lower()
+    if failure_token == FreshnessState.FAILED_RETRYING:
+        return FreshnessState.FAILED_RETRYING
+    return FreshnessState.FAILED_HARD
+
+
+def _latest_expected_session_date(
+    *,
+    trading_calendar_frame: pd.DataFrame | None,
+    symbols: list[str],
+    as_of_date: date,
+) -> date | None:
+    mics = _mics_for_symbols(symbols)
+    calendar_sessions = _calendar_sessions_from_frame(
+        trading_calendar_frame=trading_calendar_frame,
+        mics=mics,
+        start_date=as_of_date - timedelta(days=14),
+        end_date=as_of_date,
+    )
+    if calendar_sessions:
+        return max(calendar_sessions)
+
+    fallback_sessions: list[date] = []
+    for mic in mics:
+        try:
+            fallback_sessions.extend(
+                trading_sessions(mic, start=as_of_date - timedelta(days=14), end=as_of_date)
+            )
+        except Exception:
+            continue
+    return max(fallback_sessions) if fallback_sessions else None
+
+
+def _count_expected_sessions_after(
+    *,
+    trading_calendar_frame: pd.DataFrame | None,
+    symbols: list[str],
+    after_date: date,
+    as_of_date: date,
+) -> int:
+    if after_date >= as_of_date:
+        return 0
+    mics = _mics_for_symbols(symbols)
+    calendar_sessions = _calendar_sessions_from_frame(
+        trading_calendar_frame=trading_calendar_frame,
+        mics=mics,
+        start_date=after_date + timedelta(days=1),
+        end_date=as_of_date,
+    )
+    if calendar_sessions:
+        return len(set(calendar_sessions))
+
+    fallback_sessions: set[date] = set()
+    for mic in mics:
+        try:
+            fallback_sessions.update(trading_sessions(mic, start=after_date + timedelta(days=1), end=as_of_date))
+        except Exception:
+            continue
+    return len(fallback_sessions)
+
+
+def _calendar_sessions_from_frame(
+    *,
+    trading_calendar_frame: pd.DataFrame | None,
+    mics: set[str],
+    start_date: date,
+    end_date: date,
+) -> list[date]:
+    if trading_calendar_frame is None or trading_calendar_frame.empty:
+        return []
+    required = {"exchange_mic", "session_date"}
+    if not required.issubset(set(trading_calendar_frame.columns)):
+        return []
+    frame = trading_calendar_frame.copy()
+    mic_series = frame["exchange_mic"].astype(str).str.strip().str.upper()
+    dates = pd.to_datetime(frame["session_date"], errors="coerce")
+    mask = mic_series.isin(mics) & dates.notna()
+    if "is_trading_day" in frame.columns:
+        mask = mask & frame["is_trading_day"].fillna(True).astype(bool)
+    out: list[date] = []
+    for value in dates.loc[mask]:
+        session_date = pd.Timestamp(value).date()
+        if start_date <= session_date <= end_date:
+            out.append(session_date)
+    return out
+
+
+def _mics_for_symbols(symbols: list[str]) -> set[str]:
+    mics = {mic_for_symbol(symbol) for symbol in symbols if str(symbol).strip()}
+    return mics or {mic_for_symbol("")}
+
+
+def _coerce_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return pd.Timestamp(parsed).date()
 
 
 def _provider_from_frame(frame: pd.DataFrame, *, fallback: str) -> str:

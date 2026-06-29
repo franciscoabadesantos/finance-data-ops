@@ -274,6 +274,49 @@ def test_market_coverage_merge_preserves_existing_fundamentals_and_earnings(tmp_
     assert rows_by_ticker["SPY"]["next_earnings_date"] == TEST_END_DATE
 
 
+def test_market_freshness_uses_trading_calendar_over_calendar_days() -> None:
+    calendar = pd.DataFrame(
+        [
+            {"exchange_mic": "XNYS", "session_date": "2026-06-26", "is_trading_day": True},
+            {"exchange_mic": "XNYS", "session_date": "2026-06-29", "is_trading_day": True},
+        ]
+    )
+
+    state = market_flow._classify_exchange_calendar_freshness(
+        last_observed_at=datetime(2026, 6, 26, 21, 0, tzinfo=UTC),
+        now=datetime(2026, 6, 29, 12, 0, tzinfo=UTC),
+        fresh_within=timedelta(hours=26),
+        tolerance=timedelta(hours=24),
+        partial=False,
+        failure_state="failed_hard",
+        trading_calendar_frame=calendar,
+        symbols=["SPY"],
+    )
+
+    assert state == market_flow.FreshnessState.STALE_WITHIN_TOLERANCE
+
+
+def test_market_freshness_treats_holiday_gap_as_current_session() -> None:
+    calendar = pd.DataFrame(
+        [
+            {"exchange_mic": "XNYS", "session_date": "2026-07-02", "is_trading_day": True},
+        ]
+    )
+
+    state = market_flow._classify_exchange_calendar_freshness(
+        last_observed_at=datetime(2026, 7, 2, 21, 0, tzinfo=UTC),
+        now=datetime(2026, 7, 3, 18, 0, tzinfo=UTC),
+        fresh_within=timedelta(hours=26),
+        tolerance=timedelta(hours=24),
+        partial=False,
+        failure_state="failed_hard",
+        trading_calendar_frame=calendar,
+        symbols=["SPY"],
+    )
+
+    assert state == market_flow.FreshnessState.FRESH
+
+
 def test_ticker_signal_dispatch_is_best_effort_after_market_publish(monkeypatch) -> None:
     result = market_flow._dispatch_ticker_signal_jobs_after_market_publish(
         publish_enabled=True,
