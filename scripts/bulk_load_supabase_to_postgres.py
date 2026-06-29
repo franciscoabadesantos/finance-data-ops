@@ -31,6 +31,8 @@ TABLES = [
     ("public.macro_daily", "as_of_date,series_key"),
     ("public.economic_release_calendar", "series_key,observation_period"),
     ("public.ticker_registry", "registry_key"),
+    ("public.analysis_jobs", "job_id"),
+    ("public.analysis_results", "job_id"),
 ]
 
 
