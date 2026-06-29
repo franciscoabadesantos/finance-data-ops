@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import json
 import os
 import urllib.parse
 import urllib.request
@@ -154,9 +155,11 @@ def copy_table_rest_to_postgres(
                 supabase_key=supabase_key,
                 table_name=relation_name,
                 columns=columns,
+                order_columns=[part.strip() for part in conflict_columns.split(",") if part.strip()],
                 offset=offset,
                 limit=page_size,
             )
+            csv_text = normalize_rest_csv_for_target(target_conn, table_name=table_name, csv_text=csv_text)
             rows = max(sum(1 for _ in csv.reader(io.StringIO(csv_text))) - 1, 0)
             if rows == 0:
                 break
@@ -177,10 +180,14 @@ def fetch_supabase_csv(
     supabase_key: str,
     table_name: str,
     columns: list[str],
+    order_columns: list[str],
     offset: int,
     limit: int,
 ) -> str:
-    query = urllib.parse.urlencode({"select": ",".join(columns), "offset": str(offset), "limit": str(limit)})
+    order = ",".join(f"{column}.asc" for column in order_columns)
+    query = urllib.parse.urlencode(
+        {"select": ",".join(columns), "order": order, "offset": str(offset), "limit": str(limit)}
+    )
     url = f"{supabase_url.rstrip('/')}/rest/v1/{urllib.parse.quote(table_name)}?{query}"
     request = urllib.request.Request(
         url,
@@ -217,10 +224,56 @@ def copy_csv_to_target(
     )
 
 
+def normalize_rest_csv_for_target(target_conn, *, table_name: str, csv_text: str) -> str:
+    schema_name, relation_name = _parse_table(table_name)
+    json_columns = {
+        str(row[0])
+        for row in target_conn.execute(
+            """
+            select column_name
+            from information_schema.columns
+            where table_schema = %s and table_name = %s
+              and data_type in ('json', 'jsonb')
+            """,
+            (schema_name, relation_name),
+        ).fetchall()
+    }
+    if not json_columns:
+        return csv_text
+
+    source = io.StringIO(csv_text)
+    reader = csv.DictReader(source)
+    if not reader.fieldnames:
+        return csv_text
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=reader.fieldnames, lineterminator="\n")
+    writer.writeheader()
+    for row in reader:
+        for column in json_columns.intersection(row):
+            value = row.get(column)
+            if not value:
+                continue
+            try:
+                decoded = json.loads(value)
+            except json.JSONDecodeError:
+                try:
+                    decoded = json.loads(value.replace('\\"', '"'))
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(decoded, str):
+                try:
+                    decoded = json.loads(decoded)
+                except json.JSONDecodeError:
+                    pass
+            row[column] = json.dumps(decoded, separators=(",", ":"))
+        writer.writerow(row)
+    return output.getvalue()
+
+
 def create_temp_like(target_conn, *, schema_name: str, table_name: str) -> str:
     temp_name = f"bulk_{schema_name}_{table_name}"
     target_conn.execute(f'drop table if exists "{temp_name}"')
-    target_conn.execute(f'create temp table "{temp_name}" (like "{schema_name}"."{table_name}" including defaults) on commit drop')
+    target_conn.execute(f'create temp table "{temp_name}" (like "{schema_name}"."{table_name}" including defaults)')
     return temp_name
 
 
