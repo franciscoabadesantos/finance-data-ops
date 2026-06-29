@@ -33,6 +33,8 @@ TABLES = [
     ("public.ticker_registry", "registry_key"),
     ("public.analysis_jobs", "job_id"),
     ("public.analysis_results", "job_id"),
+    ("public.etf_holdings", "etf_ticker,holding_symbol,as_of"),
+    ("public.etf_sector_weights", "etf_ticker,sector,as_of"),
 ]
 
 
