@@ -97,16 +97,20 @@ def test_publish_v2_contract_writes_expected_tables() -> None:
     tables = [call["table"] for call in publisher.upserts]
     assert tables == [
         "market_fundamentals_v2",
+        "source_cache.fundamentals",
         "ticker_fundamental_summary",
         "market_earnings_events",
         "market_earnings_history",
+        "source_cache.earnings",
     ]
 
     conflicts = {call["table"]: call["on_conflict"] for call in publisher.upserts}
     assert conflicts["market_fundamentals_v2"] == "ticker,period,period_end,metric"
+    assert conflicts["source_cache.fundamentals"] == "symbol,metric,period_end,period_type,report_date"
     assert conflicts["ticker_fundamental_summary"] == "ticker"
     assert conflicts["market_earnings_events"] == "ticker,earnings_date"
     assert conflicts["market_earnings_history"] == "ticker,earnings_date"
+    assert conflicts["source_cache.earnings"] == "symbol,report_date,earnings_date,fiscal_period"
 
     fundamentals_row = next(call for call in publisher.upserts if call["table"] == "market_fundamentals_v2")["rows"][0]
     assert set(fundamentals_row.keys()) == {

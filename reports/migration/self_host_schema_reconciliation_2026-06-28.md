@@ -21,7 +21,7 @@ Supabase PostgREST currently exposes only the legacy public surfaces for this sc
 - `exchange_trading_calendar`: `exchange_mic`, `session_date`, `is_half_day`, `ingested_at`.
 - `ticker_registry`: already includes `exchange`, `exchange_mic`, `currency`.
 
-`source_cache.*` is not present in the current Supabase schema, so this repo now writes those tables directly in the local Postgres schema.
+`source_cache.*` is not present in the current Supabase schema. This repo writes those canonical tables at runtime, but their DDL is owned by the feature-store migration applied during S4.
 
 ## Invariants
 
@@ -32,4 +32,4 @@ Supabase PostgREST currently exposes only the legacy public surfaces for this sc
 
 ## Follow-Up
 
-No Supabase-only extra fields need a feature-store follow-up migration. The only divergence is expected: Supabase has legacy public tables, while the self-host target receives the new `source_cache` tables from `sql/015_self_host_source_cache_and_signals.sql`.
+No Supabase-only extra fields need a feature-store follow-up migration. The only divergence is expected: Supabase has legacy public tables, while the self-host target receives the new `source_cache` tables from the feature-store schema. This repo owns only `public.production_signals` DDL in `sql/015_production_signals.sql`.

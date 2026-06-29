@@ -104,6 +104,7 @@ def test_publish_contract_writes_expected_tables() -> None:
     tables = [call["table"] for call in publisher.upserts]
     assert tables == [
         "market_price_daily",
+        "source_cache.market_price_daily",
         "market_quotes",
         "market_quotes_history",
         "ticker_market_stats_snapshot",
@@ -113,6 +114,7 @@ def test_publish_contract_writes_expected_tables() -> None:
     ]
     conflict_by_table = {call["table"]: call["on_conflict"] for call in publisher.upserts}
     assert conflict_by_table["market_price_daily"] == "ticker,date"
+    assert conflict_by_table["source_cache.market_price_daily"] == "symbol,price_date"
     assert conflict_by_table["market_quotes"] == "ticker"
     assert conflict_by_table["market_quotes_history"] == "ticker,fetched_at"
     assert conflict_by_table["data_source_runs"] == "run_id"

@@ -206,9 +206,11 @@ def test_smoke_publish_failure_still_attempts_status(tmp_path) -> None:
     assert pipeline_row["coverage_status"] == "failed_hard"
 
 
-def test_publish_enabled_requires_supabase_env_without_injected_publisher(tmp_path, monkeypatch) -> None:
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
+def test_publish_enabled_requires_database_env_without_injected_publisher(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("DATA_OPS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("POSTGRES_DSN", raising=False)
+    monkeypatch.delenv("PG_DSN", raising=False)
 
     try:
         run_dataops_market_daily(
@@ -223,9 +225,9 @@ def test_publish_enabled_requires_supabase_env_without_injected_publisher(tmp_pa
         )
     except ValueError as exc:
         message = str(exc)
-        assert "SUPABASE_URL" in message or "SUPABASE_SECRET_KEY" in message
+        assert "DATA_OPS_DATABASE_URL" in message
     else:  # pragma: no cover - defensive
-        raise AssertionError("Expected missing Supabase env validation error.")
+        raise AssertionError("Expected missing database env validation error.")
 
 
 def test_market_coverage_merge_preserves_existing_fundamentals_and_earnings(tmp_path) -> None:
@@ -273,40 +275,10 @@ def test_market_coverage_merge_preserves_existing_fundamentals_and_earnings(tmp_
 
 
 def test_ticker_signal_dispatch_is_best_effort_after_market_publish(monkeypatch) -> None:
-    monkeypatch.setenv("BACKEND_BASE_URL", "https://backend.example")
-    monkeypatch.setenv("BACKEND_SERVICE_TOKEN", "token")
-    monkeypatch.setattr(
-        market_flow,
-        "_fetch_promotable_registry_rows",
-        lambda **_kwargs: [
-            {"ticker": "ADBE", "region": "us", "exchange": None},
-            {"ticker": "SPY", "region": "us", "exchange": None},
-        ],
-    )
-    monkeypatch.setattr(
-        market_flow,
-        "_fetch_completed_signal_jobs_for_date",
-        lambda **_kwargs: set(),
-    )
-
-    def _submit(**kwargs):
-        if kwargs["ticker"] == "ADBE":
-            raise RuntimeError("HTTP 500")
-        return {"job_id": "job-spy", "status": "queued"}
-
-    monkeypatch.setattr(market_flow, "_submit_ticker_signal_job", _submit)
-
     result = market_flow._dispatch_ticker_signal_jobs_after_market_publish(
         publish_enabled=True,
         hard_failure=False,
         as_of_date=TEST_END_DATE,
-        supabase_url="https://supabase.example",
-        service_role_key="secret",
     )
 
-    assert result["status"] == "partial"
-    assert result["requested"] == 2
-    assert result["submitted"] == 1
-    assert result["failed"] == 1
-    assert result["submitted_jobs"][0]["ticker"] == "SPY"
-    assert result["failed_jobs"][0]["ticker"] == "ADBE"
+    assert result == {"status": "skipped", "reason": "replaced_by_daily_production_inference"}
