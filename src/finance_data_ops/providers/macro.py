@@ -36,7 +36,7 @@ STALENESS_MAX_BDAYS_BY_FREQUENCY: dict[MacroFrequency, int] = {
 
 MACRO_SERIES_CATALOG: tuple[MacroSeriesSpec, ...] = (
     MacroSeriesSpec("VIX", "yfinance", "^VIX", "daily", True, required_from_date=date(1990, 1, 2), description="CBOE Volatility Index close."),
-    MacroSeriesSpec("VIX3M", "yfinance", "^VIX3M", "daily", True, required_from_date=date(2006, 7, 17), description="CBOE 3M volatility index close."),
+    MacroSeriesSpec("VIX3M", "fred", "VXVCLS", "daily", True, required_from_date=date(2007, 12, 4), description="CBOE 3M volatility index close."),
     MacroSeriesSpec("VVIX", "yfinance", "^VVIX", "daily", True, required_from_date=date(2007, 1, 3), description="CBOE VVIX close."),
     MacroSeriesSpec("10Y_Treasury_Yield", "fred", "DGS10", "daily", True, description="10Y treasury yield."),
     MacroSeriesSpec("2Y_Treasury_Yield", "fred", "DGS2", "daily", True, description="2Y treasury yield."),

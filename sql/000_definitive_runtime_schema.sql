@@ -770,7 +770,7 @@ insert into public.macro_series_catalog (
 )
 values
   ('VIX', 'yfinance', '^VIX', 'daily', true, '1990-01-02', false, 5, null, 'CBOE Volatility Index close.'),
-  ('VIX3M', 'yfinance', '^VIX3M', 'daily', true, '2006-07-17', false, 5, null, 'CBOE 3M volatility index close.'),
+  ('VIX3M', 'fred', 'VXVCLS', 'daily', true, '2007-12-04', false, 5, null, 'CBOE 3M volatility index close.'),
   ('VVIX', 'yfinance', '^VVIX', 'daily', true, '2007-01-03', false, 5, null, 'CBOE VVIX close.'),
   ('10Y_Treasury_Yield', 'fred', 'DGS10', 'daily', true, null, false, 5, null, '10Y treasury yield.'),
   ('2Y_Treasury_Yield', 'fred', 'DGS2', 'daily', true, null, false, 5, null, '2Y treasury yield.'),
