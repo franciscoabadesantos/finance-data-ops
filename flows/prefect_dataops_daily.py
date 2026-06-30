@@ -59,6 +59,7 @@ class FeatureBuildWatermarkRequirement:
     domain: str
     table_name: str
     date_column: str
+    blocking: bool
     lookback_days: int = 14
     grace_days: int = 0
     safety_overlap_days: int = 0
@@ -69,6 +70,7 @@ FEATURE_BUILD_WATERMARK_REQUIREMENTS: tuple[FeatureBuildWatermarkRequirement, ..
         domain="market",
         table_name="source_cache.market_price_daily",
         date_column="price_date",
+        blocking=True,
         lookback_days=14,
         grace_days=0,
     ),
@@ -76,6 +78,7 @@ FEATURE_BUILD_WATERMARK_REQUIREMENTS: tuple[FeatureBuildWatermarkRequirement, ..
         domain="macro",
         table_name="source_cache.macro_daily",
         date_column="as_of_date",
+        blocking=False,
         lookback_days=14,
         grace_days=0,
     ),
@@ -83,6 +86,7 @@ FEATURE_BUILD_WATERMARK_REQUIREMENTS: tuple[FeatureBuildWatermarkRequirement, ..
         domain="calendars",
         table_name="source_cache.calendars",
         date_column="session_date",
+        blocking=False,
         lookback_days=14,
         grace_days=0,
     ),
@@ -90,6 +94,7 @@ FEATURE_BUILD_WATERMARK_REQUIREMENTS: tuple[FeatureBuildWatermarkRequirement, ..
         domain="fundamentals",
         table_name="source_cache.fundamentals",
         date_column="report_date",
+        blocking=False,
         lookback_days=30,
         grace_days=1,
     ),
@@ -97,6 +102,7 @@ FEATURE_BUILD_WATERMARK_REQUIREMENTS: tuple[FeatureBuildWatermarkRequirement, ..
         domain="earnings",
         table_name="source_cache.earnings",
         date_column="report_date",
+        blocking=False,
         lookback_days=30,
         grace_days=1,
     ),
@@ -221,8 +227,10 @@ def resolve_feature_build_watermark_gate(
     requirements: tuple[FeatureBuildWatermarkRequirement, ...] = FEATURE_BUILD_WATERMARK_REQUIREMENTS,
 ) -> dict[str, Any]:
     resolved_as_of_date = pd.Timestamp(as_of_date).date().isoformat()
+    as_of_day = pd.Timestamp(resolved_as_of_date).date()
     requirement_results: list[dict[str, Any]] = []
-    ready = True
+    degraded: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
     for requirement in requirements:
         plan = resolve_watermark_execution(
             domain=requirement.domain,
@@ -237,23 +245,68 @@ def resolve_feature_build_watermark_gate(
         )
         plan_dict = plan.as_dict()
         requirement_ready = not bool(plan.gap_exists)
-        ready = ready and requirement_ready
-        requirement_results.append(
-            {
-                "domain": requirement.domain,
-                "table_name": requirement.table_name,
-                "date_column": requirement.date_column,
-                "ready": bool(requirement_ready),
-                "watermark": plan.latest_complete_canonical_date,
-                "plan": plan_dict,
-            }
-        )
+        item = {
+            "domain": requirement.domain,
+            "table_name": requirement.table_name,
+            "date_column": requirement.date_column,
+            "blocking": bool(requirement.blocking),
+            "ready": bool(requirement_ready),
+            "watermark": plan.latest_complete_canonical_date,
+            "lag_days": _feature_build_lag_days(as_of_day, plan.latest_complete_canonical_date),
+            "plan": plan_dict,
+        }
+        requirement_results.append(item)
+        if not requirement_ready:
+            if requirement.blocking:
+                blocked.append(item)
+            else:
+                degraded.append(item)
+    ready = not bool(blocked)
     return {
         "status": "ready" if ready else "not_ready",
         "ready": bool(ready),
         "as_of_date": resolved_as_of_date,
         "requirements": requirement_results,
+        "degraded": degraded,
+        "blocked": blocked,
     }
+
+
+def _feature_build_lag_days(as_of_day: object, watermark: object | None) -> int | None:
+    if watermark is None:
+        return None
+    parsed = pd.to_datetime(watermark, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return max((pd.Timestamp(as_of_day).date() - pd.Timestamp(parsed).date()).days, 0)
+
+
+def _format_feature_build_stale_sources(items: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for item in items:
+        lag_days = item.get("lag_days")
+        lag_text = "unknown lag" if lag_days is None else f"lag {int(lag_days)}d"
+        parts.append(f"{item.get('domain')} {lag_text}")
+    return ", ".join(parts)
+
+
+def _emit_feature_build_alert(
+    *,
+    severity: str,
+    message: str,
+    settings: DataOpsSettings,
+    context: dict[str, Any],
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    payload = build_alert_payload(
+        severity=severity,
+        message=message,
+        run_id=run_id,
+        context=context,
+    )
+    emit_alert(payload)
+    emit_alert_webhook(payload, webhook_url=settings.alert_webhook_url)
+    return payload
 
 
 def trigger_feature_build_daily_if_ready(
@@ -266,6 +319,22 @@ def trigger_feature_build_daily_if_ready(
 ) -> dict[str, Any]:
     gate = resolve_feature_build_watermark_gate(as_of_date=as_of_date, settings=settings)
     if not bool(gate["ready"]):
+        blocked = list(gate.get("blocked") or [])
+        blocked_sources = _format_feature_build_stale_sources(blocked)
+        _emit_feature_build_alert(
+            severity="error",
+            message=(
+                f"Feature build blocked: market prices not ready for {gate['as_of_date']}."
+                if any(str(item.get("domain")) == "market" for item in blocked)
+                else f"Feature build blocked for {gate['as_of_date']}: {blocked_sources}."
+            ),
+            settings=settings,
+            context={
+                "as_of_date": gate["as_of_date"],
+                "blocked": blocked,
+                "degraded": list(gate.get("degraded") or []),
+            },
+        )
         return {
             "status": "skipped",
             "reason": "watermarks_not_ready",
@@ -282,6 +351,22 @@ def trigger_feature_build_daily_if_ready(
         flow_run_name=f"feature-build-daily-{str(gate['as_of_date'])}",
         idempotency_key=f"feature-build-daily:{str(gate['as_of_date'])}",
     )
+    degraded = list(gate.get("degraded") or [])
+    alert_payload = None
+    if degraded:
+        stale_sources = _format_feature_build_stale_sources(degraded)
+        alert_payload = _emit_feature_build_alert(
+            severity="warning",
+            message=f"Feature build ran for {gate['as_of_date']} with stale sources: {stale_sources}.",
+            settings=settings,
+            run_id=str(flow_run.id),
+            context={
+                "as_of_date": gate["as_of_date"],
+                "deployment_name": deployment_name,
+                "flow_run_id": str(flow_run.id),
+                "degraded": degraded,
+            },
+        )
     return {
         "status": "triggered",
         "as_of_date": gate["as_of_date"],
@@ -290,6 +375,7 @@ def trigger_feature_build_daily_if_ready(
         "flow_run_state": str(getattr(flow_run, "state_name", "") or ""),
         "parameters": parameters,
         "gate": gate,
+        "alert": alert_payload,
     }
 
 
