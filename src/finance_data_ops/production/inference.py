@@ -16,6 +16,36 @@ from uuid import uuid4
 from finance_data_ops.publish.client import PostgresPublisher
 
 
+PRODUCTION_SIGNAL_COLUMNS: tuple[str, ...] = (
+    "signal_date",
+    "strategy_family",
+    "universe",
+    "environment",
+    "symbol",
+    "active_pointer_id",
+    "candidate_id",
+    "bundle_id",
+    "score",
+    "rank",
+    "percentile",
+    "selected",
+    "horizon",
+    "target_exposure",
+    "signal_json",
+    "result_ref",
+    "orchestrator_run_id",
+    "created_at",
+    "updated_at",
+)
+PRODUCTION_SIGNAL_PK_COLUMNS: tuple[str, ...] = (
+    "signal_date",
+    "strategy_family",
+    "universe",
+    "environment",
+    "symbol",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ActiveProductionBundle:
     active_pointer: dict[str, Any]
@@ -70,6 +100,13 @@ def run_daily_production_inference(
         result_payload=result_payload,
         active_pointer=active.active_pointer,
         active_bundle=active.active_bundle,
+        strategy_family=strategy_family,
+        universe=universe,
+        environment=environment,
+        target_date=resolved_date.isoformat(),
+    )
+    signal_rows = normalize_production_signal_rows(
+        signal_rows,
         strategy_family=strategy_family,
         universe=universe,
         environment=environment,
@@ -189,6 +226,19 @@ def build_production_signal_rows(
     if not isinstance(signal_rows, list):
         raise RuntimeError("Daily production inference result must contain signals or signal_panel_json list.")
     result_ref = result_payload.get("result_ref") or result_payload.get("strategy_signal_panel_ref")
+    written_at = datetime.now(UTC).isoformat()
+    active_pointer_id = _first_present(
+        active_pointer,
+        "active_pointer_id",
+        "pointer_id",
+        "id",
+    )
+    candidate_id = (
+        _first_present(active_pointer, "active_candidate_id", "candidate_id")
+        or _first_present(active_bundle, "candidate_id")
+    )
+    bundle_id = _first_present(active_pointer, "active_bundle_id", "bundle_id") or _first_present(active_bundle, "bundle_id")
+    orchestrator_run_id = result_payload.get("orchestrator_experiment_id") or result_payload.get("orchestrator_run_id")
     out: list[dict[str, Any]] = []
     for row in signal_rows:
         if not isinstance(row, dict):
@@ -204,9 +254,9 @@ def build_production_signal_rows(
                 "universe": universe,
                 "environment": environment,
                 "symbol": symbol,
-                "active_pointer_id": active_pointer.get("active_pointer_id"),
-                "candidate_id": active_pointer.get("active_candidate_id") or active_bundle.get("candidate_id"),
-                "bundle_id": active_pointer.get("active_bundle_id") or active_bundle.get("bundle_id"),
+                "active_pointer_id": active_pointer_id,
+                "candidate_id": candidate_id,
+                "bundle_id": bundle_id,
                 "score": _float_or_none(row.get("score")),
                 "rank": _int_or_none(row.get("rank")),
                 "percentile": _float_or_none(row.get("percentile")),
@@ -215,13 +265,70 @@ def build_production_signal_rows(
                 "target_exposure": _float_or_none(row.get("target_exposure")),
                 "signal_json": row,
                 "result_ref": result_ref,
-                "orchestrator_run_id": result_payload.get("orchestrator_experiment_id"),
-                "updated_at": datetime.now(UTC).isoformat(),
+                "orchestrator_run_id": orchestrator_run_id,
+                "created_at": row.get("created_at") or written_at,
+                "updated_at": row.get("updated_at") or written_at,
             }
         )
     if not out:
         raise RuntimeError("Daily production inference produced no writable signal rows.")
-    return out
+    return normalize_production_signal_rows(
+        out,
+        strategy_family=strategy_family,
+        universe=universe,
+        environment=environment,
+        target_date=target_date,
+    )
+
+
+def normalize_production_signal_rows(
+    rows: list[dict[str, Any]],
+    *,
+    strategy_family: str,
+    universe: str,
+    environment: str,
+    target_date: str,
+) -> list[dict[str, Any]]:
+    written_at = datetime.now(UTC).isoformat()
+    normalized: list[dict[str, Any]] = []
+    for raw_row in rows:
+        row = dict(raw_row)
+        symbol = str(row.get("symbol") or row.get("ticker") or row.get("entity_id") or "").strip().upper()
+        signal_date = str(row.get("signal_date") or row.get("timestamp") or target_date)[:10]
+        out = {
+            "signal_date": signal_date,
+            "strategy_family": str(row.get("strategy_family") or strategy_family).strip(),
+            "universe": str(row.get("universe") or universe).strip(),
+            "environment": str(row.get("environment") or environment).strip(),
+            "symbol": symbol,
+            "active_pointer_id": row.get("active_pointer_id"),
+            "candidate_id": row.get("candidate_id"),
+            "bundle_id": row.get("bundle_id"),
+            "score": _float_or_none(row.get("score")),
+            "rank": _int_or_none(row.get("rank")),
+            "percentile": _float_or_none(row.get("percentile")),
+            "selected": _bool_or_none(row.get("selected")),
+            "horizon": row.get("horizon"),
+            "target_exposure": _float_or_none(row.get("target_exposure")),
+            "signal_json": row.get("signal_json") if isinstance(row.get("signal_json"), dict) else row,
+            "result_ref": row.get("result_ref"),
+            "orchestrator_run_id": row.get("orchestrator_run_id"),
+            "created_at": row.get("created_at") or written_at,
+            "updated_at": row.get("updated_at") or written_at,
+        }
+        missing_pk = [column for column in PRODUCTION_SIGNAL_PK_COLUMNS if not str(out.get(column) or "").strip()]
+        if missing_pk:
+            raise RuntimeError(f"Production signal row missing primary key columns: {', '.join(missing_pk)}")
+        normalized.append({column: out.get(column) for column in PRODUCTION_SIGNAL_COLUMNS})
+    return normalized
+
+
+def _first_present(row: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return value
+    return None
 
 
 def _float_or_none(value: Any) -> float | None:
