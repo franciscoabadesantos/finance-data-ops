@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,56 @@ from finance_data_ops.validation.ticker_validation import run_single_ticker_vali
 DEFAULT_TICKER_BACKFILL_YEARS = 5
 DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT = 24
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
+DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME = "run_daily_feature_flow/feature-build-daily"
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureBuildWatermarkRequirement:
+    domain: str
+    table_name: str
+    date_column: str
+    lookback_days: int = 14
+    grace_days: int = 0
+    safety_overlap_days: int = 0
+
+
+FEATURE_BUILD_WATERMARK_REQUIREMENTS: tuple[FeatureBuildWatermarkRequirement, ...] = (
+    FeatureBuildWatermarkRequirement(
+        domain="market",
+        table_name="source_cache.market_price_daily",
+        date_column="price_date",
+        lookback_days=14,
+        grace_days=0,
+    ),
+    FeatureBuildWatermarkRequirement(
+        domain="macro",
+        table_name="source_cache.macro_daily",
+        date_column="as_of_date",
+        lookback_days=14,
+        grace_days=0,
+    ),
+    FeatureBuildWatermarkRequirement(
+        domain="calendars",
+        table_name="source_cache.calendars",
+        date_column="session_date",
+        lookback_days=14,
+        grace_days=0,
+    ),
+    FeatureBuildWatermarkRequirement(
+        domain="fundamentals",
+        table_name="source_cache.fundamentals",
+        date_column="report_date",
+        lookback_days=30,
+        grace_days=1,
+    ),
+    FeatureBuildWatermarkRequirement(
+        domain="earnings",
+        table_name="source_cache.earnings",
+        date_column="report_date",
+        lookback_days=30,
+        grace_days=1,
+    ),
+)
 
 
 def _resolve_symbols(
@@ -161,6 +212,85 @@ def _to_json_text(value: object) -> str:
         return json.dumps(value, default=str)
     except Exception:
         return str(value)
+
+
+def resolve_feature_build_watermark_gate(
+    *,
+    as_of_date: str,
+    settings: DataOpsSettings,
+    requirements: tuple[FeatureBuildWatermarkRequirement, ...] = FEATURE_BUILD_WATERMARK_REQUIREMENTS,
+) -> dict[str, Any]:
+    resolved_as_of_date = pd.Timestamp(as_of_date).date().isoformat()
+    requirement_results: list[dict[str, Any]] = []
+    ready = True
+    for requirement in requirements:
+        plan = resolve_watermark_execution(
+            domain=requirement.domain,
+            table_name=requirement.table_name,
+            date_column=requirement.date_column,
+            lookback_days=int(requirement.lookback_days),
+            grace_days=int(requirement.grace_days),
+            safety_overlap_days=int(requirement.safety_overlap_days),
+            explicit_end=resolved_as_of_date,
+            cache_root=settings.cache_root,
+            database_dsn=settings.database_dsn,
+        )
+        plan_dict = plan.as_dict()
+        requirement_ready = not bool(plan.gap_exists)
+        ready = ready and requirement_ready
+        requirement_results.append(
+            {
+                "domain": requirement.domain,
+                "table_name": requirement.table_name,
+                "date_column": requirement.date_column,
+                "ready": bool(requirement_ready),
+                "watermark": plan.latest_complete_canonical_date,
+                "plan": plan_dict,
+            }
+        )
+    return {
+        "status": "ready" if ready else "not_ready",
+        "ready": bool(ready),
+        "as_of_date": resolved_as_of_date,
+        "requirements": requirement_results,
+    }
+
+
+def trigger_feature_build_daily_if_ready(
+    *,
+    as_of_date: str,
+    settings: DataOpsSettings,
+    deployment_name: str = DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME,
+    timeout_seconds: float | None = None,
+    extra_parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    gate = resolve_feature_build_watermark_gate(as_of_date=as_of_date, settings=settings)
+    if not bool(gate["ready"]):
+        return {
+            "status": "skipped",
+            "reason": "watermarks_not_ready",
+            "as_of_date": gate["as_of_date"],
+            "gate": gate,
+        }
+
+    parameters = {"as_of_date": gate["as_of_date"], **dict(extra_parameters or {})}
+    flow_run = run_deployment(
+        deployment_name,
+        parameters=parameters,
+        timeout=timeout_seconds,
+        poll_interval=10,
+        flow_run_name=f"feature-build-daily-{str(gate['as_of_date'])}",
+        idempotency_key=f"feature-build-daily:{str(gate['as_of_date'])}",
+    )
+    return {
+        "status": "triggered",
+        "as_of_date": gate["as_of_date"],
+        "deployment_name": deployment_name,
+        "flow_run_id": str(flow_run.id),
+        "flow_run_state": str(getattr(flow_run, "state_name", "") or ""),
+        "parameters": parameters,
+        "gate": gate,
+    }
 
 
 def _record_ticker_backfill_status(
@@ -439,6 +569,9 @@ def dataops_macro_daily_flow(
     publish_enabled: bool = True,
     allow_unhealthy: bool = False,
     force_recompute: bool = False,
+    trigger_feature_build: bool = True,
+    feature_build_deployment_name: str = DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME,
+    feature_build_timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
     execution_plan = resolve_gap_aware_window(
@@ -479,6 +612,20 @@ def dataops_macro_daily_flow(
         force_recompute=bool(force_recompute),
     )
     summary["execution"] = execution_plan.as_dict()
+    if bool(trigger_feature_build):
+        if not bool(publish_enabled):
+            summary["feature_build_trigger"] = {
+                "status": "skipped",
+                "reason": "publish_disabled",
+                "as_of_date": resolved_end,
+            }
+        else:
+            summary["feature_build_trigger"] = trigger_feature_build_daily_if_ready(
+                as_of_date=resolved_end,
+                settings=settings,
+                deployment_name=str(feature_build_deployment_name),
+                timeout_seconds=feature_build_timeout_seconds,
+            )
     return summary
 
 
@@ -959,6 +1106,17 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         help="Earnings/ticker-backfill provider history row limit override.",
     )
     parser.add_argument("--force-recompute", action="store_true", help="Macro/release only. Recompute selected range.")
+    parser.add_argument(
+        "--no-feature-build-trigger",
+        action="store_true",
+        help="Macro only. Skip the downstream feature-build deployment trigger.",
+    )
+    parser.add_argument(
+        "--feature-build-deployment-name",
+        type=str,
+        default=DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME,
+        help="Macro only. Prefect deployment name for the downstream feature build.",
+    )
     parser.add_argument("--sleep-seconds", type=float, default=0.0, help="Release-calendar only. Provider pacing.")
     parser.add_argument("--official-start-year", type=int, default=None, help="Release-calendar official start year.")
     parser.add_argument("--official-end-year", type=int, default=None, help="Release-calendar official end year.")
@@ -1000,6 +1158,8 @@ def main() -> None:
             publish_enabled=not bool(args.no_publish),
             allow_unhealthy=bool(args.allow_unhealthy),
             force_recompute=bool(args.force_recompute),
+            trigger_feature_build=not bool(args.no_feature_build_trigger),
+            feature_build_deployment_name=str(args.feature_build_deployment_name),
         )
     elif args.domain == "release-calendar":
         result = dataops_release_calendar_daily_flow(
