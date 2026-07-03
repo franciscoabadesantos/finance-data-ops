@@ -78,6 +78,28 @@ def _ishares(theme: str, ticker: str, wave: int, product_id: str, slug: str) -> 
     )
 
 
+def _first_trust(theme: str, ticker: str, wave: int) -> ThemeETF:
+    return ThemeETF(
+        theme=theme,
+        etf_ticker=ticker,
+        wave=wave,
+        source_type="first_trust_html",
+        source_ref=f"https://www.ftportfolios.com/retail/etf/ETFholdings.aspx?Ticker={ticker.upper()}",
+        issuer="First Trust",
+    )
+
+
+def _advisorshares_csv(theme: str, ticker: str, wave: int, source_ref: str) -> ThemeETF:
+    return ThemeETF(
+        theme=theme,
+        etf_ticker=ticker,
+        wave=wave,
+        source_type="advisorshares_csv",
+        source_ref=source_ref,
+        issuer="AdvisorShares",
+    )
+
+
 def _issuer_csv(theme: str, ticker: str, wave: int, issuer: str, source_ref: str) -> ThemeETF:
     return ThemeETF(
         theme=theme,
@@ -111,7 +133,7 @@ THEME_ETFS: tuple[ThemeETF, ...] = (
     _global_x("ai", "AIQ", 1),
     _global_x("fintech", "FINX", 1),
     _global_x("cyber", "BUG", 1),
-    _issuer_csv("internet_ecommerce", "FDN", 1, "First Trust", "FDN"),
+    _first_trust("internet_ecommerce", "FDN", 1),
     _ishares("defense", "ITA", 1, "239502", "ishares-us-aerospace-defense-etf"),
     _ark("space", "ARKX", 1, "ARK_SPACE_EXPLORATION_&_INNOVATION_ETF_ARKX_HOLDINGS.csv"),
     _ssga("biotech", "XBI", 1),
@@ -120,21 +142,26 @@ THEME_ETFS: tuple[ThemeETF, ...] = (
     _ssga("oil_gas", "XOP", 1),
     _vaneck("oil_services", "OIH", 1, "oil-services-etf-oih"),
     _ishares("clean_energy", "ICLN", 1, "239738", "ishares-global-clean-energy-etf"),
-    _issuer_csv("solar", "TAN", 1, "Invesco", "TAN"),
     _global_x("robotics", "BOTZ", 2),
     _global_x("ev_battery", "LIT", 2),
     _global_x("infra_construction", "PAVE", 2),
     _ishares("homebuilders", "ITB", 2, "239512", "ishares-us-home-construction-etf"),
     _global_x("nuclear_uranium", "URA", 2),
-    _issuer_csv("water", "PHO", 2, "Invesco", "PHO"),
+    _global_x("water", "AQWA", 2),
     _vaneck("critical_minerals", "REMX", 2, "rare-earth-strategic-metals-etf-remx"),
     _vaneck("gold_miners", "GDX", 2, "gold-miners-etf-gdx"),
     _vaneck("agriculture", "MOO", 2, "agribusiness-etf-moo"),
     _ishares("timber_materials", "WOOD", 2, "239752", "ishares-global-timber-forestry-etf"),
     _ishares("medical_devices", "IHI", 2, "239516", "ishares-us-medical-devices-etf"),
-    _issuer_csv("cannabis", "MSOS", 2, "AdvisorShares", "MSOS"),
+    _advisorshares_csv(
+        "cannabis",
+        "YOLO",
+        2,
+        "https://advisorshares.com/wp-content/uploads/csv/holdings/AdvisorShares_YOLO_Holdings_File.csv",
+    ),
     _vaneck("gaming_esports", "ESPO", 2, "video-gaming-esports-etf-espo"),
     _issuer_csv("sports_betting", "BETZ", 2, "Roundhill", "BETZ"),
     _ssga("regional_banks", "KRE", 2),
     _issuer_csv("airlines_travel", "JETS", 2, "U.S. Global", "JETS"),
+    _ishares("reits", "USRT", 2, "239544", "ishares-real-estate-50-etf"),
 )

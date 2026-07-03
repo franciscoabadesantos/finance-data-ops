@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 import io
 import logging
 import re
@@ -160,6 +160,28 @@ def _fetch_single_theme_etf_holdings_from_source(
             source_ref=csv_url,
             shallow=shallow,
         )
+    if source_type == "first_trust_html":
+        raw = fetch_bytes(source_ref)
+        frame = _read_first_trust_holdings_html(raw)
+        return _normalize_holdings_frame(
+            frame,
+            spec=spec,
+            fetched_at=fetched_at,
+            source_type=source_type,
+            source_ref=source_ref,
+            shallow=shallow,
+        )
+    if source_type == "advisorshares_csv":
+        raw = fetch_bytes(source_ref)
+        frame = _read_advisorshares_holdings_csv(raw)
+        return _normalize_holdings_frame(
+            frame,
+            spec=spec,
+            fetched_at=fetched_at,
+            source_type=source_type,
+            source_ref=source_ref,
+            shallow=shallow,
+        )
     if source_type == "issuer_csv":
         raw = fetch_bytes(_resolve_generic_issuer_ref(spec, source_ref))
         frame = _read_csv_with_header_detection(raw)
@@ -266,12 +288,28 @@ def _single_frame_attr(frame: pd.DataFrame, key: str, default: str) -> str:
 
 
 def _resolve_global_x_csv_url(slug: str, *, fetch_bytes: FetchBytes) -> str:
-    page_url = f"https://www.globalxetfs.com/funds/{str(slug).strip().lower()}?download_full_holdings=true"
-    text = fetch_bytes(page_url).decode("utf-8", errors="replace")
-    match = re.search(r"https://assets\.globalxetfs\.com/(?:funds/)?holdings/[^\"\\]+\.csv", text)
-    if not match:
-        raise RuntimeError(f"Global X holdings CSV URL not found for {slug}.")
-    return match.group(0)
+    ticker = str(slug).strip().lower()
+    failures: list[str] = []
+    for candidate_date in _global_x_candidate_dates(datetime.now(UTC).date()):
+        csv_url = (
+            "https://assets.globalxetfs.com/funds/holdings/"
+            f"{ticker}_full-holdings_{candidate_date:%Y%m%d}.csv"
+        )
+        try:
+            fetch_bytes(csv_url)
+            return csv_url
+        except Exception as exc:
+            failures.append(f"{csv_url}: {exc!r}")
+    raise RuntimeError(f"Global X holdings CSV URL not found for {slug}. Tried: {'; '.join(failures)}")
+
+
+def _global_x_candidate_dates(start_date: date, *, lookback_days: int = 10) -> list[date]:
+    dates: list[date] = []
+    for offset in range(lookback_days + 1):
+        candidate = start_date - timedelta(days=offset)
+        if candidate.weekday() < 5:
+            dates.append(candidate)
+    return dates
 
 
 def _resolve_ishares_csv_url(ticker: str, source_ref: str) -> str:
@@ -322,6 +360,56 @@ def _read_csv_with_header_detection(raw: bytes) -> pd.DataFrame:
     return frame
 
 
+def _read_advisorshares_holdings_csv(raw: bytes) -> pd.DataFrame:
+    frame = _read_csv_with_header_detection(raw)
+    date_column = _first_existing_column(frame, _DATE_COLUMNS)
+    if date_column and frame.attrs.get("as_of") is None:
+        for value in frame[date_column].dropna().tolist():
+            as_of = _coerce_date(value)
+            if as_of is not None:
+                frame.attrs["as_of"] = as_of
+                break
+
+    asset_group_column = _first_existing_column(frame, ["Asset Group"])
+    if asset_group_column is None:
+        return frame
+
+    out = frame.copy()
+    asset_groups = out[asset_group_column].astype(str).str.strip().str.upper()
+    out["Asset Class"] = asset_groups.map(lambda value: "Equity" if value in {"FS", "S"} else "Other")
+    return out
+
+
+def _read_first_trust_holdings_html(raw: bytes) -> pd.DataFrame:
+    text = raw.decode("utf-8", errors="replace")
+    if not text.lstrip().lower().startswith(("<!doctype html", "<html")):
+        raise RuntimeError("First Trust holdings endpoint returned non-HTML content.")
+
+    frames = pd.read_html(io.StringIO(text), attrs={"class": "fundSilverGrid"})
+    if not frames:
+        raise RuntimeError("First Trust holdings table not found.")
+
+    as_of = _extract_as_of_from_lines(text.splitlines())
+    for frame in frames:
+        candidate = _promote_first_trust_header(frame)
+        if _first_existing_column(candidate, _SYMBOL_COLUMNS) and _first_existing_column(candidate, _WEIGHT_COLUMNS):
+            if as_of is not None:
+                candidate.attrs["as_of"] = as_of
+            return candidate
+    raise RuntimeError("First Trust holdings table missing identifier/weight columns.")
+
+
+def _promote_first_trust_header(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    first_row = [str(value).strip() for value in frame.iloc[0].tolist()]
+    if "Identifier" in first_row and "Weighting" in first_row:
+        out = frame.iloc[1:].copy()
+        out.columns = first_row
+        return out.reset_index(drop=True)
+    return frame
+
+
 def _read_excel_with_header_detection(raw: bytes) -> pd.DataFrame:
     workbook = pd.ExcelFile(io.BytesIO(raw))
     best: pd.DataFrame | None = None
@@ -350,6 +438,7 @@ _SYMBOL_COLUMNS = [
     "Symbol",
     "holding_symbol",
     "Holding Ticker",
+    "Stock Ticker",
     "Identifier",
 ]
 _NAME_COLUMNS = [
@@ -360,6 +449,7 @@ _NAME_COLUMNS = [
     "holding_name",
     "Holding Name",
     "Security Name",
+    "Security Description",
     "Description",
     "Issuer Name",
     "Issue Name",
@@ -377,6 +467,8 @@ _WEIGHT_COLUMNS = [
     "weight",
     "Percent",
     "Pct",
+    "Portfolio Weight %",
+    "Weighting",
 ]
 _DATE_COLUMNS = ["date", "Date", "as_of", "asOfDate", "As Of", "Fund Holdings Data as of"]
 _ASSET_CLASS_COLUMNS = ["asset_class", "Asset Class", "Class", "Security Type", "Type"]
@@ -384,6 +476,17 @@ _ASSET_CLASS_COLUMNS = ["asset_class", "Asset Class", "Class", "Security Type", 
 
 def _extract_as_of_from_lines(lines: list[str]) -> date | None:
     for line in lines:
+        line = re.sub(r"<[^>]+>", " ", line)
+        date_match = re.search(
+            r"(?:as\s+of|data\s+as\s+of|holdings\s+as\s+of)[^0-9]*"
+            r"([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4}|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2})",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if date_match:
+            parsed = _coerce_date(date_match.group(1))
+            if parsed:
+                return parsed
         match = re.search(
             r"(?:as\s+of|data\s+as\s+of|holdings\s+as\s+of)[^A-Za-z0-9]*(.+)$",
             line,
@@ -545,6 +648,9 @@ _BLOOMBERG_SUFFIX_TO_YAHOO = {
     "JT": ".T",
     "AU": ".AX",
     "AT": ".AX",
+    "AB": ".ST",
+    "C1": ".SS",
+    "C2": ".SZ",
     "CN": ".TO",
     "CT": ".TO",
     "KS": ".KS",
@@ -619,8 +725,8 @@ def _coerce_weight(value: Any) -> float | None:
         return None
     weight = float(numeric)
     if weight > 1.0:
-        return weight / 100.0
-    return weight
+        return round(weight / 100.0, 10)
+    return round(weight, 10)
 
 
 def _coerce_date(value: Any) -> date | None:

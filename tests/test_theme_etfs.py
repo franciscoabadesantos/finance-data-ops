@@ -14,18 +14,24 @@ from finance_data_ops.theme_etfs.universe import build_wave_universe_additions
 
 def test_theme_etf_catalog_has_expected_waves_and_no_broad_sector_spdrs() -> None:
     themes = {spec.theme: spec for spec in THEME_ETFS}
+    tickers = {spec.etf_ticker for spec in THEME_ETFS}
 
     assert len(themes) == 31
     assert themes["ai_semis"].wave == 1
-    assert themes["solar"].wave == 1
+    assert themes["internet_ecommerce"].etf_ticker == "FDN"
+    assert themes["internet_ecommerce"].source_type == "first_trust_html"
+    assert themes["water"].etf_ticker == "AQWA"
+    assert themes["cannabis"].etf_ticker == "YOLO"
+    assert themes["reits"].etf_ticker == "USRT"
     assert themes["robotics"].wave == 2
     assert themes["airlines_travel"].wave == 2
-    assert len({spec.etf_ticker for spec in THEME_ETFS}) == len(THEME_ETFS)
-    assert not {"XLK", "XLE", "XLV"}.intersection({spec.etf_ticker for spec in THEME_ETFS})
+    assert len(tickers) == len(THEME_ETFS)
+    assert not {"MSOS", "PHO", "TAN", "XLK", "XLE", "XLV"}.intersection(tickers)
+    assert "solar" not in themes
     assert not any(spec.source_type == "yfinance_funds_data" for spec in THEME_ETFS)
 
 
-def test_fetch_theme_etf_holdings_adds_theme_reference_and_normalizes_csv() -> None:
+def test_fetch_theme_etf_holdings_adds_theme_reference_and_normalizes_csv(monkeypatch) -> None:
     spec = ThemeETF(
         theme="fintech",
         etf_ticker="FINX",
@@ -34,16 +40,28 @@ def test_fetch_theme_etf_holdings_adds_theme_reference_and_normalizes_csv() -> N
         source_ref="finx",
         issuer="Global X",
     )
+    monkeypatch.setattr(
+        holdings_mod,
+        "_global_x_candidate_dates",
+        lambda _start: [date(2026, 7, 3), date(2026, 7, 2)],
+    )
+    fetched_urls: list[str] = []
 
     def fake_fetch(url: str) -> bytes:
-        if "globalxetfs.com/funds/finx" in url:
-            return b'<a href="https://assets.globalxetfs.com/funds/holdings/finx_full-holdings_20260702.csv">csv</a>'
+        fetched_urls.append(url)
+        if url.endswith("finx_full-holdings_20260703.csv"):
+            raise RuntimeError("not published yet")
+        assert url.endswith("finx_full-holdings_20260702.csv")
         return (
             "Global X FinTech ETF | Fund Holdings Data as of 07/02/2026\n"
             "% of Net Assets,Ticker,Name,SEDOL,Market Price ($),Shares Held,Market Value ($)\n"
             '8.39,HOOD,ROBINHOOD MARKETS INC - A US,BP0TQN6,112.73,"4,792","540,202.16"\n'
             '0.16,,CASH,,1.0,"287,254.82","287,254.82"\n'
             "2.50,IRE AU,IRESS LTD,6297497,4.39,59805,262911.93\n"
+            "2.40,000598 C2,CHENGDU XINGRONG ENVIRONMENT CO LTD,B00G0S5,1.00,100,100.00\n"
+            "2.30,371 HK,BEIJING ENTERPRISES WATER GROUP LTD,B01JJF8,1.00,100,100.00\n"
+            "2.20,6254 JP,NOMURA MICRO SCIENCE CO LTD,6631506,1.00,100,100.00\n"
+            "2.10,AWPT AB,AQUAPORIN A/S,BKPG1S8,1.00,100,100.00\n"
         ).encode()
 
     holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
@@ -69,11 +87,52 @@ def test_fetch_theme_etf_holdings_adds_theme_reference_and_normalizes_csv() -> N
             "weight": 0.025,
             "as_of": date(2026, 7, 2),
         },
+        {
+            "etf_ticker": "FINX",
+            "holding_symbol": "000598.SZ",
+            "holding_name": "CHENGDU XINGRONG ENVIRONMENT CO LTD",
+            "weight": 0.024,
+            "as_of": date(2026, 7, 2),
+        },
+        {
+            "etf_ticker": "FINX",
+            "holding_symbol": "371.HK",
+            "holding_name": "BEIJING ENTERPRISES WATER GROUP LTD",
+            "weight": 0.023,
+            "as_of": date(2026, 7, 2),
+        },
+        {
+            "etf_ticker": "FINX",
+            "holding_symbol": "6254.T",
+            "holding_name": "NOMURA MICRO SCIENCE CO LTD",
+            "weight": 0.022,
+            "as_of": date(2026, 7, 2),
+        },
+        {
+            "etf_ticker": "FINX",
+            "holding_symbol": "AWPT.ST",
+            "holding_name": "AQUAPORIN A/S",
+            "weight": 0.021,
+            "as_of": date(2026, 7, 2),
+        },
     ]
-    assert themes.iloc[0]["holdings_count"] == 2
+    assert themes.iloc[0]["holdings_count"] == 6
     assert themes.iloc[0]["holdings_as_of"] == date(2026, 7, 2)
     assert themes.iloc[0]["holdings_source_depth"] == "full"
     assert bool(themes.iloc[0]["holdings_shallow"]) is False
+    assert fetched_urls == [
+        "https://assets.globalxetfs.com/funds/holdings/finx_full-holdings_20260703.csv",
+        "https://assets.globalxetfs.com/funds/holdings/finx_full-holdings_20260702.csv",
+        "https://assets.globalxetfs.com/funds/holdings/finx_full-holdings_20260702.csv",
+    ]
+
+
+def test_global_x_candidate_dates_skip_weekends_for_last_trading_day_fallback() -> None:
+    assert holdings_mod._global_x_candidate_dates(date(2026, 7, 5), lookback_days=4) == [
+        date(2026, 7, 3),
+        date(2026, 7, 2),
+        date(2026, 7, 1),
+    ]
 
 
 def test_ishares_issuer_holdings_preferred_over_yfinance_top_ten() -> None:
@@ -106,6 +165,98 @@ def test_ishares_issuer_holdings_preferred_over_yfinance_top_ten() -> None:
     assert themes.iloc[0]["holdings_count"] == 12
     assert themes.iloc[0]["holdings_source_depth"] == "full"
     assert set(holdings["source"]) == {"theme_etf:ishares_csv"}
+
+
+def test_first_trust_html_parser_keeps_full_holdings_and_filters_cash() -> None:
+    spec = ThemeETF(
+        theme="internet_ecommerce",
+        etf_ticker="FDN",
+        wave=1,
+        source_type="first_trust_html",
+        source_ref="https://www.ftportfolios.com/retail/etf/ETFholdings.aspx?Ticker=FDN",
+        issuer="First Trust",
+    )
+
+    def fake_fetch(_url: str) -> bytes:
+        return (
+            "<html><body>"
+            '<span id="ContentPlaceHolder1_HoldingsListing_lblHoldingsTitle">'
+            "Holdings of the Fund as of 7/2/2026</span>"
+            '<table class="fundSilverGrid">'
+            "<tr><td>Security Name</td><td>Identifier</td><td>CUSIP</td>"
+            "<td>Classification</td><td>Shares / Quantity</td><td>Market Value</td><td>Weighting</td></tr>"
+            "<tr><td>Meta Platforms, Inc. (Class A)</td><td>META</td><td>30303M102</td>"
+            "<td>Communication Services</td><td>870764</td><td>$507,568,335.60</td><td>10.07%</td></tr>"
+            "<tr><td>Amazon.com, Inc.</td><td>AMZN</td><td>023135106</td>"
+            "<td>Consumer Discretionary</td><td>2089029</td><td>$506,944,667.43</td><td>10.06%</td></tr>"
+            "<tr><td>US Dollar</td><td>$USD</td><td></td>"
+            "<td>Other</td><td>6816907</td><td>$6,816,907.43</td><td>0.14%</td></tr>"
+            "</table></body></html>"
+        ).encode()
+
+    holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
+
+    assert failures == []
+    assert holdings[["holding_symbol", "holding_name", "weight", "as_of"]].to_dict(orient="records") == [
+        {
+            "holding_symbol": "META",
+            "holding_name": "Meta Platforms, Inc. (Class A)",
+            "weight": 0.1007,
+            "as_of": date(2026, 7, 2),
+        },
+        {
+            "holding_symbol": "AMZN",
+            "holding_name": "Amazon.com, Inc.",
+            "weight": 0.1006,
+            "as_of": date(2026, 7, 2),
+        },
+    ]
+    assert themes.iloc[0]["source_type"] == "first_trust_html"
+    assert themes.iloc[0]["holdings_count"] == 2
+
+
+def test_advisorshares_parser_filters_etf_money_market_and_cash_rows() -> None:
+    spec = ThemeETF(
+        theme="cannabis",
+        etf_ticker="YOLO",
+        wave=2,
+        source_type="advisorshares_csv",
+        source_ref="https://advisorshares.com/wp-content/uploads/csv/holdings/AdvisorShares_YOLO_Holdings_File.csv",
+        issuer="AdvisorShares",
+    )
+
+    def fake_fetch(_url: str) -> bytes:
+        return (
+            "Date,Account Symbol,Stock Ticker,Security Number,Security Description,Shares/Par (Full),"
+            "Price (Base),Traded Market Value (Base),Portfolio Weight %,Asset Group\n"
+            '7/2/2026,YOLO,MSOS,00768Y453,ADVISORSHARES PURE US CANN,"1,548,325",'
+            '4.89,"7,571,309.25",22.52%,MF\n'
+            ',,TLRY,88688T209,TILRAY BRANDS INC,"96,263",4.62,"444,735.06",1.32%,S\n'
+            ',,CURLD,23126M300,CURALEAF HOLDINGS INC,"500,000",10.24,"5,120,000.00",15.23%,FS\n'
+            ',,,X9USDBLYT,BLACKROCK TREASURY TRUST INSTL 62,"3,113,086.2",1,"3,113,086.20",9.26%,MM\n'
+            ',,,,CASH,"-1,579,420.01",100,"-1,579,420.01",-4.70%,CA\n'
+        ).encode()
+
+    holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
+
+    assert failures == []
+    assert holdings[["holding_symbol", "holding_name", "weight", "as_of"]].to_dict(orient="records") == [
+        {
+            "holding_symbol": "TLRY",
+            "holding_name": "TILRAY BRANDS INC",
+            "weight": 0.0132,
+            "as_of": date(2026, 7, 2),
+        },
+        {
+            "holding_symbol": "CURLD",
+            "holding_name": "CURALEAF HOLDINGS INC",
+            "weight": 0.1523,
+            "as_of": date(2026, 7, 2),
+        },
+    ]
+    assert not {"MSOS", "X9USDBLYT", "CASH"}.intersection(set(holdings["holding_symbol"]))
+    assert themes.iloc[0]["source_type"] == "advisorshares_csv"
+    assert themes.iloc[0]["holdings_count"] == 2
 
 
 def test_issuer_fetch_falls_back_to_shallow_yfinance_and_flags_theme(monkeypatch) -> None:
