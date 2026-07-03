@@ -515,6 +515,7 @@ def dataops_fundamentals_daily_flow(
     max_attempts: int | None = None,
     publish_enabled: bool = True,
     allow_unhealthy: bool = False,
+    refresh_theme_etfs: bool = True,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
     resolved_symbols = _resolve_symbols(symbols=symbols, region=region, settings=settings)
@@ -549,6 +550,7 @@ def dataops_fundamentals_daily_flow(
         cache_root=cache_root,
         publish_enabled=bool(publish_enabled),
         max_attempts=int(max_attempts or settings.default_max_attempts),
+        refresh_theme_etfs=bool(refresh_theme_etfs),
         raise_on_failed_hard=not bool(allow_unhealthy),
     )
     summary["execution"] = execution_plan.as_dict()

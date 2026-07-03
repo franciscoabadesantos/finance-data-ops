@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,12 +29,16 @@ from finance_data_ops.refresh.fundamentals_daily import refresh_fundamentals_dai
 from finance_data_ops.refresh.market_daily import RefreshRunResult
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.settings import load_settings
+from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
 from finance_data_ops.validation.coverage import (
     assess_symbol_coverage,
     build_symbol_coverage_rows,
     merge_symbol_coverage_rows_for_fundamentals,
 )
 from finance_data_ops.validation.freshness import FreshnessState, classify_freshness
+
+LOGGER = logging.getLogger("finance_data_ops.flows.dataops_fundamentals_daily")
+ThemeETFRefreshFn = Callable[[], tuple[pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]]
 
 
 def run_dataops_fundamentals_daily(
@@ -46,6 +51,8 @@ def run_dataops_fundamentals_daily(
     existing_symbol_coverage_rows: list[dict[str, object]] | None = None,
     max_attempts: int = 3,
     raise_on_failed_hard: bool = True,
+    refresh_theme_etfs: bool = False,
+    theme_etf_refresh_fn: ThemeETFRefreshFn | None = None,
 ) -> dict[str, Any]:
     flow_started_at = datetime.now(UTC)
     flow_run_id = f"run_dataops_fundamentals_daily_{uuid4().hex[:12]}"
@@ -62,10 +69,16 @@ def run_dataops_fundamentals_daily(
         cache_root=str(settings.cache_root),
         max_attempts=max_attempts,
     )
+    theme_etf_refresh = _refresh_theme_etf_holdings(
+        cache_root=str(settings.cache_root),
+        enabled=bool(refresh_theme_etfs),
+        refresh_fn=theme_etf_refresh_fn,
+    )
 
     cached_fundamentals = read_parquet_table("market_fundamentals_v2", cache_root=settings.cache_root, required=False)
     cached_ticker_profile = read_parquet_table("ticker_profile", cache_root=settings.cache_root, required=False)
     cached_etf_holdings = read_parquet_table("etf_holdings", cache_root=settings.cache_root, required=False)
+    cached_etf_themes = read_parquet_table("etf_themes", cache_root=settings.cache_root, required=False)
     cached_etf_sector_weights = read_parquet_table(
         "etf_sector_weights",
         cache_root=settings.cache_root,
@@ -130,12 +143,13 @@ def run_dataops_fundamentals_daily(
     if publish_enabled or isinstance(publisher_impl, RecordingPublisher):
         publish_results["fundamentals"] = _execute_publish_step(
             "fundamentals",
-            lambda: publish_fundamentals_surfaces(
+            lambda: _publish_fundamentals_and_theme_surfaces(
                 publisher=publisher_impl,
                 fundamentals_history=cached_fundamentals,
                 fundamentals_summary=fundamentals_summary,
                 ticker_profile=cached_ticker_profile,
                 etf_holdings=cached_etf_holdings,
+                etf_themes=cached_etf_themes,
                 etf_sector_weights=cached_etf_sector_weights,
                 refresh_materialized_view=bool(publish_enabled),
             ),
@@ -240,6 +254,7 @@ def run_dataops_fundamentals_daily(
         "symbols": normalized_symbols,
         "refresh": {
             "fundamentals_daily": fundamentals_run.as_dict(),
+            "theme_etf_holdings": theme_etf_refresh,
         },
         "coverage": coverage_summary,
         "asset_status": status_rows,
@@ -250,9 +265,71 @@ def run_dataops_fundamentals_daily(
             "ticker_fundamental_summary": int(len(fundamentals_summary.index)),
             "ticker_profile": int(len(cached_ticker_profile.index)),
             "etf_holdings": int(len(cached_etf_holdings.index)),
+            "etf_themes": int(len(cached_etf_themes.index)),
             "etf_sector_weights": int(len(cached_etf_sector_weights.index)),
         },
     }
+
+
+def _refresh_theme_etf_holdings(
+    *,
+    cache_root: str,
+    enabled: bool,
+    refresh_fn: ThemeETFRefreshFn | None,
+) -> dict[str, Any]:
+    if not enabled:
+        return {"status": "skipped", "reason": "disabled"}
+    fetcher = refresh_fn or fetch_theme_etf_holdings
+    try:
+        holdings, themes, failures = fetcher()
+        outputs = write_theme_etf_outputs(
+            holdings=holdings,
+            themes=themes,
+            cache_root=cache_root,
+            replace_refreshed_holdings=True,
+        )
+        status = "fresh" if not failures else "partial"
+        return {
+            "status": status,
+            "holdings_rows": int(len(holdings.index)),
+            "theme_count": int(themes["theme"].nunique()) if not themes.empty and "theme" in themes.columns else 0,
+            "failures": failures,
+            "outputs": outputs,
+        }
+    except Exception as exc:  # noqa: BLE001 - theme refresh should not kill fundamentals ingestion
+        LOGGER.warning("Theme ETF holdings refresh failed (non-fatal): %r", exc)
+        return {"status": "failed_hard", "error": repr(exc)}
+
+
+def _publish_fundamentals_and_theme_surfaces(
+    *,
+    publisher: Publisher,
+    fundamentals_history: pd.DataFrame,
+    fundamentals_summary: pd.DataFrame,
+    ticker_profile: pd.DataFrame,
+    etf_holdings: pd.DataFrame,
+    etf_themes: pd.DataFrame,
+    etf_sector_weights: pd.DataFrame,
+    refresh_materialized_view: bool,
+) -> dict[str, Any]:
+    result = publish_fundamentals_surfaces(
+        publisher=publisher,
+        fundamentals_history=fundamentals_history,
+        fundamentals_summary=fundamentals_summary,
+        ticker_profile=ticker_profile,
+        etf_holdings=etf_holdings,
+        etf_sector_weights=etf_sector_weights,
+        refresh_materialized_view=refresh_materialized_view,
+    )
+    if not etf_themes.empty:
+        result["etf_themes"] = publisher.upsert(
+            "etf_themes",
+            etf_themes.to_dict(orient="records"),
+            on_conflict="etf_ticker",
+        )
+    else:
+        result["etf_themes"] = {"status": "skipped", "rows": 0}
+    return result
 
 
 def _build_asset_status_rows(
@@ -579,6 +656,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-attempts", type=int, default=None, help="Retry attempts for retryable failures.")
     parser.add_argument("--no-publish", action="store_true", help="Skip Postgres publishing (local dry-run).")
     parser.add_argument(
+        "--skip-theme-etf-refresh",
+        action="store_true",
+        help="Do not refresh curated thematic ETF holdings during fundamentals daily.",
+    )
+    parser.add_argument(
         "--allow-unhealthy",
         action="store_true",
         help="Do not raise when any asset ends in failed_hard/failed_retrying.",
@@ -598,6 +680,7 @@ def main() -> None:
         cache_root=args.cache_root,
         publish_enabled=not bool(args.no_publish),
         max_attempts=int(args.max_attempts or settings.default_max_attempts),
+        refresh_theme_etfs=not bool(args.skip_theme_etf_refresh),
         raise_on_failed_hard=not bool(args.allow_unhealthy),
     )
     print(json.dumps(summary, indent=2, default=str))

@@ -226,6 +226,63 @@ def test_optional_profile_and_etf_failures_do_not_fail_fundamentals_refresh(tmp_
     assert "Optional fundamentals refresh surface failed (symbol=KO surface=etf_funds_data)" in caplog.text
 
 
+def test_fundamentals_daily_refreshes_and_publishes_theme_etfs(tmp_path) -> None:
+    publisher = RecordingPublisher()
+
+    def theme_refresh() -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, object]]]:
+        return (
+            pd.DataFrame(
+                [
+                    {
+                        "etf_ticker": "ARKX",
+                        "holding_symbol": "RKLB",
+                        "holding_name": "Rocket Lab Corp",
+                        "weight": 0.12,
+                        "as_of": "2026-07-02",
+                        "source": "theme_etf:ark_csv",
+                        "fetched_at": datetime(2026, 7, 3, 10, 0, tzinfo=UTC),
+                        "updated_at": datetime(2026, 7, 3, 10, 0, tzinfo=UTC),
+                    }
+                ]
+            ),
+            pd.DataFrame(
+                [
+                    {
+                        "etf_ticker": "ARKX",
+                        "theme": "space",
+                        "wave": 1,
+                        "issuer": "ARK",
+                        "source_type": "ark_csv",
+                        "source_ref": "ARKX",
+                        "active": True,
+                        "fetched_at": datetime(2026, 7, 3, 10, 0, tzinfo=UTC),
+                        "updated_at": datetime(2026, 7, 3, 10, 0, tzinfo=UTC),
+                    }
+                ]
+            ),
+            [],
+        )
+
+    summary = run_dataops_fundamentals_daily(
+        symbols=["SPY"],
+        cache_root=str(tmp_path),
+        publish_enabled=True,
+        provider=FakeFundamentalsProvider(),
+        publisher=publisher,
+        refresh_theme_etfs=True,
+        theme_etf_refresh_fn=theme_refresh,
+        raise_on_failed_hard=True,
+    )
+
+    assert summary["refresh"]["theme_etf_holdings"]["status"] == "fresh"
+    assert summary["rows"]["etf_themes"] == 1
+    theme_upsert = next(call for call in publisher.upserts if call["table"] == "etf_themes")
+    assert theme_upsert["on_conflict"] == "etf_ticker"
+    assert theme_upsert["rows"][0]["theme"] == "space"
+    holdings = pd.read_parquet(table_path("etf_holdings", cache_root=tmp_path))
+    assert {"SPY", "ARKX"}.issubset(set(holdings["etf_ticker"]))
+
+
 def test_fundamentals_coverage_merge_preserves_existing_market_flags(tmp_path) -> None:
     publisher = RecordingPublisher()
     existing_rows = [

@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 import requests
 
-from finance_data_ops.refresh.storage import write_parquet_table
+from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.theme_etfs.config import THEME_ETFS, ThemeETF
 
 
@@ -87,18 +87,40 @@ def fetch_single_theme_etf_holdings(spec: ThemeETF, *, fetch_bytes: FetchBytes |
     raise ValueError(f"Unsupported theme ETF source_type: {spec.source_type}")
 
 
-def write_theme_etf_outputs(*, holdings: pd.DataFrame, themes: pd.DataFrame, cache_root: str) -> dict[str, str | int]:
+def write_theme_etf_outputs(
+    *,
+    holdings: pd.DataFrame,
+    themes: pd.DataFrame,
+    cache_root: str,
+    replace_refreshed_holdings: bool = True,
+) -> dict[str, str | int]:
     paths: dict[str, str | int] = {}
     if not holdings.empty:
+        holdings_to_write = holdings.copy()
+        mode = "append"
+        if bool(replace_refreshed_holdings):
+            refreshed_etfs = {
+                str(value).strip().upper()
+                for value in holdings_to_write["etf_ticker"].dropna().tolist()
+                if str(value).strip()
+            }
+            existing = read_parquet_table("etf_holdings", cache_root=cache_root, required=False)
+            if not existing.empty and refreshed_etfs and "etf_ticker" in existing.columns:
+                existing = existing.loc[
+                    ~existing["etf_ticker"].astype(str).str.upper().isin(refreshed_etfs)
+                ].copy()
+                holdings_to_write = pd.concat([existing, holdings_to_write], ignore_index=True)
+                mode = "replace"
         path = write_parquet_table(
             "etf_holdings",
-            holdings,
+            holdings_to_write,
             cache_root=cache_root,
-            mode="append",
+            mode=mode,
             dedupe_subset=["etf_ticker", "holding_symbol", "as_of"],
         )
         paths["etf_holdings"] = str(path)
         paths["etf_holdings_rows"] = int(len(holdings.index))
+        paths["etf_holdings_cache_rows"] = int(len(holdings_to_write.index))
     if not themes.empty:
         path = write_parquet_table(
             "etf_themes",
@@ -278,6 +300,8 @@ def _fetch_url_bytes(url: str) -> bytes:
         headers={
             "User-Agent": "Mozilla/5.0 finance-data-ops/0.1",
             "Accept": "text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
         },
         timeout=60,
     )

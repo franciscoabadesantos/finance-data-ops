@@ -73,6 +73,7 @@ deployments:
     parameters:
       symbols: null
       region: all
+      refresh_theme_etfs: true
     schedules:
       - cron: "0 3 * * 1-5"
         timezone: "UTC"

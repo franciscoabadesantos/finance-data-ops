@@ -5,8 +5,9 @@ from datetime import date
 import pandas as pd
 
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_payload
+from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.theme_etfs.config import THEME_ETFS, ThemeETF
-from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings
+from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
 from finance_data_ops.theme_etfs.universe import build_wave_universe_additions
 
 
@@ -67,6 +68,58 @@ def test_fetch_theme_etf_holdings_adds_theme_reference_and_normalizes_csv() -> N
             "as_of": date.today(),
         },
     ]
+
+
+def test_theme_etf_refresh_replaces_older_cached_snapshot(tmp_path) -> None:
+    old_holdings = pd.DataFrame(
+        [
+            {
+                "etf_ticker": "ARKX",
+                "holding_symbol": "OLD",
+                "holding_name": "Old Space Co",
+                "weight": 0.10,
+                "as_of": "2026-01-02",
+                "source": "theme_etf:ark_csv",
+                "fetched_at": "2026-01-03T00:00:00Z",
+                "updated_at": "2026-01-03T00:00:00Z",
+            },
+            {
+                "etf_ticker": "SMH",
+                "holding_symbol": "NVDA",
+                "holding_name": "NVIDIA Corp",
+                "weight": 0.20,
+                "as_of": "2026-01-02",
+                "source": "theme_etf:vaneck_xlsx",
+                "fetched_at": "2026-01-03T00:00:00Z",
+                "updated_at": "2026-01-03T00:00:00Z",
+            },
+        ]
+    )
+    new_holdings = pd.DataFrame(
+        [
+            {
+                "etf_ticker": "ARKX",
+                "holding_symbol": "RKLB",
+                "holding_name": "Rocket Lab Corp",
+                "weight": 0.12,
+                "as_of": "2026-07-02",
+                "source": "theme_etf:ark_csv",
+                "fetched_at": "2026-07-03T00:00:00Z",
+                "updated_at": "2026-07-03T00:00:00Z",
+            }
+        ]
+    )
+
+    write_theme_etf_outputs(holdings=old_holdings, themes=pd.DataFrame(), cache_root=str(tmp_path))
+    write_theme_etf_outputs(holdings=new_holdings, themes=pd.DataFrame(), cache_root=str(tmp_path))
+
+    cached = read_parquet_table("etf_holdings", cache_root=tmp_path, required=True)
+    by_etf = {
+        etf: frame[["holding_symbol", "as_of"]].to_dict(orient="records")
+        for etf, frame in cached.sort_values("holding_symbol").groupby("etf_ticker")
+    }
+    assert by_etf["ARKX"] == [{"holding_symbol": "RKLB", "as_of": "2026-07-02"}]
+    assert by_etf["SMH"] == [{"holding_symbol": "NVDA", "as_of": "2026-01-02"}]
 
 
 def test_wave_universe_merge_dedupes_existing_filters_cash_and_builds_entity_attributes() -> None:
