@@ -44,7 +44,18 @@ def main() -> None:
         }
 
     summary = {
-        "surviving_themes": themes[["theme", "etf_ticker", "wave", "source_type"]].to_dict(orient="records"),
+        "surviving_themes": themes[
+            [
+                "theme",
+                "etf_ticker",
+                "wave",
+                "source_type",
+                "holdings_source_depth",
+                "holdings_shallow",
+                "holdings_count",
+                "holdings_as_of",
+            ]
+        ].to_dict(orient="records"),
         "holdings_rows": int(len(holdings.index)),
         "theme_count": int(themes["theme"].nunique()) if not themes.empty else 0,
         "failures": failures,

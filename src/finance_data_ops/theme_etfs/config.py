@@ -13,6 +13,8 @@ class ThemeETF:
     source_type: str
     source_ref: str
     issuer: str
+    fallback_source_type: str | None = None
+    fallback_source_ref: str | None = None
     notes: str = ""
 
 
@@ -63,6 +65,32 @@ def _ssga(theme: str, ticker: str, wave: int) -> ThemeETF:
     )
 
 
+def _ishares(theme: str, ticker: str, wave: int, product_id: str, slug: str) -> ThemeETF:
+    return ThemeETF(
+        theme=theme,
+        etf_ticker=ticker,
+        wave=wave,
+        source_type="ishares_csv",
+        source_ref=f"{product_id}/{slug}",
+        issuer="iShares",
+        fallback_source_type="yfinance_funds_data",
+        fallback_source_ref=ticker,
+    )
+
+
+def _issuer_csv(theme: str, ticker: str, wave: int, issuer: str, source_ref: str) -> ThemeETF:
+    return ThemeETF(
+        theme=theme,
+        etf_ticker=ticker,
+        wave=wave,
+        source_type="issuer_csv",
+        source_ref=source_ref,
+        issuer=issuer,
+        fallback_source_type="yfinance_funds_data",
+        fallback_source_ref=ticker,
+    )
+
+
 def _yfinance(theme: str, ticker: str, wave: int, issuer: str, notes: str) -> ThemeETF:
     return ThemeETF(
         theme=theme,
@@ -79,34 +107,34 @@ def _yfinance(theme: str, ticker: str, wave: int, issuer: str, notes: str) -> Th
 # expansion is gated to wave 1 by the universe expansion module.
 THEME_ETFS: tuple[ThemeETF, ...] = (
     _vaneck("ai_semis", "SMH", 1, "semiconductor-etf-smh"),
-    _yfinance("software", "IGV", 1, "iShares", "iShares CSV blocked in some non-browser runtimes; yfinance fallback."),
+    _ishares("software", "IGV", 1, "239771", "ishares-north-american-techsoftware-etf"),
     _global_x("ai", "AIQ", 1),
     _global_x("fintech", "FINX", 1),
     _global_x("cyber", "BUG", 1),
-    _yfinance("internet_ecommerce", "FDN", 1, "First Trust", "First Trust download is not stable; yfinance fallback."),
-    _yfinance("defense", "ITA", 1, "iShares", "iShares CSV blocked in some non-browser runtimes; yfinance fallback."),
+    _issuer_csv("internet_ecommerce", "FDN", 1, "First Trust", "FDN"),
+    _ishares("defense", "ITA", 1, "239502", "ishares-us-aerospace-defense-etf"),
     _ark("space", "ARKX", 1, "ARK_SPACE_EXPLORATION_&_INNOVATION_ETF_ARKX_HOLDINGS.csv"),
     _ssga("biotech", "XBI", 1),
-    _yfinance("glp1_obesity", "THNR", 1, "Amplify", "Issuer holdings download is not stable; yfinance fallback."),
+    _issuer_csv("glp1_obesity", "THNR", 1, "Amplify", "THNR"),
     _ark("genomics", "ARKG", 1, "ARK_GENOMIC_REVOLUTION_ETF_ARKG_HOLDINGS.csv"),
     _ssga("oil_gas", "XOP", 1),
     _vaneck("oil_services", "OIH", 1, "oil-services-etf-oih"),
-    _yfinance("clean_energy", "ICLN", 1, "iShares", "iShares CSV blocked in some non-browser runtimes; yfinance fallback."),
-    _yfinance("solar", "TAN", 1, "Invesco", "Invesco download rejected automated requests; yfinance fallback."),
+    _ishares("clean_energy", "ICLN", 1, "239738", "ishares-global-clean-energy-etf"),
+    _issuer_csv("solar", "TAN", 1, "Invesco", "TAN"),
     _global_x("robotics", "BOTZ", 2),
     _global_x("ev_battery", "LIT", 2),
     _global_x("infra_construction", "PAVE", 2),
-    _yfinance("homebuilders", "ITB", 2, "iShares", "iShares CSV blocked in some non-browser runtimes; yfinance fallback."),
+    _ishares("homebuilders", "ITB", 2, "239512", "ishares-us-home-construction-etf"),
     _global_x("nuclear_uranium", "URA", 2),
-    _yfinance("water", "PHO", 2, "Invesco", "Invesco download rejected automated requests; yfinance fallback."),
+    _issuer_csv("water", "PHO", 2, "Invesco", "PHO"),
     _vaneck("critical_minerals", "REMX", 2, "rare-earth-strategic-metals-etf-remx"),
     _vaneck("gold_miners", "GDX", 2, "gold-miners-etf-gdx"),
     _vaneck("agriculture", "MOO", 2, "agribusiness-etf-moo"),
-    _yfinance("timber_materials", "WOOD", 2, "iShares", "iShares CSV blocked in some non-browser runtimes; yfinance fallback."),
-    _yfinance("medical_devices", "IHI", 2, "iShares", "iShares CSV blocked in some non-browser runtimes; yfinance fallback."),
-    _yfinance("cannabis", "MSOS", 2, "AdvisorShares", "Issuer holdings download is not stable; yfinance fallback."),
+    _ishares("timber_materials", "WOOD", 2, "239752", "ishares-global-timber-forestry-etf"),
+    _ishares("medical_devices", "IHI", 2, "239516", "ishares-us-medical-devices-etf"),
+    _issuer_csv("cannabis", "MSOS", 2, "AdvisorShares", "MSOS"),
     _vaneck("gaming_esports", "ESPO", 2, "video-gaming-esports-etf-espo"),
-    _yfinance("sports_betting", "BETZ", 2, "Roundhill", "Issuer holdings download is not stable; yfinance fallback."),
+    _issuer_csv("sports_betting", "BETZ", 2, "Roundhill", "BETZ"),
     _ssga("regional_banks", "KRE", 2),
-    _yfinance("airlines_travel", "JETS", 2, "U.S. Global", "Issuer holdings download is not stable; yfinance fallback."),
+    _issuer_csv("airlines_travel", "JETS", 2, "U.S. Global", "JETS"),
 )

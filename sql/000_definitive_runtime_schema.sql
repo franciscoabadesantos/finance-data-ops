@@ -350,6 +350,10 @@ create table public.etf_themes (
   issuer text,
   source_type text not null,
   source_ref text,
+  holdings_count integer,
+  holdings_as_of date,
+  holdings_source_depth text not null default 'unknown',
+  holdings_shallow boolean not null default false,
   active boolean not null default true,
   fetched_at timestamptz,
   updated_at timestamptz not null default now()

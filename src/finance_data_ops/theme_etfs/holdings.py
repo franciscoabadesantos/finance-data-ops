@@ -23,6 +23,10 @@ ETF_THEME_COLUMNS = [
     "issuer",
     "source_type",
     "source_ref",
+    "holdings_count",
+    "holdings_as_of",
+    "holdings_source_depth",
+    "holdings_shallow",
     "active",
     "fetched_at",
     "updated_at",
@@ -53,7 +57,7 @@ def fetch_theme_etf_holdings(
             failures.append({"theme": spec.theme, "etf_ticker": spec.etf_ticker, "error": "empty_holdings"})
             continue
         holding_frames.append(holdings)
-        theme_rows.append(_theme_row(spec, active=True))
+        theme_rows.append(_theme_row(spec, holdings=holdings, active=True))
 
     holdings_frame = pd.concat(holding_frames, ignore_index=True) if holding_frames else _empty_holdings_frame()
     if not holdings_frame.empty:
@@ -68,23 +72,116 @@ def fetch_theme_etf_holdings(
 def fetch_single_theme_etf_holdings(spec: ThemeETF, *, fetch_bytes: FetchBytes | None = None) -> pd.DataFrame:
     fetch_impl = fetch_bytes or _fetch_url_bytes
     now = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC")
-    if spec.source_type == "global_x_csv":
-        csv_url = _resolve_global_x_csv_url(spec.source_ref, fetch_bytes=fetch_impl)
-        raw = fetch_impl(csv_url)
+    try:
+        return _fetch_single_theme_etf_holdings_from_source(
+            spec,
+            source_type=spec.source_type,
+            source_ref=spec.source_ref,
+            fetch_bytes=fetch_impl,
+            fetched_at=now,
+            shallow=False,
+        )
+    except Exception:
+        if not spec.fallback_source_type:
+            raise
+        LOGGER.warning(
+            "Theme ETF issuer holdings unavailable; using fallback (theme=%s etf=%s source=%s fallback=%s)",
+            spec.theme,
+            spec.etf_ticker,
+            spec.source_type,
+            spec.fallback_source_type,
+            exc_info=True,
+        )
+        fallback = _fetch_single_theme_etf_holdings_from_source(
+            spec,
+            source_type=spec.fallback_source_type,
+            source_ref=spec.fallback_source_ref or spec.etf_ticker,
+            fetch_bytes=fetch_impl,
+            fetched_at=now,
+            shallow=True,
+        )
+        if fallback.empty:
+            raise RuntimeError(f"Fallback holdings empty for {spec.etf_ticker}.")
+        return fallback
+
+
+def _fetch_single_theme_etf_holdings_from_source(
+    spec: ThemeETF,
+    *,
+    source_type: str,
+    source_ref: str,
+    fetch_bytes: FetchBytes,
+    fetched_at: pd.Timestamp,
+    shallow: bool,
+) -> pd.DataFrame:
+    if source_type == "global_x_csv":
+        csv_url = _resolve_global_x_csv_url(source_ref, fetch_bytes=fetch_bytes)
+        raw = fetch_bytes(csv_url)
         frame = _read_csv_with_header_detection(raw)
-        return _normalize_holdings_frame(frame, spec=spec, fetched_at=now, source_ref=csv_url)
-    if spec.source_type == "ark_csv":
-        raw = fetch_impl(spec.source_ref)
+        return _normalize_holdings_frame(
+            frame,
+            spec=spec,
+            fetched_at=fetched_at,
+            source_type=source_type,
+            source_ref=csv_url,
+            shallow=shallow,
+        )
+    if source_type == "ark_csv":
+        raw = fetch_bytes(source_ref)
         frame = _read_csv_with_header_detection(raw)
-        return _normalize_holdings_frame(frame, spec=spec, fetched_at=now, source_ref=spec.source_ref)
-    if spec.source_type in {"vaneck_xlsx", "state_street_xlsx"}:
-        raw = fetch_impl(spec.source_ref)
+        return _normalize_holdings_frame(
+            frame,
+            spec=spec,
+            fetched_at=fetched_at,
+            source_type=source_type,
+            source_ref=source_ref,
+            shallow=shallow,
+        )
+    if source_type in {"vaneck_xlsx", "state_street_xlsx"}:
+        raw = fetch_bytes(source_ref)
         frame = _read_excel_with_header_detection(raw)
-        return _normalize_holdings_frame(frame, spec=spec, fetched_at=now, source_ref=spec.source_ref)
-    if spec.source_type == "yfinance_funds_data":
+        return _normalize_holdings_frame(
+            frame,
+            spec=spec,
+            fetched_at=fetched_at,
+            source_type=source_type,
+            source_ref=source_ref,
+            shallow=shallow,
+        )
+    if source_type == "ishares_csv":
+        csv_url = _resolve_ishares_csv_url(spec.etf_ticker, source_ref)
+        raw = fetch_bytes(csv_url)
+        frame = _read_csv_with_header_detection(raw)
+        return _normalize_holdings_frame(
+            frame,
+            spec=spec,
+            fetched_at=fetched_at,
+            source_type=source_type,
+            source_ref=csv_url,
+            shallow=shallow,
+        )
+    if source_type == "issuer_csv":
+        raw = fetch_bytes(_resolve_generic_issuer_ref(spec, source_ref))
+        frame = _read_csv_with_header_detection(raw)
+        return _normalize_holdings_frame(
+            frame,
+            spec=spec,
+            fetched_at=fetched_at,
+            source_type=source_type,
+            source_ref=source_ref,
+            shallow=shallow,
+        )
+    if source_type == "yfinance_funds_data":
         frame = _fetch_yfinance_funds_data(spec.etf_ticker)
-        return _normalize_holdings_frame(frame, spec=spec, fetched_at=now, source_ref=spec.source_ref)
-    raise ValueError(f"Unsupported theme ETF source_type: {spec.source_type}")
+        return _normalize_holdings_frame(
+            frame,
+            spec=spec,
+            fetched_at=fetched_at,
+            source_type=source_type,
+            source_ref=source_ref,
+            shallow=True,
+        )
+    raise ValueError(f"Unsupported theme ETF source_type: {source_type}")
 
 
 def write_theme_etf_outputs(
@@ -134,19 +231,38 @@ def write_theme_etf_outputs(
     return paths
 
 
-def _theme_row(spec: ThemeETF, *, active: bool) -> dict[str, Any]:
+def _theme_row(spec: ThemeETF, *, holdings: pd.DataFrame, active: bool) -> dict[str, Any]:
     now = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC")
+    source_type = _single_frame_attr(holdings, "source_type", spec.source_type)
+    source_ref = _single_frame_attr(holdings, "source_ref", spec.source_ref)
+    source_depth = _single_frame_attr(holdings, "source_depth", "full")
+    as_of_values = pd.to_datetime(holdings.get("as_of"), errors="coerce").dropna()
     return {
         "etf_ticker": spec.etf_ticker.upper(),
         "theme": spec.theme,
         "wave": int(spec.wave),
         "issuer": spec.issuer,
-        "source_type": spec.source_type,
-        "source_ref": spec.source_ref,
+        "source_type": source_type,
+        "source_ref": source_ref,
+        "holdings_count": int(holdings["holding_symbol"].nunique()) if "holding_symbol" in holdings.columns else int(len(holdings.index)),
+        "holdings_as_of": pd.Timestamp(as_of_values.max()).date() if not as_of_values.empty else None,
+        "holdings_source_depth": source_depth,
+        "holdings_shallow": source_depth == "shallow",
         "active": bool(active),
         "fetched_at": now,
         "updated_at": now,
     }
+
+
+def _single_frame_attr(frame: pd.DataFrame, key: str, default: str) -> str:
+    value = frame.attrs.get(key)
+    if value:
+        return str(value)
+    if key in frame.columns and not frame.empty:
+        values = [str(item) for item in frame[key].dropna().unique().tolist()]
+        if values:
+            return values[0]
+    return default
 
 
 def _resolve_global_x_csv_url(slug: str, *, fetch_bytes: FetchBytes) -> str:
@@ -158,11 +274,52 @@ def _resolve_global_x_csv_url(slug: str, *, fetch_bytes: FetchBytes) -> str:
     return match.group(0)
 
 
+def _resolve_ishares_csv_url(ticker: str, source_ref: str) -> str:
+    raw = str(source_ref).strip()
+    if raw.startswith("http"):
+        return raw
+    product_id, _, slug = raw.partition("/")
+    if not product_id or not slug:
+        raise RuntimeError(f"iShares source_ref must be '<product_id>/<slug>', got {source_ref!r}.")
+    return (
+        "https://www.blackrock.com/varnish-api/blk-one01-product-data/product-data/api/v1/get-fund-document"
+        "?appType=PRODUCT_PAGE&appSubType=ISHARES&targetSite=us-ishares&locale=en_US"
+        f"&portfolioId={product_id}&userType=individual&asOfDate=&component=holdings"
+    )
+
+
+def _resolve_generic_issuer_ref(spec: ThemeETF, source_ref: str) -> str:
+    raw = str(source_ref).strip()
+    if raw.startswith("http"):
+        return raw
+    ticker = (raw or spec.etf_ticker).upper()
+    issuer = spec.issuer.lower()
+    if issuer == "invesco":
+        return f"https://www.invesco.com/us/financial-products/etfs/holdings/main/holdings/0?action=download&ticker={ticker}"
+    if issuer == "first trust":
+        return f"https://www.ftportfolios.com/Common/ContentFileLoader.aspx?ContentGUID=holdings-{ticker.lower()}"
+    if issuer == "amplify":
+        return f"https://amplifyetfs.com/{ticker.lower()}-holdings.csv"
+    if issuer == "advisorshares":
+        return f"https://advisorshares.com/wp-content/uploads/fund-holdings/{ticker}.csv"
+    if issuer == "roundhill":
+        return f"https://www.roundhillinvestments.com/etf/{ticker}/full-holdings.csv"
+    if issuer == "u.s. global":
+        return f"https://www.usglobaletfs.com/holdings/{ticker}.csv"
+    return raw
+
+
 def _read_csv_with_header_detection(raw: bytes) -> pd.DataFrame:
     text = raw.decode("utf-8-sig", errors="replace")
+    if text.lstrip().lower().startswith("<!doctype html") or text.lstrip().lower().startswith("<html"):
+        raise RuntimeError("Holdings endpoint returned HTML instead of tabular holdings.")
     lines = text.splitlines()
     header_index = _find_header_index(lines)
-    return pd.read_csv(io.StringIO("\n".join(lines[header_index:])))
+    frame = pd.read_csv(io.StringIO("\n".join(lines[header_index:])))
+    as_of = _extract_as_of_from_lines(lines[: header_index + 1])
+    if as_of is not None:
+        frame.attrs["as_of"] = as_of
+    return frame
 
 
 def _read_excel_with_header_detection(raw: bytes) -> pd.DataFrame:
@@ -176,6 +333,9 @@ def _read_excel_with_header_detection(raw: bytes) -> pd.DataFrame:
         header_index = _find_header_index(lines)
         candidate = pd.read_excel(workbook, sheet_name=sheet, header=header_index)
         if _first_existing_column(candidate, _SYMBOL_COLUMNS) and _first_existing_column(candidate, _WEIGHT_COLUMNS):
+            as_of = _extract_as_of_from_lines(lines[: header_index + 1])
+            if as_of is not None:
+                candidate.attrs["as_of"] = as_of
             best = candidate
             break
     if best is None:
@@ -201,12 +361,16 @@ _NAME_COLUMNS = [
     "Holding Name",
     "Security Name",
     "Description",
+    "Issuer Name",
+    "Issue Name",
 ]
 _WEIGHT_COLUMNS = [
     "weight (%)",
     "Weight (%)",
+    "Weight (%) ",
     "% of Net Assets",
     "% of net assets",
+    "Weight (%)",
     "Holding Percent",
     "holdingPercent",
     "Weight",
@@ -215,6 +379,21 @@ _WEIGHT_COLUMNS = [
     "Pct",
 ]
 _DATE_COLUMNS = ["date", "Date", "as_of", "asOfDate", "As Of", "Fund Holdings Data as of"]
+_ASSET_CLASS_COLUMNS = ["asset_class", "Asset Class", "Class", "Security Type", "Type"]
+
+
+def _extract_as_of_from_lines(lines: list[str]) -> date | None:
+    for line in lines:
+        match = re.search(
+            r"(?:as\s+of|data\s+as\s+of|holdings\s+as\s+of)[^A-Za-z0-9]*(.+)$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            parsed = _coerce_date(match.group(1).strip().strip(",").strip('"'))
+            if parsed:
+                return parsed
+    return None
 
 
 def _normalize_holdings_frame(
@@ -222,7 +401,9 @@ def _normalize_holdings_frame(
     *,
     spec: ThemeETF,
     fetched_at: pd.Timestamp,
+    source_type: str,
     source_ref: str,
+    shallow: bool,
 ) -> pd.DataFrame:
     if frame.empty:
         return _empty_holdings_frame()
@@ -232,24 +413,32 @@ def _normalize_holdings_frame(
     name_column = _first_existing_column(frame, _NAME_COLUMNS)
     weight_column = _first_existing_column(frame, _WEIGHT_COLUMNS)
     date_column = _first_existing_column(frame, _DATE_COLUMNS)
+    asset_class_column = _first_existing_column(frame, _ASSET_CLASS_COLUMNS)
     if symbol_column is None or weight_column is None:
         raise RuntimeError(f"Missing required symbol/weight columns for {spec.etf_ticker}.")
 
+    default_as_of = frame.attrs.get("as_of")
     rows: list[dict[str, Any]] = []
     for index, row in frame.iterrows():
         symbol = _normalize_holding_symbol(row.get(symbol_column))
         name = _coerce_text(row.get(name_column)) if name_column else None
-        if not _is_equity_like_holding(symbol=symbol, name=name):
+        asset_class = _coerce_text(row.get(asset_class_column)) if asset_class_column else None
+        if not _is_equity_like_holding(symbol=symbol, name=name, asset_class=asset_class):
+            continue
+        weight = _coerce_weight(row.get(weight_column))
+        if weight is None:
             continue
         as_of = _coerce_date(row.get(date_column)) if date_column else None
+        if as_of is None:
+            as_of = _coerce_date(default_as_of)
         rows.append(
             {
                 "etf_ticker": spec.etf_ticker.upper(),
                 "holding_symbol": symbol,
                 "holding_name": name,
-                "weight": _coerce_weight(row.get(weight_column)),
+                "weight": weight,
                 "as_of": as_of or fetched_at.date(),
-                "source": f"theme_etf:{spec.source_type}",
+                "source": f"theme_etf:{source_type}{':shallow' if shallow else ''}",
                 "fetched_at": fetched_at,
                 "updated_at": fetched_at,
             }
@@ -259,6 +448,9 @@ def _normalize_holdings_frame(
     out = pd.DataFrame(rows)
     out = out.dropna(subset=["holding_symbol", "as_of"])
     out = out.drop_duplicates(subset=["etf_ticker", "holding_symbol", "as_of"], keep="last")
+    out.attrs["source_type"] = source_type
+    out.attrs["source_ref"] = source_ref
+    out.attrs["source_depth"] = "shallow" if shallow else "full"
     return out[
         [
             "etf_ticker",
@@ -300,6 +492,7 @@ def _fetch_url_bytes(url: str) -> bytes:
         headers={
             "User-Agent": "Mozilla/5.0 finance-data-ops/0.1",
             "Accept": "text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*",
+            "X-Requested-With": "XMLHttpRequest",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
         },
@@ -379,16 +572,40 @@ def _normalize_holding_symbol(value: Any) -> str | None:
     return token
 
 
-def _is_equity_like_holding(*, symbol: str | None, name: str | None) -> bool:
+def _is_equity_like_holding(*, symbol: str | None, name: str | None, asset_class: str | None = None) -> bool:
     if not symbol:
         return False
     token = symbol.strip().upper()
     name_token = str(name or "").strip().upper()
-    if token in {"", "NAN", "NONE", "NULL", "CASH", "USD", "EUR", "GBP", "JPY", "CAD", "AUD"}:
+    asset_class_token = str(asset_class or "").strip().upper()
+    if asset_class_token and asset_class_token not in {"EQUITY", "STOCK"}:
+        return False
+    currency_tokens = {"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "HKD", "SEK", "NOK", "DKK", "KRW", "CNY"}
+    if token in {"", "NAN", "NONE", "NULL", "CASH", "CASH_USD"} | currency_tokens:
+        return False
+    if re.fullmatch(r"-?[A-Z]{3}\s*CASH-?", token):
+        return False
+    if re.fullmatch(r"[A-Z]{3}\s*(CURNCY|CURRENCY)", token):
         return False
     if name_token in {"CASH", "US DOLLAR", "U.S. DOLLAR"}:
         return False
-    if "CASH" in name_token or "TREASURY BILL" in name_token or "MONEY MARKET" in name_token:
+    non_equity_markers = (
+        "CASH",
+        "CSH FND",
+        "TREASURY BILL",
+        "TREASURY SL AGENCY",
+        "MONEY MARKET",
+        "REPURCHASE AGREEMENT",
+        "COLLATERAL",
+        "FUTURE",
+        "SWAP",
+        "WARRANT",
+        "OPTION",
+        "RIGHTS",
+        "RECEIVABLE",
+        "PAYABLE",
+    )
+    if any(marker in name_token for marker in non_equity_markers):
         return False
     return bool(re.search(r"[A-Z]", token))
 

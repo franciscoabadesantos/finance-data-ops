@@ -7,6 +7,7 @@ import pandas as pd
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_payload
 from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.theme_etfs.config import THEME_ETFS, ThemeETF
+from finance_data_ops.theme_etfs import holdings as holdings_mod
 from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
 from finance_data_ops.theme_etfs.universe import build_wave_universe_additions
 
@@ -21,6 +22,7 @@ def test_theme_etf_catalog_has_expected_waves_and_no_broad_sector_spdrs() -> Non
     assert themes["airlines_travel"].wave == 2
     assert len({spec.etf_ticker for spec in THEME_ETFS}) == len(THEME_ETFS)
     assert not {"XLK", "XLE", "XLV"}.intersection({spec.etf_ticker for spec in THEME_ETFS})
+    assert not any(spec.source_type == "yfinance_funds_data" for spec in THEME_ETFS)
 
 
 def test_fetch_theme_etf_holdings_adds_theme_reference_and_normalizes_csv() -> None:
@@ -58,16 +60,119 @@ def test_fetch_theme_etf_holdings_adds_theme_reference_and_normalizes_csv() -> N
             "holding_symbol": "HOOD",
             "holding_name": "ROBINHOOD MARKETS INC - A US",
             "weight": 0.0839,
-            "as_of": date.today(),
+            "as_of": date(2026, 7, 2),
         },
         {
             "etf_ticker": "FINX",
             "holding_symbol": "IRE.AX",
             "holding_name": "IRESS LTD",
             "weight": 0.025,
-            "as_of": date.today(),
+            "as_of": date(2026, 7, 2),
         },
     ]
+    assert themes.iloc[0]["holdings_count"] == 2
+    assert themes.iloc[0]["holdings_as_of"] == date(2026, 7, 2)
+    assert themes.iloc[0]["holdings_source_depth"] == "full"
+    assert bool(themes.iloc[0]["holdings_shallow"]) is False
+
+
+def test_ishares_issuer_holdings_preferred_over_yfinance_top_ten() -> None:
+    spec = ThemeETF(
+        theme="software",
+        etf_ticker="IGV",
+        wave=1,
+        source_type="ishares_csv",
+        source_ref="239771/ishares-north-american-techsoftware-etf",
+        issuer="iShares",
+        fallback_source_type="yfinance_funds_data",
+        fallback_source_ref="IGV",
+    )
+
+    def fake_fetch(url: str) -> bytes:
+        assert "get-fund-document" in url
+        assert "portfolioId=239771" in url
+        rows = [
+            "iShares Expanded Tech-Software Sector ETF Holdings as of 07/02/2026",
+            "Ticker,Name,Weight (%)",
+        ]
+        rows.extend(f"SOFT{i},Software Company {i},{1.0 + i / 100}" for i in range(12))
+        return "\n".join(rows).encode()
+
+    holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
+
+    assert failures == []
+    assert len(holdings.index) == 12
+    assert themes.iloc[0]["source_type"] == "ishares_csv"
+    assert themes.iloc[0]["holdings_count"] == 12
+    assert themes.iloc[0]["holdings_source_depth"] == "full"
+    assert set(holdings["source"]) == {"theme_etf:ishares_csv"}
+
+
+def test_issuer_fetch_falls_back_to_shallow_yfinance_and_flags_theme(monkeypatch) -> None:
+    spec = ThemeETF(
+        theme="software",
+        etf_ticker="IGV",
+        wave=1,
+        source_type="ishares_csv",
+        source_ref="239771/ishares-north-american-techsoftware-etf",
+        issuer="iShares",
+        fallback_source_type="yfinance_funds_data",
+        fallback_source_ref="IGV",
+    )
+
+    def fake_fetch(_url: str) -> bytes:
+        raise RuntimeError("issuer unavailable")
+
+    monkeypatch.setattr(
+        holdings_mod,
+        "_fetch_yfinance_funds_data",
+        lambda _ticker: pd.DataFrame(
+            [
+                {"Ticker": "MSFT", "Name": "Microsoft", "Weight (%)": 8.0},
+                {"Ticker": "ORCL", "Name": "Oracle", "Weight (%)": 7.0},
+            ]
+        ),
+    )
+
+    holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
+
+    assert failures == []
+    assert holdings["holding_symbol"].tolist() == ["MSFT", "ORCL"]
+    assert set(holdings["source"]) == {"theme_etf:yfinance_funds_data:shallow"}
+    assert themes.iloc[0]["source_type"] == "yfinance_funds_data"
+    assert themes.iloc[0]["holdings_source_depth"] == "shallow"
+    assert bool(themes.iloc[0]["holdings_shallow"]) is True
+
+
+def test_full_holdings_filter_non_equity_cash_and_placeholder_rows() -> None:
+    spec = ThemeETF(
+        theme="solar",
+        etf_ticker="TAN",
+        wave=1,
+        source_type="issuer_csv",
+        source_ref="https://example.test/tan.csv",
+        issuer="Invesco",
+        fallback_source_type="yfinance_funds_data",
+        fallback_source_ref="TAN",
+    )
+
+    def fake_fetch(_url: str) -> bytes:
+        return (
+            "Holdings as of 2026-07-02\n"
+            "Ticker,Name,Weight (%)\n"
+            "FSLR,First Solar Inc,9.5\n"
+            "-AUD CASH-,Cash,0.4\n"
+            "USD,US Dollar,0.2\n"
+            "ESU6,Equity Index Future,0.1\n"
+            "ENPH,Enphase Energy Inc,4.5\n"
+            '"Holdings subject to change. See issuer website.",,\n'
+        ).encode()
+
+    holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
+
+    assert failures == []
+    assert holdings["holding_symbol"].tolist() == ["FSLR", "ENPH"]
+    assert themes.iloc[0]["holdings_count"] == 2
 
 
 def test_theme_etf_refresh_replaces_older_cached_snapshot(tmp_path) -> None:
