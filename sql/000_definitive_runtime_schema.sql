@@ -343,6 +343,21 @@ create table public.etf_holdings (
 create index idx_etf_holdings_ticker_weight
   on public.etf_holdings (etf_ticker, as_of desc, weight desc);
 
+create table public.etf_themes (
+  etf_ticker text primary key,
+  theme text not null,
+  wave integer not null check (wave in (1, 2)),
+  issuer text,
+  source_type text not null,
+  source_ref text,
+  active boolean not null default true,
+  fetched_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+create index idx_etf_themes_theme_wave
+  on public.etf_themes (theme, wave, active);
+
 create table public.etf_sector_weights (
   etf_ticker text not null,
   sector text not null,

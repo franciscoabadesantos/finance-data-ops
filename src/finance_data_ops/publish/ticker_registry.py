@@ -110,6 +110,11 @@ def build_entity_attributes_static_payload(rows: list[dict[str, Any]]) -> list[d
     if not rows:
         return []
     registry_rows = build_ticker_registry_payload(rows)
+    extras_by_entity: dict[str, dict[str, Any]] = {}
+    for raw in rows:
+        entity_key = str(raw.get("normalized_symbol") or raw.get("input_symbol") or "").strip().upper()
+        if entity_key:
+            extras_by_entity[entity_key] = dict(raw)
     now_utc = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC").isoformat()
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -118,7 +123,8 @@ def build_entity_attributes_static_payload(rows: list[dict[str, Any]]) -> list[d
         if not entity_id or entity_id in {"NONE", "NULL", "NAN"} or entity_id in seen:
             continue
         seen.add(entity_id)
-        country = _infer_country(entity_id)
+        extras = extras_by_entity.get(entity_id, {})
+        country = str(extras.get("country") or _infer_country(entity_id)).strip().upper()
         out.append(
             {
                 "entity_id": entity_id,
@@ -127,7 +133,7 @@ def build_entity_attributes_static_payload(rows: list[dict[str, Any]]) -> list[d
                 "exchange": row.get("exchange"),
                 "exchange_mic": row.get("exchange_mic"),
                 "currency": row.get("currency"),
-                "sector": None,
+                "sector": extras.get("sector"),
                 "updated_at": now_utc,
             }
         )
