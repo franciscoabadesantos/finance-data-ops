@@ -15,7 +15,7 @@ create table if not exists public.ticker_registry (
   validation_reason text not null default 'pending_validation',
   promotion_status text not null default 'pending_validation',
   last_validated_at timestamptz,
-  notes text,
+  notes jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now(),
   check (instrument_type in ('equity','adr','etf','index_proxy','country_fund','unknown')),
   check (validation_status in ('pending_validation','validated_market_only','validated_full','rejected')),
@@ -27,3 +27,26 @@ create index if not exists idx_ticker_registry_region_status
 
 create unique index if not exists idx_ticker_registry_input_scope
   on public.ticker_registry (input_symbol, region, coalesce(exchange, ''));
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'ticker_registry'
+      and column_name = 'notes'
+      and data_type <> 'jsonb'
+  ) then
+    alter table public.ticker_registry
+      alter column notes type jsonb
+      using case
+        when notes is null or btrim(notes::text) = '' then '{}'::jsonb
+        else jsonb_build_object('raw', notes::text)
+      end;
+  end if;
+end $$;
+alter table if exists public.ticker_registry
+  alter column notes set default '{}'::jsonb;
+alter table if exists public.ticker_registry
+  alter column notes set not null;

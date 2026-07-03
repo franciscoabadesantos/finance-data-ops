@@ -100,7 +100,8 @@ def build_ticker_registry_payload(rows: list[dict[str, Any]]) -> list[dict[str, 
 
     payload = frame[REGISTRY_COLUMNS].to_dict(orient="records")
     for row in payload:
-        for nullable in ("exchange", "exchange_mic", "currency", "notes", "normalized_symbol"):
+        row["notes"] = _coerce_notes(row.get("notes"))
+        for nullable in ("exchange", "exchange_mic", "currency", "normalized_symbol"):
             if row.get(nullable) in {"", "NONE", "NULL"}:
                 row[nullable] = None
     return payload
@@ -161,3 +162,48 @@ def _infer_country(symbol: str) -> str:
         if normalized.endswith(suffix):
             return country
     return "US"
+
+
+def _coerce_notes(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, float) and pd.isna(value):
+        return {}
+    if isinstance(value, dict):
+        return {str(key): inner for key, inner in value.items()}
+    if not isinstance(value, str):
+        return {"value": value}
+
+    raw = value.strip()
+    if not raw or raw.upper() in {"NONE", "NULL", "NAN"}:
+        return {}
+    if "=" not in raw:
+        return {"raw": raw}
+
+    parsed: dict[str, Any] = {}
+    for part in raw.split(";"):
+        token = part.strip()
+        if not token or "=" not in token:
+            continue
+        key, raw_value = token.split("=", 1)
+        normalized_key = key.strip()
+        if not normalized_key:
+            continue
+        parsed[normalized_key] = _coerce_note_value(normalized_key, raw_value.strip())
+    return parsed or {"raw": raw}
+
+
+def _coerce_note_value(key: str, value: str) -> Any:
+    if key in {"wave", "theme_count"}:
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    if key == "aggregate_weight":
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    if key in {"themes", "source_etfs", "candidates"}:
+        return [item for item in value.split(",") if item]
+    return value
