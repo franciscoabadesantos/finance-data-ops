@@ -1,7 +1,11 @@
 # Secret Consolidation Inventory
 
 Date: 2026-04-19  
-Scope: `finance-data-ops`, `finance-backend`, `spy-signal-site`, `spy-signal-backoffice`, `Finance`
+Scope: historical note for `finance-data-ops`, `finance-backend`, `spy-signal-site`, `spy-signal-backoffice`, `Finance`
+
+> Historical document: this inventory records the April 2026 Supabase-era
+> secret cleanup. Current `finance-data-ops` publish paths use
+> `DATA_OPS_DATABASE_URL` and write to self-host Postgres.
 
 ## Critical findings
 

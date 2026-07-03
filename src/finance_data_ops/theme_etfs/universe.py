@@ -28,6 +28,7 @@ def build_wave_universe_additions(
     wave: int = 1,
     max_new_tickers: int = 125,
     batch_size: int = 25,
+    batch_offset: int = 0,
     metadata_lookup: MetadataLookup | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     if int(wave) not in SUPPORTED_WAVES:
@@ -36,13 +37,15 @@ def build_wave_universe_additions(
         raise ValueError("max_new_tickers must be positive.")
     if batch_size < 1:
         raise ValueError("batch_size must be positive.")
+    if batch_offset < 0:
+        raise ValueError("batch_offset must be non-negative.")
 
     registry = (
         existing_registry.copy()
         if existing_registry is not None
         else read_ticker_registry(cache_root=cache_root or "data_cache")
     )
-    current_symbols = _current_registry_symbols(registry, ignore_theme_wave=wave)
+    current_symbols = _current_registry_symbols(registry)
     candidates = _rank_wave_candidates(holdings=holdings, etf_themes=etf_themes, wave=wave)
     if candidates.empty:
         return pd.DataFrame(), pd.DataFrame(), _summary(wave=wave, candidates=0, selected=0, skipped_existing=0)
@@ -66,7 +69,9 @@ def build_wave_universe_additions(
 
     registry_rows = pd.DataFrame(rows)
     if not registry_rows.empty:
-        registry_rows["theme_ramp_batch"] = ((registry_rows.index // int(batch_size)) + 1).astype(int)
+        registry_rows["theme_ramp_batch"] = (int(batch_offset) + (registry_rows.index // int(batch_size)) + 1).astype(
+            int
+        )
     entity_rows = pd.DataFrame(build_entity_attributes_static_payload(rows))
     summary = _summary(
         wave=wave,
@@ -166,19 +171,12 @@ def _build_registry_row(
     }
 
 
-def _current_registry_symbols(registry: pd.DataFrame, *, ignore_theme_wave: int | None = None) -> set[str]:
+def _current_registry_symbols(registry: pd.DataFrame) -> set[str]:
     if registry.empty or "normalized_symbol" not in registry.columns:
         return set()
     active = registry.copy()
     if "status" in active.columns:
         active = active.loc[active["status"].astype(str).str.lower() == "active"]
-    if ignore_theme_wave is not None and "notes" in active.columns:
-        notes = active["notes"].astype(str)
-        generated_same_wave = notes.str.contains("created_by=theme_etf_universe", regex=False) & notes.str.contains(
-            f"wave={int(ignore_theme_wave)};",
-            regex=False,
-        )
-        active = active.loc[~generated_same_wave]
     return {
         str(value).strip().upper()
         for value in active["normalized_symbol"].dropna().tolist()
@@ -330,4 +328,5 @@ def _summary(*, wave: int, candidates: int, selected: int, skipped_existing: int
         "candidate_tickers": int(candidates),
         "new_tickers_selected": int(selected),
         "skipped_existing": int(skipped_existing),
+        "pending_after_selection": max(int(candidates) - int(skipped_existing) - int(selected), 0),
     }

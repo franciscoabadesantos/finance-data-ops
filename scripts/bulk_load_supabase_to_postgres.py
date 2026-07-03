@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time Supabase to self-hosted Postgres bulk loader.
+"""One-time Postgres-to-Postgres historical bulk loader.
 
 This script is intentionally not a Prefect flow. The server agent runs it once
 with explicit source/target credentials after the local schema is in place.
@@ -8,12 +8,7 @@ with explicit source/target credentials after the local schema is in place.
 from __future__ import annotations
 
 import argparse
-import csv
-import io
-import json
 import os
-import urllib.parse
-import urllib.request
 
 
 TABLES = [
@@ -41,43 +36,29 @@ TABLES = [
 def main() -> None:
     args = build_parser().parse_args()
     target_dsn = args.target_dsn or os.environ.get("DATA_OPS_DATABASE_URL") or os.environ.get("DATABASE_URL")
-    source_dsn = args.source_dsn or os.environ.get("SUPABASE_DATABASE_URL")
+    source_dsn = args.source_dsn or os.environ.get("SOURCE_DATABASE_URL")
     if not target_dsn:
         raise RuntimeError("Target DSN is required via --target-dsn, DATA_OPS_DATABASE_URL, or DATABASE_URL.")
-    if not source_dsn and not (args.supabase_url and args.supabase_key):
-        raise RuntimeError("Provide --source-dsn or --supabase-url/--supabase-key for read-only extraction.")
+    if not source_dsn:
+        raise RuntimeError("Source DSN is required via --source-dsn or SOURCE_DATABASE_URL.")
 
     for table_name, conflict_columns in _selected_tables(args.tables):
-        if source_dsn:
-            copy_table_postgres_to_postgres(
-                source_dsn=source_dsn,
-                target_dsn=target_dsn,
-                table_name=table_name,
-                conflict_columns=conflict_columns,
-                truncate=bool(args.truncate),
-            )
-        else:
-            copy_table_rest_to_postgres(
-                supabase_url=str(args.supabase_url),
-                supabase_key=str(args.supabase_key),
-                target_dsn=target_dsn,
-                table_name=table_name,
-                conflict_columns=conflict_columns,
-                page_size=int(args.page_size),
-                truncate=bool(args.truncate),
-            )
+        copy_table_postgres_to_postgres(
+            source_dsn=source_dsn,
+            target_dsn=target_dsn,
+            table_name=table_name,
+            conflict_columns=conflict_columns,
+            truncate=bool(args.truncate),
+        )
     if not args.skip_source_cache_backfill:
         backfill_source_cache_from_public(target_dsn)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Bulk-load historical Supabase tables into local Postgres.")
-    parser.add_argument("--source-dsn", default=None, help="Supabase direct Postgres DSN. Preferred path.")
+    parser = argparse.ArgumentParser(description="Bulk-load historical tables between Postgres databases.")
+    parser.add_argument("--source-dsn", default=None, help="Source Postgres DSN.")
     parser.add_argument("--target-dsn", default=None, help="Local Postgres/pgbouncer DSN.")
-    parser.add_argument("--supabase-url", default=os.environ.get("SUPABASE_URL"))
-    parser.add_argument("--supabase-key", default=os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_SECRET_KEY"))
     parser.add_argument("--tables", default="all", help="Comma-separated table names or all.")
-    parser.add_argument("--page-size", type=int, default=50000)
     parser.add_argument("--truncate", action="store_true", help="Truncate target tables before loading selected tables.")
     parser.add_argument(
         "--skip-source-cache-backfill",
@@ -129,149 +110,6 @@ def copy_table_postgres_to_postgres(
             conflict_columns=conflict_columns,
         )
     print(f"loaded {table_name}: {loaded} rows")
-
-
-def copy_table_rest_to_postgres(
-    *,
-    supabase_url: str,
-    supabase_key: str,
-    target_dsn: str,
-    table_name: str,
-    conflict_columns: str,
-    page_size: int,
-    truncate: bool,
-) -> None:
-    import psycopg
-
-    schema_name, relation_name = _parse_table(table_name)
-    if schema_name != "public":
-        print(f"skip {table_name}: REST fallback only supports public schema")
-        return
-    with psycopg.connect(target_dsn, autocommit=True) as target_conn:
-        columns = _target_columns(target_conn, schema_name=schema_name, table_name=relation_name)
-        if truncate:
-            target_conn.execute(f'truncate table "{schema_name}"."{relation_name}"')
-        offset = 0
-        total = 0
-        while True:
-            csv_text = fetch_supabase_csv(
-                supabase_url=supabase_url,
-                supabase_key=supabase_key,
-                table_name=relation_name,
-                columns=columns,
-                order_columns=[part.strip() for part in conflict_columns.split(",") if part.strip()],
-                offset=offset,
-                limit=page_size,
-            )
-            csv_text = normalize_rest_csv_for_target(target_conn, table_name=table_name, csv_text=csv_text)
-            rows = max(sum(1 for _ in csv.reader(io.StringIO(csv_text))) - 1, 0)
-            if rows == 0:
-                break
-            total += copy_csv_to_target(
-                target_conn=target_conn,
-                table_name=table_name,
-                columns=columns,
-                csv_text=csv_text,
-                conflict_columns=conflict_columns,
-            )
-            offset += rows
-    print(f"loaded {table_name}: {total} rows")
-
-
-def fetch_supabase_csv(
-    *,
-    supabase_url: str,
-    supabase_key: str,
-    table_name: str,
-    columns: list[str],
-    order_columns: list[str],
-    offset: int,
-    limit: int,
-) -> str:
-    order = ",".join(f"{column}.asc" for column in order_columns)
-    query = urllib.parse.urlencode(
-        {"select": ",".join(columns), "order": order, "offset": str(offset), "limit": str(limit)}
-    )
-    url = f"{supabase_url.rstrip('/')}/rest/v1/{urllib.parse.quote(table_name)}?{query}"
-    request = urllib.request.Request(
-        url,
-        headers={
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
-            "Accept": "text/csv",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=300) as response:
-        return response.read().decode("utf-8")
-
-
-def copy_csv_to_target(
-    *,
-    target_conn,
-    table_name: str,
-    columns: list[str],
-    csv_text: str,
-    conflict_columns: str,
-) -> int:
-    schema_name, relation_name = _parse_table(table_name)
-    temp_name = create_temp_like(target_conn, schema_name=schema_name, table_name=relation_name)
-    column_sql = ", ".join(f'"{column}"' for column in columns)
-    with target_conn.cursor() as cur:
-        with cur.copy(f'copy "{temp_name}" ({column_sql}) from stdin with csv header') as copy:
-            copy.write(csv_text)
-    return merge_temp_to_target(
-        target_conn=target_conn,
-        temp_name=temp_name,
-        table_name=table_name,
-        columns=columns,
-        conflict_columns=conflict_columns,
-    )
-
-
-def normalize_rest_csv_for_target(target_conn, *, table_name: str, csv_text: str) -> str:
-    schema_name, relation_name = _parse_table(table_name)
-    json_columns = {
-        str(row[0])
-        for row in target_conn.execute(
-            """
-            select column_name
-            from information_schema.columns
-            where table_schema = %s and table_name = %s
-              and data_type in ('json', 'jsonb')
-            """,
-            (schema_name, relation_name),
-        ).fetchall()
-    }
-    if not json_columns:
-        return csv_text
-
-    source = io.StringIO(csv_text)
-    reader = csv.DictReader(source)
-    if not reader.fieldnames:
-        return csv_text
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=reader.fieldnames, lineterminator="\n")
-    writer.writeheader()
-    for row in reader:
-        for column in json_columns.intersection(row):
-            value = row.get(column)
-            if not value:
-                continue
-            try:
-                decoded = json.loads(value)
-            except json.JSONDecodeError:
-                try:
-                    decoded = json.loads(value.replace('\\"', '"'))
-                except json.JSONDecodeError:
-                    continue
-            if isinstance(decoded, str):
-                try:
-                    decoded = json.loads(decoded)
-                except json.JSONDecodeError:
-                    pass
-            row[column] = json.dumps(decoded, separators=(",", ":"))
-        writer.writerow(row)
-    return output.getvalue()
 
 
 def create_temp_like(target_conn, *, schema_name: str, table_name: str) -> str:

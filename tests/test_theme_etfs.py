@@ -128,6 +128,64 @@ def test_wave_universe_merge_dedupes_existing_filters_cash_and_builds_entity_att
     ]
 
 
+def test_wave_universe_merge_resumes_after_prior_theme_batch() -> None:
+    holdings = pd.DataFrame(
+        [
+            {"etf_ticker": "AIQ", "holding_symbol": "AAA", "holding_name": "A", "weight": 0.05},
+            {"etf_ticker": "AIQ", "holding_symbol": "BBB", "holding_name": "B", "weight": 0.04},
+            {"etf_ticker": "AIQ", "holding_symbol": "CCC", "holding_name": "C", "weight": 0.03},
+            {"etf_ticker": "AIQ", "holding_symbol": "DDD", "holding_name": "D", "weight": 0.02},
+        ]
+    )
+    themes = pd.DataFrame([{"etf_ticker": "AIQ", "theme": "ai", "wave": 1}])
+
+    first_rows, _, first_summary = build_wave_universe_additions(
+        holdings=holdings,
+        etf_themes=themes,
+        existing_registry=pd.DataFrame(),
+        wave=1,
+        max_new_tickers=2,
+        batch_size=2,
+        metadata_lookup=lambda _symbol: {"country": "US"},
+    )
+    second_rows, _, second_summary = build_wave_universe_additions(
+        holdings=holdings,
+        etf_themes=themes,
+        existing_registry=first_rows.drop(columns=["theme_ramp_batch"]),
+        wave=1,
+        max_new_tickers=2,
+        batch_size=2,
+        batch_offset=int(first_rows["theme_ramp_batch"].max()),
+        metadata_lookup=lambda _symbol: {"country": "US"},
+    )
+    third_rows, _, third_summary = build_wave_universe_additions(
+        holdings=holdings,
+        etf_themes=themes,
+        existing_registry=pd.concat(
+            [
+                first_rows.drop(columns=["theme_ramp_batch"]),
+                second_rows.drop(columns=["theme_ramp_batch"]),
+            ],
+            ignore_index=True,
+        ),
+        wave=1,
+        max_new_tickers=2,
+        batch_size=2,
+        batch_offset=int(second_rows["theme_ramp_batch"].max()),
+        metadata_lookup=lambda _symbol: {"country": "US"},
+    )
+
+    assert first_rows["normalized_symbol"].tolist() == ["AAA", "BBB"]
+    assert first_rows["theme_ramp_batch"].tolist() == [1, 1]
+    assert first_summary["pending_after_selection"] == 2
+    assert second_rows["normalized_symbol"].tolist() == ["CCC", "DDD"]
+    assert second_rows["theme_ramp_batch"].tolist() == [2, 2]
+    assert second_summary["skipped_existing"] == 2
+    assert second_summary["pending_after_selection"] == 0
+    assert third_rows.empty
+    assert third_summary["pending_after_selection"] == 0
+
+
 def test_entity_attributes_payload_preserves_resolved_country_and_sector() -> None:
     payload = build_entity_attributes_static_payload(
         [

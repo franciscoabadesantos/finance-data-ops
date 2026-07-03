@@ -33,7 +33,7 @@ export WORKER_RUNTIME_SA="finance-jobs-worker@${PROJECT_ID}.iam.gserviceaccount.
 export TASKS_INVOKER_SA="finance-tasks-invoker@${PROJECT_ID}.iam.gserviceaccount.com"
 export BACKEND_ENQUEUER_SA="finance-backend-enqueuer@${PROJECT_ID}.iam.gserviceaccount.com"
 
-export SECRET_SUPABASE_SECRET_KEY="supabase-service-role-key"
+export SECRET_DATA_OPS_DATABASE_URL="data-ops-database-url"
 export SECRET_WORKER_SHARED_TOKEN="worker-shared-token" # optional
 ```
 
@@ -141,14 +141,14 @@ gcloud builds submit . \
 Create/update Secret Manager secrets (first time + rotations):
 
 ```bash
-gcloud secrets describe "${SECRET_SUPABASE_SECRET_KEY}" \
+gcloud secrets describe "${SECRET_DATA_OPS_DATABASE_URL}" \
   --project "${PROJECT_ID}" >/dev/null 2>&1 || \
-  gcloud secrets create "${SECRET_SUPABASE_SECRET_KEY}" \
+  gcloud secrets create "${SECRET_DATA_OPS_DATABASE_URL}" \
     --project "${PROJECT_ID}" \
     --replication-policy="automatic"
 
-printf '%s' "${SUPABASE_SECRET_KEY}" | \
-  gcloud secrets versions add "${SECRET_SUPABASE_SECRET_KEY}" \
+printf '%s' "${DATA_OPS_DATABASE_URL}" | \
+  gcloud secrets versions add "${SECRET_DATA_OPS_DATABASE_URL}" \
     --project "${PROJECT_ID}" \
     --data-file=-
 ```
@@ -179,8 +179,7 @@ gcloud run deploy "${WORKER_SERVICE}" \
   --memory "1Gi" \
   --service-account "${WORKER_RUNTIME_SA}" \
   --no-allow-unauthenticated \
-  --set-env-vars "SUPABASE_URL=${SUPABASE_URL}" \
-  --set-secrets "SUPABASE_SECRET_KEY=${SECRET_SUPABASE_SECRET_KEY}:latest" \
+  --set-secrets "DATA_OPS_DATABASE_URL=${SECRET_DATA_OPS_DATABASE_URL}:latest" \
   --set-env-vars "FINANCE_DATA_OPS_ROOT=/app" \
   --set-env-vars "CLOUD_TASKS_ENABLED=true" \
   --set-env-vars "GCP_PROJECT_ID=${PROJECT_ID}" \

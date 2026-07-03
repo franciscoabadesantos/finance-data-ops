@@ -27,6 +27,13 @@ def main() -> None:
     settings = load_settings(cache_root=args.cache_root)
     holdings = read_parquet_table("etf_holdings", cache_root=settings.cache_root, required=True)
     themes = read_parquet_table("etf_themes", cache_root=settings.cache_root, required=True)
+    ramp_table = f"theme_etf_universe_wave{int(args.wave)}_ramp"
+    existing_ramp = read_parquet_table(ramp_table, cache_root=settings.cache_root, required=False)
+    batch_offset = (
+        int(existing_ramp["theme_ramp_batch"].max())
+        if not existing_ramp.empty and "theme_ramp_batch" in existing_ramp.columns
+        else 0
+    )
     registry_rows, entity_rows, summary = build_wave_universe_additions(
         holdings=holdings,
         etf_themes=themes,
@@ -34,6 +41,7 @@ def main() -> None:
         wave=int(args.wave),
         max_new_tickers=int(args.max_new_tickers),
         batch_size=int(args.batch_size),
+        batch_offset=batch_offset,
     )
 
     if not registry_rows.empty:
@@ -41,10 +49,10 @@ def main() -> None:
         rows = registry_rows.drop(columns=["theme_ramp_batch"], errors="ignore").to_dict(orient="records")
         upsert_ticker_registry_rows(cache_root=settings.cache_root, rows=rows)
         write_parquet_table(
-            f"theme_etf_universe_wave{int(args.wave)}_ramp",
+            ramp_table,
             registry_rows,
             cache_root=settings.cache_root,
-            mode="replace",
+            mode="append",
             dedupe_subset=["registry_key"],
         )
     if not entity_rows.empty:
