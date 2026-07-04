@@ -182,6 +182,18 @@ def _fetch_single_theme_etf_holdings_from_source(
             source_ref=source_ref,
             shallow=shallow,
         )
+    if source_type == "roundhill_csv":
+        csv_url = _resolve_roundhill_csv_url(spec.etf_ticker, source_ref, fetch_bytes=fetch_bytes)
+        raw = fetch_bytes(csv_url)
+        frame = _read_roundhill_holdings_csv(raw, account=spec.etf_ticker)
+        return _normalize_holdings_frame(
+            frame,
+            spec=spec,
+            fetched_at=fetched_at,
+            source_type=source_type,
+            source_ref=csv_url,
+            shallow=shallow,
+        )
     if source_type == "issuer_csv":
         raw = fetch_bytes(_resolve_generic_issuer_ref(spec, source_ref))
         frame = _read_csv_with_header_detection(raw)
@@ -312,6 +324,35 @@ def _global_x_candidate_dates(start_date: date, *, lookback_days: int = 10) -> l
     return dates
 
 
+def _resolve_roundhill_csv_url(ticker: str, source_ref: str, *, fetch_bytes: FetchBytes) -> str:
+    ticker = str(ticker).strip().upper()
+    page_url = str(source_ref).strip() or f"https://www.roundhillinvestments.com/etf/{ticker.lower()}/"
+    if not page_url.startswith("http"):
+        page_url = f"https://www.roundhillinvestments.com/etf/{ticker.lower()}/"
+    page_text = fetch_bytes(page_url).decode("utf-8", errors="replace")
+    if "Download CSV" not in page_text:
+        raise RuntimeError(f"Roundhill holdings CSV link not found on {page_url}.")
+
+    failures: list[str] = []
+    for candidate_date in _roundhill_candidate_dates(datetime.now(UTC).date()):
+        csv_url = (
+            "https://www.roundhillinvestments.com/assets/data/"
+            f"FilepointRoundhill.40RU.RU_Holdings_{candidate_date:%m%d%Y}.csv"
+        )
+        try:
+            raw = fetch_bytes(csv_url)
+            if _bytes_look_like_html(raw):
+                raise RuntimeError("Roundhill dated CSV returned HTML.")
+            return csv_url
+        except Exception as exc:
+            failures.append(f"{csv_url}: {exc!r}")
+    raise RuntimeError(f"Roundhill holdings CSV URL not found for {ticker}. Tried: {'; '.join(failures)}")
+
+
+def _roundhill_candidate_dates(start_date: date, *, lookback_days: int = 15) -> list[date]:
+    return [start_date - timedelta(days=offset) for offset in range(lookback_days + 1)]
+
+
 def _resolve_ishares_csv_url(ticker: str, source_ref: str) -> str:
     raw = str(source_ref).strip()
     if raw.startswith("http"):
@@ -349,7 +390,7 @@ def _resolve_generic_issuer_ref(spec: ThemeETF, source_ref: str) -> str:
 
 def _read_csv_with_header_detection(raw: bytes) -> pd.DataFrame:
     text = raw.decode("utf-8-sig", errors="replace")
-    if text.lstrip().lower().startswith("<!doctype html") or text.lstrip().lower().startswith("<html"):
+    if _text_looks_like_html(text):
         raise RuntimeError("Holdings endpoint returned HTML instead of tabular holdings.")
     lines = text.splitlines()
     header_index = _find_header_index(lines)
@@ -358,6 +399,15 @@ def _read_csv_with_header_detection(raw: bytes) -> pd.DataFrame:
     if as_of is not None:
         frame.attrs["as_of"] = as_of
     return frame
+
+
+def _bytes_look_like_html(raw: bytes) -> bool:
+    return _text_looks_like_html(raw.decode("utf-8-sig", errors="replace"))
+
+
+def _text_looks_like_html(text: str) -> bool:
+    stripped = text.lstrip().lower()
+    return stripped.startswith("<!doctype html") or stripped.startswith("<html")
 
 
 def _read_advisorshares_holdings_csv(raw: bytes) -> pd.DataFrame:
@@ -377,6 +427,43 @@ def _read_advisorshares_holdings_csv(raw: bytes) -> pd.DataFrame:
     out = frame.copy()
     asset_groups = out[asset_group_column].astype(str).str.strip().str.upper()
     out["Asset Class"] = asset_groups.map(lambda value: "Equity" if value in {"FS", "S"} else "Other")
+    return out
+
+
+def _read_roundhill_holdings_csv(raw: bytes, *, account: str) -> pd.DataFrame:
+    frame = _read_csv_with_header_detection(raw)
+    account_column = _first_existing_column(frame, ["Account"])
+    if account_column is None:
+        raise RuntimeError("Roundhill holdings CSV missing Account column.")
+
+    account_token = str(account).strip().upper()
+    out = frame.loc[frame[account_column].astype(str).str.upper().eq(account_token)].copy()
+    if out.empty:
+        raise RuntimeError(f"Roundhill holdings CSV has no rows for {account_token}.")
+
+    date_column = _first_existing_column(out, _DATE_COLUMNS)
+    if date_column:
+        dates = pd.to_datetime(out[date_column], utc=True, errors="coerce").dropna()
+        if not dates.empty:
+            out.attrs["as_of"] = pd.Timestamp(dates.max()).date()
+
+    money_market_column = _first_existing_column(out, ["MoneyMarketFlag"])
+    symbol_column = _first_existing_column(out, _SYMBOL_COLUMNS)
+    if money_market_column or symbol_column:
+        money_market = (
+            out[money_market_column].astype(str).str.strip().str.upper().eq("Y")
+            if money_market_column
+            else pd.Series(False, index=out.index)
+        )
+        symbols = (
+            out[symbol_column].astype(str).str.strip().str.upper()
+            if symbol_column
+            else pd.Series("", index=out.index)
+        )
+        out["Asset Class"] = [
+            "Other" if is_money_market or symbol in {"CASH&OTHER"} else "Equity"
+            for is_money_market, symbol in zip(money_market.tolist(), symbols.tolist(), strict=False)
+        ]
     return out
 
 
@@ -439,6 +526,7 @@ _SYMBOL_COLUMNS = [
     "holding_symbol",
     "Holding Ticker",
     "Stock Ticker",
+    "StockTicker",
     "Identifier",
 ]
 _NAME_COLUMNS = [
@@ -450,6 +538,7 @@ _NAME_COLUMNS = [
     "Holding Name",
     "Security Name",
     "Security Description",
+    "SecurityName",
     "Description",
     "Issuer Name",
     "Issue Name",
@@ -469,6 +558,7 @@ _WEIGHT_COLUMNS = [
     "Pct",
     "Portfolio Weight %",
     "Weighting",
+    "Weightings",
 ]
 _DATE_COLUMNS = ["date", "Date", "as_of", "asOfDate", "As Of", "Fund Holdings Data as of"]
 _ASSET_CLASS_COLUMNS = ["asset_class", "Asset Class", "Class", "Security Type", "Type"]
@@ -636,6 +726,7 @@ _BLOOMBERG_SUFFIX_TO_YAHOO = {
     "L": ".L",
     "GR": ".DE",
     "GY": ".DE",
+    "GA": ".AT",
     "DE": ".DE",
     "FP": ".PA",
     "NA": ".AS",

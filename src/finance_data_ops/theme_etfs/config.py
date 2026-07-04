@@ -100,6 +100,17 @@ def _advisorshares_csv(theme: str, ticker: str, wave: int, source_ref: str) -> T
     )
 
 
+def _roundhill(theme: str, ticker: str, wave: int) -> ThemeETF:
+    return ThemeETF(
+        theme=theme,
+        etf_ticker=ticker,
+        wave=wave,
+        source_type="roundhill_csv",
+        source_ref=f"https://www.roundhillinvestments.com/etf/{ticker.lower()}/",
+        issuer="Roundhill",
+    )
+
+
 def _issuer_csv(theme: str, ticker: str, wave: int, issuer: str, source_ref: str) -> ThemeETF:
     return ThemeETF(
         theme=theme,
@@ -135,9 +146,9 @@ THEME_ETFS: tuple[ThemeETF, ...] = (
     _global_x("cyber", "BUG", 1),
     _first_trust("internet_ecommerce", "FDN", 1),
     _ishares("defense", "ITA", 1, "239502", "ishares-us-aerospace-defense-etf"),
-    _ark("space", "ARKX", 1, "ARK_SPACE_EXPLORATION_&_INNOVATION_ETF_ARKX_HOLDINGS.csv"),
+    _ark("space", "ARKX", 1, "ARK_SPACE_&_DEFENSE_INNOVATION_ETF_ARKX_HOLDINGS.csv"),
     _ssga("biotech", "XBI", 1),
-    _issuer_csv("glp1_obesity", "THNR", 1, "Amplify", "THNR"),
+    _roundhill("glp1_obesity", "OZEM", 1),
     _ark("genomics", "ARKG", 1, "ARK_GENOMIC_REVOLUTION_ETF_ARKG_HOLDINGS.csv"),
     _ssga("oil_gas", "XOP", 1),
     _vaneck("oil_services", "OIH", 1, "oil-services-etf-oih"),
@@ -160,7 +171,7 @@ THEME_ETFS: tuple[ThemeETF, ...] = (
         "https://advisorshares.com/wp-content/uploads/csv/holdings/AdvisorShares_YOLO_Holdings_File.csv",
     ),
     _vaneck("gaming_esports", "ESPO", 2, "video-gaming-esports-etf-espo"),
-    _issuer_csv("sports_betting", "BETZ", 2, "Roundhill", "BETZ"),
+    _roundhill("sports_betting", "BETZ", 2),
     _ssga("regional_banks", "KRE", 2),
     _issuer_csv("airlines_travel", "JETS", 2, "U.S. Global", "JETS"),
     _ishares("reits", "USRT", 2, "239544", "ishares-real-estate-50-etf"),

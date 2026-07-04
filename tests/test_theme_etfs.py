@@ -22,11 +22,17 @@ def test_theme_etf_catalog_has_expected_waves_and_no_broad_sector_spdrs() -> Non
     assert themes["internet_ecommerce"].source_type == "first_trust_html"
     assert themes["water"].etf_ticker == "AQWA"
     assert themes["cannabis"].etf_ticker == "YOLO"
+    assert themes["space"].etf_ticker == "ARKX"
+    assert "ARK_SPACE_&_DEFENSE_INNOVATION_ETF_ARKX_HOLDINGS.csv" in themes["space"].source_ref
+    assert themes["glp1_obesity"].etf_ticker == "OZEM"
+    assert themes["glp1_obesity"].source_type == "roundhill_csv"
+    assert themes["sports_betting"].etf_ticker == "BETZ"
+    assert themes["sports_betting"].source_type == "roundhill_csv"
     assert themes["reits"].etf_ticker == "USRT"
     assert themes["robotics"].wave == 2
     assert themes["airlines_travel"].wave == 2
     assert len(tickers) == len(THEME_ETFS)
-    assert not {"MSOS", "PHO", "TAN", "XLK", "XLE", "XLV"}.intersection(tickers)
+    assert not {"MSOS", "PHO", "TAN", "THNR", "XLK", "XLE", "XLV"}.intersection(tickers)
     assert "solar" not in themes
     assert not any(spec.source_type == "yfinance_funds_data" for spec in THEME_ETFS)
 
@@ -257,6 +263,81 @@ def test_advisorshares_parser_filters_etf_money_market_and_cash_rows() -> None:
     assert not {"MSOS", "X9USDBLYT", "CASH"}.intersection(set(holdings["holding_symbol"]))
     assert themes.iloc[0]["source_type"] == "advisorshares_csv"
     assert themes.iloc[0]["holdings_count"] == 2
+
+
+def test_roundhill_parser_resolves_dated_csv_filters_account_and_non_equity(monkeypatch) -> None:
+    spec = ThemeETF(
+        theme="glp1_obesity",
+        etf_ticker="OZEM",
+        wave=1,
+        source_type="roundhill_csv",
+        source_ref="https://www.roundhillinvestments.com/etf/ozem/",
+        issuer="Roundhill",
+    )
+    monkeypatch.setattr(
+        holdings_mod,
+        "_roundhill_candidate_dates",
+        lambda _start: [date(2026, 7, 4), date(2026, 7, 2)],
+    )
+    fetched_urls: list[str] = []
+
+    def fake_fetch(url: str) -> bytes:
+        fetched_urls.append(url)
+        if url == "https://www.roundhillinvestments.com/etf/ozem/":
+            return b'<html><a id="csvlink" href="">Download CSV</a></html>'
+        if url.endswith("FilepointRoundhill.40RU.RU_Holdings_07042026.csv"):
+            raise RuntimeError("not published yet")
+        assert url.endswith("FilepointRoundhill.40RU.RU_Holdings_07022026.csv")
+        return (
+            "Date,Account,StockTicker,CUSIP,SecurityName,Shares,Price,MarketValue,Weightings,"
+            "NetAssets,SharesOutstanding,CreationUnits,MoneyMarketFlag\n"
+            "07/06/2026,OZEM,LLY,532457108,Eli Lilly & Co,6198,1213.91,7523814.18,12.44%,"
+            "60482960,1810000,181,\n"
+            "07/06/2026,OZEM,NVO,670100205,Novo Nordisk A/S,158484,50.43,7992348.12,13.21%,"
+            "60482960,1810000,181,\n"
+            "07/06/2026,OZEM,1093 HK,6191997,CSPC Pharmaceutical Group Ltd,3488000,7.55,3357716.17,5.55%,"
+            "60482960,1810000,181,\n"
+            "07/06/2026,OZEM,FGXXX,31846V336,First American Government Obligations Fund 12/01/2031,"
+            "732685.36,100,732685.36,1.21%,60482960,1810000,181,Y\n"
+            "07/06/2026,OZEM,Cash&Other,Cash&Other,Cash & Other,-29707.31,1,-29707.31,-0.05%,"
+            "60482960,1810000,181,Y\n"
+            "07/06/2026,BETZ,DKNG,26142V105,DraftKings Inc,137389,25.89,3557001.21,6.64%,"
+            "53601800,2800000,112,\n"
+        ).encode()
+
+    holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
+
+    assert failures == []
+    assert holdings[["holding_symbol", "holding_name", "weight", "as_of"]].to_dict(orient="records") == [
+        {
+            "holding_symbol": "LLY",
+            "holding_name": "Eli Lilly & Co",
+            "weight": 0.1244,
+            "as_of": date(2026, 7, 6),
+        },
+        {
+            "holding_symbol": "NVO",
+            "holding_name": "Novo Nordisk A/S",
+            "weight": 0.1321,
+            "as_of": date(2026, 7, 6),
+        },
+        {
+            "holding_symbol": "1093.HK",
+            "holding_name": "CSPC Pharmaceutical Group Ltd",
+            "weight": 0.0555,
+            "as_of": date(2026, 7, 6),
+        },
+    ]
+    assert themes.iloc[0]["source_type"] == "roundhill_csv"
+    assert themes.iloc[0]["source_ref"].endswith("FilepointRoundhill.40RU.RU_Holdings_07022026.csv")
+    assert themes.iloc[0]["holdings_count"] == 3
+    assert themes.iloc[0]["holdings_source_depth"] == "full"
+    assert fetched_urls == [
+        "https://www.roundhillinvestments.com/etf/ozem/",
+        "https://www.roundhillinvestments.com/assets/data/FilepointRoundhill.40RU.RU_Holdings_07042026.csv",
+        "https://www.roundhillinvestments.com/assets/data/FilepointRoundhill.40RU.RU_Holdings_07022026.csv",
+        "https://www.roundhillinvestments.com/assets/data/FilepointRoundhill.40RU.RU_Holdings_07022026.csv",
+    ]
 
 
 def test_issuer_fetch_falls_back_to_shallow_yfinance_and_flags_theme(monkeypatch) -> None:
