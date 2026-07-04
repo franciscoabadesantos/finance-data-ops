@@ -199,3 +199,4 @@ Historical numbered SQL files (`001..007`) remain in the repo as migration archa
 - Migrations runbook: [`docs/migrations.md`](/home/franciscosantos/finance-data-ops/docs/migrations.md)
 - Prefect orchestration: [`docs/prefect_orchestration.md`](/home/franciscosantos/finance-data-ops/docs/prefect_orchestration.md)
 - Parity rules: [`docs/parity_rules.md`](/home/franciscosantos/finance-data-ops/docs/parity_rules.md)
+- Thematic sources & relationship map: [`docs/thematic-sources-and-relationship-map.md`](/home/franciscosantos/finance-data-ops/docs/thematic-sources-and-relationship-map.md)
