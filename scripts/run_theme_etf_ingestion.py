@@ -16,6 +16,7 @@ if str(SRC_PATH) not in sys.path:
 
 from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.fundamentals import build_etf_holdings_payload
+from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import load_settings
 from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
 
@@ -24,7 +25,14 @@ def main() -> None:
     args = _parser().parse_args()
     settings = load_settings(cache_root=args.cache_root)
     holdings, themes, failures = fetch_theme_etf_holdings()
-    outputs = write_theme_etf_outputs(holdings=holdings, themes=themes, cache_root=str(settings.cache_root))
+    outputs = write_theme_etf_outputs(
+        holdings=holdings,
+        themes=themes,
+        cache_root=str(settings.cache_root),
+        deactivate_missing_themes=True,
+    )
+    cached_holdings = read_parquet_table("etf_holdings", cache_root=settings.cache_root, required=False)
+    cached_themes = read_parquet_table("etf_themes", cache_root=settings.cache_root, required=False)
 
     publish_result: dict[str, object] = {"status": "skipped"}
     if args.publish:
@@ -33,18 +41,23 @@ def main() -> None:
         publish_result = {
             "etf_holdings": publisher.upsert(
                 "etf_holdings",
-                build_etf_holdings_payload(holdings),
+                build_etf_holdings_payload(cached_holdings),
                 on_conflict="etf_ticker,holding_symbol,as_of",
             ),
             "etf_themes": publisher.upsert(
                 "etf_themes",
-                themes.to_dict(orient="records"),
+                cached_themes.to_dict(orient="records"),
                 on_conflict="etf_ticker",
             ),
         }
 
+    active_themes = (
+        cached_themes.loc[cached_themes["active"].fillna(True).astype(bool)]
+        if not cached_themes.empty and "active" in cached_themes.columns
+        else cached_themes
+    )
     summary = {
-        "surviving_themes": themes[
+        "surviving_themes": active_themes[
             [
                 "theme",
                 "etf_ticker",
@@ -56,8 +69,8 @@ def main() -> None:
                 "holdings_as_of",
             ]
         ].to_dict(orient="records"),
-        "holdings_rows": int(len(holdings.index)),
-        "theme_count": int(themes["theme"].nunique()) if not themes.empty else 0,
+        "holdings_rows": int(len(cached_holdings.index)),
+        "theme_count": int(active_themes["theme"].nunique()) if not active_themes.empty else 0,
         "failures": failures,
         "outputs": outputs,
         "publish": publish_result,

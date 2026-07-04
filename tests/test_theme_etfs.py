@@ -436,6 +436,34 @@ def test_weight_sanity_validation_rejects_implausible_single_holding_weight() ->
     assert "Implausible ETF holding weight" in failures[0]["error"]
 
 
+def test_numeric_percent_scale_weights_normalize_at_fund_level() -> None:
+    spec = ThemeETF(
+        theme="regional_banks",
+        etf_ticker="KRE",
+        wave=1,
+        source_type="issuer_csv",
+        source_ref="https://example.test/kre.csv",
+        issuer="SPDR",
+    )
+
+    def fake_fetch(_url: str) -> bytes:
+        return (
+            "Holdings as of 2026-07-02\n"
+            "Ticker,Name,Weight\n"
+            "TOPA,Top Bank A,49.50\n"
+            "TOPB,Top Bank B,49.57\n"
+            "SMALL,Small Bank,0.93\n"
+        ).encode()
+
+    holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
+
+    assert failures == []
+    weights = dict(zip(holdings["holding_symbol"], holdings["weight"], strict=False))
+    assert weights == {"TOPA": 0.495, "TOPB": 0.4957, "SMALL": 0.0093}
+    assert round(float(holdings["weight"].sum()), 4) == 1.0
+    assert themes.iloc[0]["holdings_count"] == 3
+
+
 def test_issuer_fetch_falls_back_to_shallow_yfinance_and_flags_theme(monkeypatch) -> None:
     spec = ThemeETF(
         theme="software",
@@ -487,20 +515,21 @@ def test_full_holdings_filter_non_equity_cash_and_placeholder_rows() -> None:
     def fake_fetch(_url: str) -> bytes:
         return (
             "Holdings as of 2026-07-02\n"
-            "Ticker,Name,Weight (%)\n"
-            "FSLR,First Solar Inc,9.5\n"
-            "-AUD CASH-,Cash,0.4\n"
-            "USD,US Dollar,0.2\n"
-            "ESU6,Equity Index Future,0.1\n"
-            "ENPH,Enphase Energy Inc,4.5\n"
-            '"Holdings subject to change. See issuer website.",,\n'
+            "Ticker,Name,Asset Class,Weight (%)\n"
+            "FSLR,First Solar Inc,Equity,9.5\n"
+            "600900,China Yangtze Power Ltd A,Equity,6.1\n"
+            "-AUD CASH-,Cash,Cash,0.4\n"
+            "USD,US Dollar,Cash,0.2\n"
+            "ESU6,Equity Index Future,Future,0.1\n"
+            "ENPH,Enphase Energy Inc,Equity,4.5\n"
+            '"Holdings subject to change. See issuer website.",,,\n'
         ).encode()
 
     holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
 
     assert failures == []
-    assert holdings["holding_symbol"].tolist() == ["FSLR", "ENPH"]
-    assert themes.iloc[0]["holdings_count"] == 2
+    assert holdings["holding_symbol"].tolist() == ["FSLR", "600900", "ENPH"]
+    assert themes.iloc[0]["holdings_count"] == 3
 
 
 def test_theme_etf_refresh_replaces_older_cached_snapshot(tmp_path) -> None:
@@ -513,8 +542,8 @@ def test_theme_etf_refresh_replaces_older_cached_snapshot(tmp_path) -> None:
                 "weight": 0.10,
                 "as_of": "2026-01-02",
                 "source": "theme_etf:ark_csv",
-                "fetched_at": "2026-01-03T00:00:00Z",
-                "updated_at": "2026-01-03T00:00:00Z",
+                "fetched_at": pd.Timestamp("2026-01-03T00:00:00Z"),
+                "updated_at": pd.Timestamp("2026-01-03T00:00:00Z"),
             },
             {
                 "etf_ticker": "SMH",
@@ -523,8 +552,8 @@ def test_theme_etf_refresh_replaces_older_cached_snapshot(tmp_path) -> None:
                 "weight": 0.20,
                 "as_of": "2026-01-02",
                 "source": "theme_etf:vaneck_xlsx",
-                "fetched_at": "2026-01-03T00:00:00Z",
-                "updated_at": "2026-01-03T00:00:00Z",
+                "fetched_at": pd.Timestamp("2026-01-03T00:00:00Z"),
+                "updated_at": pd.Timestamp("2026-01-03T00:00:00Z"),
             },
         ]
     )
@@ -537,8 +566,8 @@ def test_theme_etf_refresh_replaces_older_cached_snapshot(tmp_path) -> None:
                 "weight": 0.12,
                 "as_of": "2026-07-02",
                 "source": "theme_etf:ark_csv",
-                "fetched_at": "2026-07-03T00:00:00Z",
-                "updated_at": "2026-07-03T00:00:00Z",
+                "fetched_at": pd.Timestamp("2026-07-03T00:00:00Z"),
+                "updated_at": pd.Timestamp("2026-07-03T00:00:00Z"),
             }
         ]
     )
@@ -553,6 +582,128 @@ def test_theme_etf_refresh_replaces_older_cached_snapshot(tmp_path) -> None:
     }
     assert by_etf["ARKX"] == [{"holding_symbol": "RKLB", "as_of": "2026-07-02"}]
     assert by_etf["SMH"] == [{"holding_symbol": "NVDA", "as_of": "2026-01-02"}]
+
+
+def test_theme_etf_write_deactivates_stale_theme_and_removes_old_holdings(tmp_path) -> None:
+    old_holdings = pd.DataFrame(
+        [
+            {
+                "etf_ticker": "ARKX",
+                "holding_symbol": "RKLB",
+                "holding_name": "Rocket Lab Corp",
+                "weight": 0.12,
+                "as_of": "2026-01-02",
+                "source": "theme_etf:ark_csv",
+                "fetched_at": pd.Timestamp("2026-01-03T00:00:00Z"),
+                "updated_at": pd.Timestamp("2026-01-03T00:00:00Z"),
+            },
+            {
+                "etf_ticker": "MARS",
+                "holding_symbol": "ASTS",
+                "holding_name": "AST SpaceMobile Inc",
+                "weight": 0.08,
+                "as_of": "2026-01-02",
+                "source": "theme_etf:roundhill_csv",
+                "fetched_at": pd.Timestamp("2026-01-03T00:00:00Z"),
+                "updated_at": pd.Timestamp("2026-01-03T00:00:00Z"),
+            },
+        ]
+    )
+    old_themes = pd.DataFrame(
+        [
+            {
+                "etf_ticker": "ARKX",
+                "theme": "space",
+                "wave": 1,
+                "issuer": "ARK",
+                "source_type": "ark_csv",
+                "source_ref": "https://example.test/arkx.csv",
+                "holdings_count": 1,
+                "holdings_as_of": date(2026, 1, 2),
+                "holdings_source_depth": "full",
+                "holdings_shallow": False,
+                "active": True,
+                "fetched_at": pd.Timestamp("2026-01-03T00:00:00Z"),
+                "updated_at": pd.Timestamp("2026-01-03T00:00:00Z"),
+            },
+            {
+                "etf_ticker": "MARS",
+                "theme": "space",
+                "wave": 1,
+                "issuer": "Roundhill",
+                "source_type": "roundhill_csv",
+                "source_ref": "https://www.roundhillinvestments.com/etf/mars/",
+                "holdings_count": 1,
+                "holdings_as_of": date(2026, 1, 2),
+                "holdings_source_depth": "full",
+                "holdings_shallow": False,
+                "active": True,
+                "fetched_at": pd.Timestamp("2026-01-03T00:00:00Z"),
+                "updated_at": pd.Timestamp("2026-01-03T00:00:00Z"),
+            },
+        ]
+    )
+    new_holdings = pd.DataFrame(
+        [
+            {
+                "etf_ticker": "MARS",
+                "holding_symbol": "RKLB",
+                "holding_name": "Rocket Lab Corp",
+                "weight": 0.11,
+                "as_of": "2026-07-02",
+                "source": "theme_etf:roundhill_csv",
+                "fetched_at": pd.Timestamp("2026-07-03T00:00:00Z"),
+                "updated_at": pd.Timestamp("2026-07-03T00:00:00Z"),
+            }
+        ]
+    )
+    new_themes = pd.DataFrame(
+        [
+            {
+                "etf_ticker": "MARS",
+                "theme": "space",
+                "wave": 1,
+                "issuer": "Roundhill",
+                "source_type": "roundhill_csv",
+                "source_ref": "https://www.roundhillinvestments.com/assets/data/FilepointRoundhill.40RU.RU_Holdings_07022026.csv",
+                "holdings_count": 1,
+                "holdings_as_of": date(2026, 7, 2),
+                "holdings_source_depth": "full",
+                "holdings_shallow": False,
+                "active": True,
+                "fetched_at": pd.Timestamp("2026-07-03T00:00:00Z"),
+                "updated_at": pd.Timestamp("2026-07-03T00:00:00Z"),
+            }
+        ]
+    )
+    current_catalog = [
+        ThemeETF(
+            theme="space",
+            etf_ticker="MARS",
+            wave=1,
+            source_type="roundhill_csv",
+            source_ref="https://www.roundhillinvestments.com/etf/mars/",
+            issuer="Roundhill",
+        )
+    ]
+
+    write_theme_etf_outputs(holdings=old_holdings, themes=old_themes, cache_root=str(tmp_path))
+    write_theme_etf_outputs(
+        holdings=new_holdings,
+        themes=new_themes,
+        cache_root=str(tmp_path),
+        theme_etfs=current_catalog,
+        deactivate_missing_themes=True,
+    )
+
+    cached_holdings = read_parquet_table("etf_holdings", cache_root=tmp_path, required=True)
+    cached_themes = read_parquet_table("etf_themes", cache_root=tmp_path, required=True)
+    theme_active = dict(zip(cached_themes["etf_ticker"], cached_themes["active"], strict=False))
+
+    assert set(cached_holdings["etf_ticker"]) == {"MARS"}
+    assert bool(theme_active["MARS"]) is True
+    assert bool(theme_active["ARKX"]) is False
+    assert int(cached_themes.loc[cached_themes["etf_ticker"].eq("ARKX"), "holdings_count"].iloc[0]) == 0
 
 
 def test_wave_universe_merge_dedupes_existing_filters_cash_and_builds_entity_attributes() -> None:

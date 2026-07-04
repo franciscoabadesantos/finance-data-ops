@@ -287,6 +287,7 @@ def _refresh_theme_etf_holdings(
             themes=themes,
             cache_root=cache_root,
             replace_refreshed_holdings=True,
+            deactivate_missing_themes=refresh_fn is None,
         )
         status = "fresh" if not failures else "partial"
         return {

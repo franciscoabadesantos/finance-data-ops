@@ -226,8 +226,19 @@ def write_theme_etf_outputs(
     themes: pd.DataFrame,
     cache_root: str,
     replace_refreshed_holdings: bool = True,
+    theme_etfs: Iterable[ThemeETF] | None = None,
+    deactivate_missing_themes: bool = False,
 ) -> dict[str, str | int]:
     paths: dict[str, str | int] = {}
+    themes_to_write = themes.copy()
+    if bool(deactivate_missing_themes):
+        themes_to_write = _append_inactive_theme_tombstones(
+            themes=themes_to_write,
+            cache_root=cache_root,
+            theme_etfs=theme_etfs or THEME_ETFS,
+        )
+    _validate_active_themes_have_holdings(themes=themes_to_write, holdings=holdings)
+    deactivated_tickers = _inactive_theme_tickers(themes_to_write)
     if not holdings.empty:
         holdings_to_write = holdings.copy()
         mode = "append"
@@ -237,6 +248,7 @@ def write_theme_etf_outputs(
                 for value in holdings_to_write["etf_ticker"].dropna().tolist()
                 if str(value).strip()
             }
+            refreshed_etfs.update(deactivated_tickers)
             existing = read_parquet_table("etf_holdings", cache_root=cache_root, required=False)
             if not existing.empty and refreshed_etfs and "etf_ticker" in existing.columns:
                 existing = existing.loc[
@@ -254,17 +266,112 @@ def write_theme_etf_outputs(
         paths["etf_holdings"] = str(path)
         paths["etf_holdings_rows"] = int(len(holdings.index))
         paths["etf_holdings_cache_rows"] = int(len(holdings_to_write.index))
-    if not themes.empty:
+    if not themes_to_write.empty:
         path = write_parquet_table(
             "etf_themes",
-            themes,
+            themes_to_write,
             cache_root=cache_root,
             mode="append",
             dedupe_subset=["etf_ticker"],
         )
         paths["etf_themes"] = str(path)
-        paths["etf_themes_rows"] = int(len(themes.index))
+        paths["etf_themes_rows"] = int(len(themes_to_write.index))
     return paths
+
+
+def _append_inactive_theme_tombstones(
+    *,
+    themes: pd.DataFrame,
+    cache_root: str,
+    theme_etfs: Iterable[ThemeETF],
+) -> pd.DataFrame:
+    existing = read_parquet_table("etf_themes", cache_root=cache_root, required=False)
+    if existing.empty or "etf_ticker" not in existing.columns:
+        return themes
+
+    successful_tickers = _theme_tickers(themes)
+    active_mask = (
+        existing["active"].fillna(True).astype(bool)
+        if "active" in existing.columns
+        else pd.Series(True, index=existing.index)
+    )
+    existing_tickers = existing["etf_ticker"].astype(str).str.strip().str.upper()
+    stale = existing.loc[active_mask & ~existing_tickers.isin(successful_tickers)].copy()
+    if stale.empty:
+        return themes
+
+    stale = stale.drop_duplicates(subset=["etf_ticker"], keep="last")
+    spec_by_ticker = {spec.etf_ticker.upper(): spec for spec in theme_etfs}
+    now = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC")
+    tombstones: list[dict[str, Any]] = []
+    for _, row in stale.iterrows():
+        ticker = str(row.get("etf_ticker", "")).strip().upper()
+        spec = spec_by_ticker.get(ticker)
+        tombstone = {column: row.get(column) for column in ETF_THEME_COLUMNS}
+        if spec is not None:
+            tombstone.update(
+                {
+                    "theme": spec.theme,
+                    "wave": int(spec.wave),
+                    "issuer": spec.issuer,
+                    "source_type": spec.source_type,
+                    "source_ref": spec.source_ref,
+                }
+            )
+        tombstone.update(
+            {
+                "etf_ticker": ticker,
+                "holdings_count": 0,
+                "holdings_as_of": None,
+                "holdings_source_depth": "unavailable",
+                "holdings_shallow": True,
+                "active": False,
+                "fetched_at": now,
+                "updated_at": now,
+            }
+        )
+        tombstones.append(tombstone)
+
+    tombstone_frame = pd.DataFrame(tombstones, columns=ETF_THEME_COLUMNS)
+    if themes.empty:
+        return tombstone_frame
+    return pd.concat([themes, tombstone_frame], ignore_index=True)
+
+
+def _theme_tickers(themes: pd.DataFrame) -> set[str]:
+    if themes.empty or "etf_ticker" not in themes.columns:
+        return set()
+    return {
+        str(value).strip().upper()
+        for value in themes["etf_ticker"].dropna().tolist()
+        if str(value).strip()
+    }
+
+
+def _inactive_theme_tickers(themes: pd.DataFrame) -> set[str]:
+    if themes.empty or "etf_ticker" not in themes.columns or "active" not in themes.columns:
+        return set()
+    inactive = themes.loc[~themes["active"].fillna(True).astype(bool)]
+    return _theme_tickers(inactive)
+
+
+def _validate_active_themes_have_holdings(*, themes: pd.DataFrame, holdings: pd.DataFrame) -> None:
+    if themes.empty:
+        return
+    if "active" not in themes.columns or "etf_ticker" not in themes.columns:
+        return
+    active = themes.loc[themes["active"].fillna(True).astype(bool)].copy()
+    if active.empty:
+        return
+    holding_tickers = _theme_tickers(holdings)
+    missing = sorted(set(active["etf_ticker"].astype(str).str.strip().str.upper()) - holding_tickers)
+    if missing:
+        raise RuntimeError(f"Active ETF themes have no refreshed holdings: {', '.join(missing)}")
+    if "holdings_count" in active.columns:
+        counts = pd.to_numeric(active["holdings_count"], errors="coerce").fillna(0)
+        zero_count = sorted(active.loc[counts <= 0, "etf_ticker"].astype(str).str.strip().str.upper().tolist())
+        if zero_count:
+            raise RuntimeError(f"Active ETF themes report zero holdings: {', '.join(zero_count)}")
 
 
 def _theme_row(spec: ThemeETF, *, holdings: pd.DataFrame, active: bool) -> dict[str, Any]:
@@ -625,8 +732,8 @@ def _normalize_holdings_frame(
         asset_class = _coerce_text(row.get(asset_class_column)) if asset_class_column else None
         if not _is_equity_like_holding(symbol=symbol, name=name, asset_class=asset_class):
             continue
-        weight = _coerce_weight(row.get(weight_column))
-        if weight is None:
+        parsed_weight = _coerce_raw_weight(row.get(weight_column))
+        if parsed_weight is None:
             continue
         as_of = _coerce_date(row.get(date_column)) if date_column else None
         if as_of is None:
@@ -636,7 +743,8 @@ def _normalize_holdings_frame(
                 "etf_ticker": spec.etf_ticker.upper(),
                 "holding_symbol": symbol,
                 "holding_name": name,
-                "weight": weight,
+                "_raw_weight": parsed_weight[0],
+                "_raw_weight_is_percent": parsed_weight[1],
                 "as_of": as_of or fetched_at.date(),
                 "source": f"theme_etf:{source_type}{':shallow' if shallow else ''}",
                 "fetched_at": fetched_at,
@@ -648,6 +756,11 @@ def _normalize_holdings_frame(
     out = pd.DataFrame(rows)
     out = out.dropna(subset=["holding_symbol", "as_of"])
     out = out.drop_duplicates(subset=["etf_ticker", "holding_symbol", "as_of"], keep="last")
+    out["weight"] = _normalize_weight_values(
+        out["_raw_weight"].tolist(),
+        out["_raw_weight_is_percent"].tolist(),
+    )
+    out = out.drop(columns=["_raw_weight", "_raw_weight_is_percent"])
     out.attrs["source_type"] = source_type
     out.attrs["source_ref"] = source_ref
     out.attrs["source_depth"] = "shallow" if shallow else "full"
@@ -836,10 +949,19 @@ def _is_equity_like_holding(*, symbol: str | None, name: str | None, asset_class
     )
     if any(marker in name_token for marker in non_equity_markers):
         return False
-    return bool(re.search(r"[A-Z]", token))
+    if re.search(r"[A-Z]", token):
+        return True
+    return asset_class_token in {"EQUITY", "STOCK"} and bool(re.fullmatch(r"[0-9.\\-]+", token))
 
 
 def _coerce_weight(value: Any) -> float | None:
+    parsed = _coerce_raw_weight(value)
+    if parsed is None:
+        return None
+    return _normalize_weight_values([parsed[0]], [parsed[1]])[0]
+
+
+def _coerce_raw_weight(value: Any) -> tuple[float, bool] | None:
     if value is None:
         return None
     raw_text = str(value).strip()
@@ -848,10 +970,22 @@ def _coerce_weight(value: Any) -> float | None:
     numeric = pd.to_numeric(text, errors="coerce")
     if pd.isna(numeric):
         return None
-    weight = float(numeric)
-    if is_percent or weight > 1.0:
-        return round(weight / 100.0, 10)
-    return round(weight, 10)
+    return float(numeric), is_percent
+
+
+def _normalize_weight_values(values: list[float], percent_flags: list[bool]) -> list[float]:
+    if not values:
+        return []
+    raw_weights = pd.Series(values, dtype="float64")
+    total_weight = float(raw_weights.sum())
+    max_weight = float(raw_weights.max())
+    uses_percent_scale = (
+        any(bool(flag) for flag in percent_flags)
+        or total_weight > MAX_TOTAL_HOLDINGS_WEIGHT
+        or max_weight > 1.0
+    )
+    scale = 100.0 if uses_percent_scale else 1.0
+    return [round(float(value) / scale, 10) for value in raw_weights.tolist()]
 
 
 def _coerce_date(value: Any) -> date | None:
