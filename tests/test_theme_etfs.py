@@ -15,17 +15,25 @@ from finance_data_ops.theme_etfs.universe import build_wave_universe_additions
 def test_theme_etf_catalog_has_expected_waves_and_no_broad_sector_spdrs() -> None:
     themes = {spec.theme: spec for spec in THEME_ETFS}
     tickers = {spec.etf_ticker for spec in THEME_ETFS}
+    space_specs = [spec for spec in THEME_ETFS if spec.theme == "space"]
 
-    assert len(themes) == 31
+    assert len(THEME_ETFS) == 33
+    assert len(themes) == 32
     assert themes["ai_semis"].wave == 1
     assert themes["internet_ecommerce"].etf_ticker == "FDN"
     assert themes["internet_ecommerce"].source_type == "first_trust_html"
     assert themes["water"].etf_ticker == "AQWA"
     assert themes["cannabis"].etf_ticker == "YOLO"
-    assert themes["space"].etf_ticker == "ARKX"
-    assert "ARK_SPACE_&_DEFENSE_INNOVATION_ETF_ARKX_HOLDINGS.csv" in themes["space"].source_ref
+    assert [(spec.etf_ticker, spec.source_type, spec.wave) for spec in space_specs] == [
+        ("ARKX", "ark_csv", 1),
+        ("MARS", "roundhill_csv", 1),
+    ]
+    assert "ARK_SPACE_&_DEFENSE_INNOVATION_ETF_ARKX_HOLDINGS.csv" in space_specs[0].source_ref
     assert themes["glp1_obesity"].etf_ticker == "OZEM"
     assert themes["glp1_obesity"].source_type == "roundhill_csv"
+    assert themes["humanoid_robotics"].etf_ticker == "HUMN"
+    assert themes["humanoid_robotics"].source_type == "roundhill_csv"
+    assert themes["humanoid_robotics"].wave == 2
     assert themes["sports_betting"].etf_ticker == "BETZ"
     assert themes["sports_betting"].source_type == "roundhill_csv"
     assert themes["reits"].etf_ticker == "USRT"

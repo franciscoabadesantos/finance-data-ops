@@ -136,8 +136,9 @@ def _yfinance(theme: str, ticker: str, wave: int, issuer: str, notes: str) -> Th
     )
 
 
-# One narrow ETF per theme. Holdings ingestion runs for both waves; price-universe
-# expansion is gated to wave 1 by the universe expansion module.
+# Curated narrow ETFs per theme. Holdings ingestion runs for both waves; price-universe
+# expansion is gated to wave 1 by the universe expansion module. A theme can have
+# corroborating ETFs when the holdings improve relationship-map signal quality.
 THEME_ETFS: tuple[ThemeETF, ...] = (
     _vaneck("ai_semis", "SMH", 1, "semiconductor-etf-smh"),
     _ishares("software", "IGV", 1, "239771", "ishares-north-american-techsoftware-etf"),
@@ -147,6 +148,7 @@ THEME_ETFS: tuple[ThemeETF, ...] = (
     _first_trust("internet_ecommerce", "FDN", 1),
     _ishares("defense", "ITA", 1, "239502", "ishares-us-aerospace-defense-etf"),
     _ark("space", "ARKX", 1, "ARK_SPACE_&_DEFENSE_INNOVATION_ETF_ARKX_HOLDINGS.csv"),
+    _roundhill("space", "MARS", 1),
     _ssga("biotech", "XBI", 1),
     _roundhill("glp1_obesity", "OZEM", 1),
     _ark("genomics", "ARKG", 1, "ARK_GENOMIC_REVOLUTION_ETF_ARKG_HOLDINGS.csv"),
@@ -154,6 +156,7 @@ THEME_ETFS: tuple[ThemeETF, ...] = (
     _vaneck("oil_services", "OIH", 1, "oil-services-etf-oih"),
     _ishares("clean_energy", "ICLN", 1, "239738", "ishares-global-clean-energy-etf"),
     _global_x("robotics", "BOTZ", 2),
+    _roundhill("humanoid_robotics", "HUMN", 2),
     _global_x("ev_battery", "LIT", 2),
     _global_x("infra_construction", "PAVE", 2),
     _ishares("homebuilders", "ITB", 2, "239512", "ishares-us-home-construction-etf"),
