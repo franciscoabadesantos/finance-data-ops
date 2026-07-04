@@ -350,7 +350,12 @@ def _resolve_roundhill_csv_url(ticker: str, source_ref: str, *, fetch_bytes: Fet
 
 
 def _roundhill_candidate_dates(start_date: date, *, lookback_days: int = 15) -> list[date]:
-    return [start_date - timedelta(days=offset) for offset in range(lookback_days + 1)]
+    dates: list[date] = []
+    for offset in range(lookback_days + 1):
+        candidate = start_date - timedelta(days=offset)
+        if candidate.weekday() < 5:
+            dates.append(candidate)
+    return dates
 
 
 def _resolve_ishares_csv_url(ticker: str, source_ref: str) -> str:

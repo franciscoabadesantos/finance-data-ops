@@ -141,6 +141,14 @@ def test_global_x_candidate_dates_skip_weekends_for_last_trading_day_fallback() 
     ]
 
 
+def test_roundhill_candidate_dates_skip_weekends_for_last_trading_day_fallback() -> None:
+    assert holdings_mod._roundhill_candidate_dates(date(2026, 7, 5), lookback_days=4) == [
+        date(2026, 7, 3),
+        date(2026, 7, 2),
+        date(2026, 7, 1),
+    ]
+
+
 def test_ishares_issuer_holdings_preferred_over_yfinance_top_ten() -> None:
     spec = ThemeETF(
         theme="software",
