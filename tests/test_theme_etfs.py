@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import io
 
 import pandas as pd
 
@@ -17,7 +18,7 @@ def test_theme_etf_catalog_has_expected_waves_and_no_broad_sector_spdrs() -> Non
     tickers = {spec.etf_ticker for spec in THEME_ETFS}
     space_specs = [spec for spec in THEME_ETFS if spec.theme == "space"]
 
-    assert len(THEME_ETFS) == 33
+    assert len(THEME_ETFS) == 32
     assert len(themes) == 32
     assert themes["ai_semis"].wave == 1
     assert themes["internet_ecommerce"].etf_ticker == "FDN"
@@ -25,10 +26,8 @@ def test_theme_etf_catalog_has_expected_waves_and_no_broad_sector_spdrs() -> Non
     assert themes["water"].etf_ticker == "AQWA"
     assert themes["cannabis"].etf_ticker == "YOLO"
     assert [(spec.etf_ticker, spec.source_type, spec.wave) for spec in space_specs] == [
-        ("ARKX", "ark_csv", 1),
         ("MARS", "roundhill_csv", 1),
     ]
-    assert "ARK_SPACE_&_DEFENSE_INNOVATION_ETF_ARKX_HOLDINGS.csv" in space_specs[0].source_ref
     assert themes["glp1_obesity"].etf_ticker == "OZEM"
     assert themes["glp1_obesity"].source_type == "roundhill_csv"
     assert themes["humanoid_robotics"].etf_ticker == "HUMN"
@@ -40,7 +39,7 @@ def test_theme_etf_catalog_has_expected_waves_and_no_broad_sector_spdrs() -> Non
     assert themes["robotics"].wave == 2
     assert themes["airlines_travel"].wave == 2
     assert len(tickers) == len(THEME_ETFS)
-    assert not {"MSOS", "PHO", "TAN", "THNR", "XLK", "XLE", "XLV"}.intersection(tickers)
+    assert not {"ARKX", "MSOS", "PHO", "TAN", "THNR", "XLK", "XLE", "XLV"}.intersection(tickers)
     assert "solar" not in themes
     assert not any(spec.source_type == "yfinance_funds_data" for spec in THEME_ETFS)
 
@@ -176,7 +175,7 @@ def test_ishares_issuer_holdings_preferred_over_yfinance_top_ten() -> None:
             "iShares Expanded Tech-Software Sector ETF Holdings as of 07/02/2026",
             "Ticker,Name,Weight (%)",
         ]
-        rows.extend(f"SOFT{i},Software Company {i},{1.0 + i / 100}" for i in range(12))
+        rows.extend(f"SOFT{i},Software Company {i},{1.0 + i / 100}%" for i in range(12))
         return "\n".join(rows).encode()
 
     holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
@@ -187,6 +186,53 @@ def test_ishares_issuer_holdings_preferred_over_yfinance_top_ten() -> None:
     assert themes.iloc[0]["holdings_count"] == 12
     assert themes.iloc[0]["holdings_source_depth"] == "full"
     assert set(holdings["source"]) == {"theme_etf:ishares_csv"}
+
+
+def test_vaneck_percent_weights_below_one_percent_scale_to_fractions() -> None:
+    spec = ThemeETF(
+        theme="ai_semis",
+        etf_ticker="SMH",
+        wave=1,
+        source_type="vaneck_xlsx",
+        source_ref="https://example.test/smh.xlsx",
+        issuer="VanEck",
+    )
+    workbook = io.BytesIO()
+    with pd.ExcelWriter(workbook, engine="openpyxl") as writer:
+        pd.DataFrame(
+            [
+                ["Daily Holdings (%)", "07/01/2026", None, None, None, None, None, None, None],
+                [None, None, None, None, None, None, None, None, None],
+                [
+                    "Number",
+                    "Ticker",
+                    "Holding Name",
+                    "Identifier (FIGI)",
+                    "Shares",
+                    "Asset Class",
+                    "Market Value (US$)",
+                    "Notional Value",
+                    "% of Net Assets",
+                ],
+                [1, "NVDA", "Nvidia Corp", "BBG000BBJQV0", "67,132,346", "Stock", "$13,264,008,922.68", "--", "18.41%"],
+                [2, "MCHP", "Microchip Technology Inc", "BBG000BJBZ23", "1,234", "Stock", "$1.00", "--", "0.93%"],
+                [3, "ON", "On Semiconductor Corp", "BBG000C1FQS9", "1,234", "Stock", "$1.00", "--", "0.62%"],
+                [4, "SWKS", "Skyworks Solutions Inc", "BBG000BQT4L6", "1,234", "Stock", "$1.00", "--", "0.16%"],
+            ]
+        ).to_excel(writer, sheet_name="SMH_asof_20260701", header=False, index=False)
+
+    holdings, themes, failures = fetch_theme_etf_holdings(
+        theme_etfs=[spec],
+        fetch_bytes=lambda _url: workbook.getvalue(),
+    )
+
+    assert failures == []
+    weights = dict(zip(holdings["holding_symbol"], holdings["weight"], strict=False))
+    assert weights["NVDA"] == 0.1841
+    assert weights["MCHP"] == 0.0093
+    assert weights["ON"] == 0.0062
+    assert weights["SWKS"] == 0.0016
+    assert themes.iloc[0]["holdings_count"] == 4
 
 
 def test_first_trust_html_parser_keeps_full_holdings_and_filters_cash() -> None:
@@ -313,6 +359,8 @@ def test_roundhill_parser_resolves_dated_csv_filters_account_and_non_equity(monk
             "60482960,1810000,181,\n"
             "07/06/2026,OZEM,1093 HK,6191997,CSPC Pharmaceutical Group Ltd,3488000,7.55,3357716.17,5.55%,"
             "60482960,1810000,181,\n"
+            "07/06/2026,OZEM,WVE,Y95308105,WaVe Life Sciences Ltd,87166,6.26,545659.16,0.90%,"
+            "60482960,1810000,181,\n"
             "07/06/2026,OZEM,FGXXX,31846V336,First American Government Obligations Fund 12/01/2031,"
             "732685.36,100,732685.36,1.21%,60482960,1810000,181,Y\n"
             "07/06/2026,OZEM,Cash&Other,Cash&Other,Cash & Other,-29707.31,1,-29707.31,-0.05%,"
@@ -343,10 +391,16 @@ def test_roundhill_parser_resolves_dated_csv_filters_account_and_non_equity(monk
             "weight": 0.0555,
             "as_of": date(2026, 7, 6),
         },
+        {
+            "holding_symbol": "WVE",
+            "holding_name": "WaVe Life Sciences Ltd",
+            "weight": 0.009,
+            "as_of": date(2026, 7, 6),
+        },
     ]
     assert themes.iloc[0]["source_type"] == "roundhill_csv"
     assert themes.iloc[0]["source_ref"].endswith("FilepointRoundhill.40RU.RU_Holdings_07022026.csv")
-    assert themes.iloc[0]["holdings_count"] == 3
+    assert themes.iloc[0]["holdings_count"] == 4
     assert themes.iloc[0]["holdings_source_depth"] == "full"
     assert fetched_urls == [
         "https://www.roundhillinvestments.com/etf/ozem/",
@@ -354,6 +408,32 @@ def test_roundhill_parser_resolves_dated_csv_filters_account_and_non_equity(monk
         "https://www.roundhillinvestments.com/assets/data/FilepointRoundhill.40RU.RU_Holdings_07022026.csv",
         "https://www.roundhillinvestments.com/assets/data/FilepointRoundhill.40RU.RU_Holdings_07022026.csv",
     ]
+
+
+def test_weight_sanity_validation_rejects_implausible_single_holding_weight() -> None:
+    spec = ThemeETF(
+        theme="bad_theme",
+        etf_ticker="BAD",
+        wave=1,
+        source_type="issuer_csv",
+        source_ref="https://example.test/bad.csv",
+        issuer="Example",
+    )
+
+    def fake_fetch(_url: str) -> bytes:
+        return (
+            "Holdings as of 2026-07-02\n"
+            "Ticker,Name,Weight (%)\n"
+            "BROKEN,Broken Weight Inc,60%\n"
+            "OK,Reasonable Weight Inc,10%\n"
+        ).encode()
+
+    holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
+
+    assert holdings.empty
+    assert themes.empty
+    assert failures
+    assert "Implausible ETF holding weight" in failures[0]["error"]
 
 
 def test_issuer_fetch_falls_back_to_shallow_yfinance_and_flags_theme(monkeypatch) -> None:

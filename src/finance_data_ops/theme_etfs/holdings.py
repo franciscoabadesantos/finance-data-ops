@@ -34,6 +34,8 @@ ETF_THEME_COLUMNS = [
 
 LOGGER = logging.getLogger("finance_data_ops.theme_etfs.holdings")
 FetchBytes = Callable[[str], bytes]
+MAX_SINGLE_HOLDING_WEIGHT = 0.50
+MAX_TOTAL_HOLDINGS_WEIGHT = 1.35
 
 
 def fetch_theme_etf_holdings(
@@ -649,6 +651,7 @@ def _normalize_holdings_frame(
     out.attrs["source_type"] = source_type
     out.attrs["source_ref"] = source_ref
     out.attrs["source_depth"] = "shallow" if shallow else "full"
+    _validate_holdings_weights(out, spec=spec)
     return out[
         [
             "etf_ticker",
@@ -668,6 +671,30 @@ def _promote_symbol_index(frame: pd.DataFrame) -> pd.DataFrame:
     if index_name and _normalize_token(index_name) in {_normalize_token(value) for value in _SYMBOL_COLUMNS}:
         return frame.reset_index()
     return frame
+
+
+def _validate_holdings_weights(frame: pd.DataFrame, *, spec: ThemeETF) -> None:
+    if frame.empty or "weight" not in frame.columns:
+        return
+    weights = pd.to_numeric(frame["weight"], errors="coerce").dropna()
+    if weights.empty:
+        return
+    max_weight = float(weights.max())
+    total_weight = float(weights.sum())
+    if max_weight > MAX_SINGLE_HOLDING_WEIGHT:
+        row = frame.loc[pd.to_numeric(frame["weight"], errors="coerce").idxmax()]
+        symbol = row.get("holding_symbol")
+        name = row.get("holding_name")
+        message = (
+            f"Implausible ETF holding weight for {spec.etf_ticker}: "
+            f"{symbol} {name} weight={max_weight:.4f}"
+        )
+        LOGGER.warning(message)
+        raise RuntimeError(message)
+    if total_weight > MAX_TOTAL_HOLDINGS_WEIGHT:
+        message = f"Implausible ETF holdings weight sum for {spec.etf_ticker}: sum={total_weight:.4f}"
+        LOGGER.warning(message)
+        raise RuntimeError(message)
 
 
 def _fetch_yfinance_funds_data(ticker: str) -> pd.DataFrame:
@@ -815,12 +842,14 @@ def _is_equity_like_holding(*, symbol: str | None, name: str | None, asset_class
 def _coerce_weight(value: Any) -> float | None:
     if value is None:
         return None
-    text = str(value).strip().replace("%", "").replace(",", "")
+    raw_text = str(value).strip()
+    is_percent = "%" in raw_text
+    text = raw_text.replace("%", "").replace(",", "")
     numeric = pd.to_numeric(text, errors="coerce")
     if pd.isna(numeric):
         return None
     weight = float(numeric)
-    if weight > 1.0:
+    if is_percent or weight > 1.0:
         return round(weight / 100.0, 10)
     return round(weight, 10)
 

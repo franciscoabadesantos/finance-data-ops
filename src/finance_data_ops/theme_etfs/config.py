@@ -147,7 +147,6 @@ THEME_ETFS: tuple[ThemeETF, ...] = (
     _global_x("cyber", "BUG", 1),
     _first_trust("internet_ecommerce", "FDN", 1),
     _ishares("defense", "ITA", 1, "239502", "ishares-us-aerospace-defense-etf"),
-    _ark("space", "ARKX", 1, "ARK_SPACE_&_DEFENSE_INNOVATION_ETF_ARKX_HOLDINGS.csv"),
     _roundhill("space", "MARS", 1),
     _ssga("biotech", "XBI", 1),
     _roundhill("glp1_obesity", "OZEM", 1),
