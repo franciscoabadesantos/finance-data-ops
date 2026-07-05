@@ -59,6 +59,16 @@ This rewrites cached ETF holdings with canonical foreign listing symbols, drops 
 `feature_store.entity_attributes_static.name` from `holding_name`, and publishes the corrected holdings/entity rows. It
 does not ingest prices for newly discovered foreign constituents.
 
+Wave A onboarding (ITB homebuilders + US-listed GDX gold miners):
+
+```bash
+python scripts/run_wave_a_itb_gdx_onboarding.py --write-cache --publish --run-backfill
+```
+
+This derives the bounded Wave A universe from cached `etf_holdings`, skips already-active registry symbols, publishes
+names from `holding_name`, and fetches full-history market prices from `1900-01-01` plus fundamentals, earnings history,
+and exchange calendars. Non-US GDX listings remain out of scope for the later international wave.
+
 Parity gates:
 
 ```bash
