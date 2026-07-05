@@ -13,6 +13,7 @@ import pandas as pd
 import requests
 
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
+from finance_data_ops.symbology import is_placeholder_identifier, normalize_listing_symbol
 from finance_data_ops.theme_etfs.config import THEME_ETFS, ThemeETF
 
 
@@ -861,57 +862,12 @@ def _first_existing_column(frame: pd.DataFrame, candidates: list[str]) -> str | 
     return None
 
 
-_BLOOMBERG_SUFFIX_TO_YAHOO = {
-    "US": "",
-    "UW": "",
-    "UN": "",
-    "UR": "",
-    "UQ": "",
-    "LN": ".L",
-    "L": ".L",
-    "GR": ".DE",
-    "GY": ".DE",
-    "GA": ".AT",
-    "DE": ".DE",
-    "FP": ".PA",
-    "NA": ".AS",
-    "SW": ".SW",
-    "SE": ".ST",
-    "SS": ".SS",
-    "CH": ".SW",
-    "HK": ".HK",
-    "JP": ".T",
-    "JT": ".T",
-    "AU": ".AX",
-    "AT": ".AX",
-    "AB": ".ST",
-    "C1": ".SS",
-    "C2": ".SZ",
-    "CN": ".TO",
-    "CT": ".TO",
-    "KS": ".KS",
-    "KQ": ".KQ",
-    "TT": ".TW",
-    "TW": ".TW",
-    "IT": ".MI",
-    "IM": ".MI",
-    "SM": ".MC",
-    "DC": ".CO",
-    "NO": ".OL",
-}
-
-
 def _normalize_holding_symbol(value: Any) -> str | None:
     text = _coerce_text(value)
     if text is None:
         return None
-    token = text.upper().replace("/", "-").strip()
-    token = re.sub(r"\s+", " ", token)
-    if " " in token:
-        base, suffix = token.rsplit(" ", 1)
-        if suffix in _BLOOMBERG_SUFFIX_TO_YAHOO:
-            return f"{base}{_BLOOMBERG_SUFFIX_TO_YAHOO[suffix]}"
-    return token
+    token = normalize_listing_symbol(text)
+    return token or None
 
 
 def _is_equity_like_holding(*, symbol: str | None, name: str | None, asset_class: str | None = None) -> bool:
@@ -924,6 +880,8 @@ def _is_equity_like_holding(*, symbol: str | None, name: str | None, asset_class
         return False
     currency_tokens = {"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "HKD", "SEK", "NOK", "DKK", "KRW", "CNY"}
     if token in {"", "NAN", "NONE", "NULL", "CASH", "CASH_USD"} | currency_tokens:
+        return False
+    if is_placeholder_identifier(token):
         return False
     if re.fullmatch(r"-?[A-Z]{3}\s*CASH-?", token):
         return False

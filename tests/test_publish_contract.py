@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 import numpy as np
 import pandas as pd
 
-from finance_data_ops.publish.client import RecordingPublisher, to_json_safe
+from finance_data_ops.publish.client import RecordingPublisher, _build_upsert_sql, to_json_safe
 from finance_data_ops.publish.prices import publish_prices_surfaces
 from finance_data_ops.publish.product_metrics import publish_product_metrics
 from finance_data_ops.publish.status import publish_status_surfaces
@@ -239,6 +239,19 @@ def test_publish_rows_are_json_safe_before_upsert() -> None:
     assert isinstance(row["close"], float)
     assert isinstance(row["adj_close"], float)
     assert isinstance(row["volume"], (int, float))
+
+
+def test_entity_attributes_name_upsert_preserves_existing_name() -> None:
+    query = _build_upsert_sql(
+        schema_name="feature_store",
+        table_name="entity_attributes_static",
+        columns=["entity_id", "name", "country"],
+        conflict_columns=["entity_id"],
+        update_columns=["name", "country"],
+    )
+
+    assert '"name" = coalesce("entity_attributes_static"."name", excluded."name")' in query
+    assert '"country" = excluded."country"' in query
 
 
 def test_quote_rows_are_json_safe_before_upsert() -> None:

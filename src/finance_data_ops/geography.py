@@ -6,6 +6,8 @@ import math
 import re
 from typing import Any
 
+from finance_data_ops.symbology import YAHOO_SUFFIX_TO_COUNTRY, infer_country_from_listing_symbol
+
 
 REGION_US = "US"
 REGION_AMER = "AMER"
@@ -125,36 +127,7 @@ _APAC_COUNTRIES = {
     "TW",
 }
 
-SUFFIX_TO_COUNTRY = {
-    ".DE": "DE",
-    ".AS": "NL",
-    ".PA": "FR",
-    ".LS": "PT",
-    ".L": "GB",
-    ".CO": "DK",
-    ".AX": "AU",
-    ".T": "JP",
-    ".HK": "HK",
-    ".NS": "IN",
-    ".BO": "IN",
-    ".SS": "CN",
-    ".SZ": "CN",
-    ".KS": "KR",
-    ".KQ": "KR",
-    ".TW": "TW",
-    ".SI": "SG",
-    ".KL": "MY",
-    ".JK": "ID",
-    ".BK": "TH",
-    ".SW": "CH",
-    ".ST": "SE",
-    ".TO": "CA",
-    ".MI": "IT",
-    ".MC": "ES",
-    ".OL": "NO",
-}
-
-_SUFFIX_COUNTRY_PAIRS = sorted(SUFFIX_TO_COUNTRY.items(), key=lambda item: len(item[0]), reverse=True)
+SUFFIX_TO_COUNTRY = YAHOO_SUFFIX_TO_COUNTRY
 
 
 def normalize_country(raw: Any) -> str:
@@ -188,10 +161,9 @@ def region_for_country(country: Any) -> str:
 
 
 def infer_country_from_symbol(symbol: Any, *, default: str = "US") -> str:
-    normalized = str(symbol or "").strip().upper()
-    for suffix, country in _SUFFIX_COUNTRY_PAIRS:
-        if normalized.endswith(suffix):
-            return country
+    country = infer_country_from_listing_symbol(symbol)
+    if country:
+        return country
     return normalize_country(default)
 
 

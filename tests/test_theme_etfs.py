@@ -109,7 +109,7 @@ def test_fetch_theme_etf_holdings_adds_theme_reference_and_normalizes_csv(monkey
         },
         {
             "etf_ticker": "FINX",
-            "holding_symbol": "371.HK",
+            "holding_symbol": "0371.HK",
             "holding_name": "BEIJING ENTERPRISES WATER GROUP LTD",
             "weight": 0.023,
             "as_of": date(2026, 7, 2),
@@ -359,6 +359,8 @@ def test_roundhill_parser_resolves_dated_csv_filters_account_and_non_equity(monk
             "60482960,1810000,181,\n"
             "07/06/2026,OZEM,1093 HK,6191997,CSPC Pharmaceutical Group Ltd,3488000,7.55,3357716.17,5.55%,"
             "60482960,1810000,181,\n"
+            "07/06/2026,OZEM,700 HK,B000000,Tencent Holdings Ltd,100,1,100,1.00%,"
+            "60482960,1810000,181,\n"
             "07/06/2026,OZEM,WVE,Y95308105,WaVe Life Sciences Ltd,87166,6.26,545659.16,0.90%,"
             "60482960,1810000,181,\n"
             "07/06/2026,OZEM,FGXXX,31846V336,First American Government Obligations Fund 12/01/2031,"
@@ -392,6 +394,12 @@ def test_roundhill_parser_resolves_dated_csv_filters_account_and_non_equity(monk
             "as_of": date(2026, 7, 6),
         },
         {
+            "holding_symbol": "0700.HK",
+            "holding_name": "Tencent Holdings Ltd",
+            "weight": 0.01,
+            "as_of": date(2026, 7, 6),
+        },
+        {
             "holding_symbol": "WVE",
             "holding_name": "WaVe Life Sciences Ltd",
             "weight": 0.009,
@@ -400,7 +408,7 @@ def test_roundhill_parser_resolves_dated_csv_filters_account_and_non_equity(monk
     ]
     assert themes.iloc[0]["source_type"] == "roundhill_csv"
     assert themes.iloc[0]["source_ref"].endswith("FilepointRoundhill.40RU.RU_Holdings_07022026.csv")
-    assert themes.iloc[0]["holdings_count"] == 4
+    assert themes.iloc[0]["holdings_count"] == 5
     assert themes.iloc[0]["holdings_source_depth"] == "full"
     assert fetched_urls == [
         "https://www.roundhillinvestments.com/etf/ozem/",
@@ -518,6 +526,7 @@ def test_full_holdings_filter_non_equity_cash_and_placeholder_rows() -> None:
             "Ticker,Name,Asset Class,Weight (%)\n"
             "FSLR,First Solar Inc,Equity,9.5\n"
             "600900,China Yangtze Power Ltd A,Equity,6.1\n"
+            "2670549D,Dead Placeholder,Equity,1.1\n"
             "-AUD CASH-,Cash,Cash,0.4\n"
             "USD,US Dollar,Cash,0.2\n"
             "ESU6,Equity Index Future,Future,0.1\n"
@@ -868,4 +877,5 @@ def test_entity_attributes_payload_preserves_resolved_country_and_sector() -> No
     )
 
     assert payload[0]["country"] == "CH"
+    assert payload[0]["name"] is None
     assert payload[0]["sector"] == "Consumer Defensive"

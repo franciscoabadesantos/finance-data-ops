@@ -153,7 +153,10 @@ def _build_upsert_sql(
     placeholders = ", ".join(["%s"] * len(columns))
     conflict_sql = ", ".join(_quote_ident(column) for column in conflict_columns)
     if update_columns:
-        update_sql = ", ".join(f"{_quote_ident(column)} = excluded.{_quote_ident(column)}" for column in update_columns)
+        update_sql = ", ".join(
+            _build_update_assignment(schema_name=schema_name, table_name=table_name, column=column)
+            for column in update_columns
+        )
         conflict_action = f"do update set {update_sql}"
     else:
         conflict_action = "do nothing"
@@ -161,6 +164,13 @@ def _build_upsert_sql(
         f"insert into {_quote_ident(schema_name)}.{_quote_ident(table_name)} ({column_sql}) "
         f"values ({placeholders}) on conflict ({conflict_sql}) {conflict_action}"
     )
+
+
+def _build_update_assignment(*, schema_name: str, table_name: str, column: str) -> str:
+    quoted_column = _quote_ident(column)
+    if schema_name == "feature_store" and table_name == "entity_attributes_static" and column == "name":
+        return f'{quoted_column} = coalesce({_quote_ident(table_name)}.{quoted_column}, excluded.{quoted_column})'
+    return f"{quoted_column} = excluded.{quoted_column}"
 
 
 def _ordered_columns(rows: list[dict[str, Any]]) -> list[str]:

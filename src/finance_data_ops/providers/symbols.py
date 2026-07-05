@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from finance_data_ops.settings import discover_repo_root
+from finance_data_ops.symbology import YAHOO_SUFFIX_BY_EXCHANGE, normalize_listing_symbol, normalize_symbol_with_exchange
 
 try:  # pragma: no cover - import boundary
     import yaml
@@ -15,23 +16,7 @@ except Exception:  # pragma: no cover - optional dependency boundary
 
 
 DEFAULT_NORMALIZATION_CONFIG: dict[str, Any] = {
-    "suffix_by_exchange": {
-        "ASX": ".AX",
-        "HKEX": ".HK",
-        "TSE": ".T",
-        "NSE": ".NS",
-        "BSE": ".BO",
-        "LSE": ".L",
-        "TSX": ".TO",
-        "ETR": ".DE",
-        "AMS": ".AS",
-        "EPA": ".PA",
-        "LIS": ".LS",
-        "CSE": ".CO",
-        "BIT": ".MI",
-        "SHG": ".SS",
-        "SHE": ".SZ",
-    },
+    "suffix_by_exchange": dict(YAHOO_SUFFIX_BY_EXCHANGE),
     "explicit_overrides": {
         "ANZ": ["ANZ.AX", "ANZ"],
         "WBC": ["WBC.AX", "WBC"],
@@ -81,7 +66,7 @@ DEFAULT_NORMALIZATION_CONFIG: dict[str, Any] = {
 
 
 def normalize_input_symbol(raw_symbol: str) -> str:
-    return str(raw_symbol).strip().upper()
+    return normalize_listing_symbol(raw_symbol)
 
 
 def normalize_symbol_for_provider(raw_symbol: str, region: str | None, exchange: str | None = None) -> list[str]:
@@ -129,7 +114,7 @@ def normalize_symbol_for_provider(raw_symbol: str, region: str | None, exchange:
         suffix = str(suffix_by_exchange.get(exchange_code) or "").strip()
         if not suffix:
             continue
-        candidate = f"{normalized}{suffix.upper()}"
+        candidate = normalize_symbol_with_exchange(normalized, exchange_code)
         if candidate not in candidates:
             candidates.append(candidate)
 

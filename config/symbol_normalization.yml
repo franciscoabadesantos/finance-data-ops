@@ -1,20 +1,3 @@
-suffix_by_exchange:
-  ASX: ".AX"
-  HKEX: ".HK"
-  TSE: ".T"
-  NSE: ".NS"
-  BSE: ".BO"
-  LSE: ".L"
-  TSX: ".TO"
-  ETR: ".DE"
-  AMS: ".AS"
-  EPA: ".PA"
-  LIS: ".LS"
-  CSE: ".CO"
-  BIT: ".MI"
-  SHG: ".SS"
-  SHE: ".SZ"
-
 explicit_overrides:
   ANZ:
     - "ANZ.AX"

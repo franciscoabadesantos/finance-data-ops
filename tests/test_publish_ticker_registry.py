@@ -85,7 +85,13 @@ def test_entity_attributes_payload_normalizes_country_and_recomputes_region() ->
     payload = build_entity_attributes_static_payload(
         [
             {"input_symbol": "PAGS", "normalized_symbol": "PAGS", "region": "apac", "country": "Brazil"},
-            {"input_symbol": "INFY.NS", "normalized_symbol": "INFY.NS", "region": "us", "country": "INDIA"},
+            {
+                "input_symbol": "INFY.NS",
+                "normalized_symbol": "INFY.NS",
+                "region": "us",
+                "country": "INDIA",
+                "holding_name": "Infosys Ltd",
+            },
             {"input_symbol": "NOKIA", "normalized_symbol": "NOKIA", "region": "apac", "country": "FINLAND"},
             {"input_symbol": "MYST", "normalized_symbol": "MYST", "region": "us", "country": "Atlantis"},
         ]
@@ -96,6 +102,7 @@ def test_entity_attributes_payload_normalizes_country_and_recomputes_region() ->
     assert by_entity["PAGS"]["region"] == "AMER"
     assert by_entity["INFY.NS"]["country"] == "IN"
     assert by_entity["INFY.NS"]["region"] == "APAC"
+    assert by_entity["INFY.NS"]["name"] == "Infosys Ltd"
     assert by_entity["NOKIA"]["country"] == "FI"
     assert by_entity["NOKIA"]["region"] == "EU"
     assert by_entity["MYST"]["country"] == "ATLANTIS"
@@ -106,18 +113,29 @@ def test_entity_attributes_backfill_payload_repairs_existing_regions() -> None:
     payload = build_entity_attributes_static_backfill_payload(
         [
             {"entity_id": "PAGS", "country": "Brazil", "region": "APAC", "exchange": "NMS", "currency": "usd"},
-            {"entity_id": "SHOP.TO", "country": "CA", "region": "US", "exchange": "tor", "currency": "cad"},
+            {
+                "entity_id": "SHOP.TO",
+                "name": "Existing Shopify Inc.",
+                "country": "CA",
+                "region": "US",
+                "exchange": "tor",
+                "currency": "cad",
+            },
             {"entity_id": "UNKNOWN", "country": "Atlantis", "region": "US"},
-        ]
+        ],
+        name_by_entity={"PAGS": "PagSeguro Digital Ltd", "SHOP.TO": "Shopify Inc.", "UNKNOWN": "Mystery Co"},
     )
 
     by_entity = {row["entity_id"]: row for row in payload}
     assert by_entity["PAGS"]["region"] == "AMER"
     assert by_entity["PAGS"]["country"] == "BR"
+    assert by_entity["PAGS"]["name"] == "PagSeguro Digital Ltd"
     assert by_entity["SHOP.TO"]["region"] == "AMER"
+    assert by_entity["SHOP.TO"]["name"] == "Existing Shopify Inc."
     assert by_entity["SHOP.TO"]["exchange"] == "TOR"
     assert by_entity["SHOP.TO"]["currency"] == "CAD"
     assert by_entity["UNKNOWN"]["region"] == "OTHER"
+    assert by_entity["UNKNOWN"]["name"] == "Mystery Co"
 
 
 def test_theme_universe_expansion_publish_accepts_jsonb_notes_column() -> None:

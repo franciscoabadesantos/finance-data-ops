@@ -18,5 +18,10 @@ def test_already_suffixed_symbol_stays_stable() -> None:
     assert normalize_symbol_for_provider("ANZ.AX", region="apac") == ["ANZ.AX"]
 
 
+def test_hong_kong_numeric_symbol_is_zero_padded() -> None:
+    assert normalize_symbol_for_provider("700.HK", region="apac") == ["0700.HK"]
+    assert normalize_symbol_for_provider("700", region="apac", exchange="HKEX")[0] == "0700.HK"
+
+
 def test_brk_b_dash_symbol_stays_stable() -> None:
     assert normalize_symbol_for_provider("BRK-B", region="us") == ["BRK-B"]

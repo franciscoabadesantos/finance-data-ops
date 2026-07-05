@@ -49,6 +49,16 @@ python scripts/run_entity_attributes_static_backfill.py --write-cache --publish
 This re-publishes `feature_store.entity_attributes_static` from the cached entity attributes table after applying the
 canonical `normalize_country` and `region_for_country` mapping.
 
+Foreign ETF holding symbol/name repair:
+
+```bash
+python scripts/run_foreign_symbol_backfill.py --write-cache --publish
+```
+
+This rewrites cached ETF holdings with canonical foreign listing symbols, drops numeric placeholder identifiers, fills
+`feature_store.entity_attributes_static.name` from `holding_name`, and publishes the corrected holdings/entity rows. It
+does not ingest prices for newly discovered foreign constituents.
+
 Parity gates:
 
 ```bash

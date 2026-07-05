@@ -85,6 +85,7 @@ def build_entity_attributes_static_payload(rows: list[dict[str, Any]]) -> list[d
         out.append(
             {
                 "entity_id": entity_id,
+                "name": _nullable_text(extras.get("name") or extras.get("holding_name")),
                 "country": country,
                 "region": region_for_country(country),
                 "exchange": row.get("exchange"),
@@ -112,19 +113,30 @@ def publish_ticker_registry(
     return {"ticker_registry": registry_result, "feature_store.entity_attributes_static": entity_result}
 
 
-def build_entity_attributes_static_backfill_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_entity_attributes_static_backfill_payload(
+    rows: list[dict[str, Any]],
+    *,
+    name_by_entity: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     if not rows:
         return []
     now_utc = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC").isoformat()
     out_by_entity: dict[str, dict[str, Any]] = {}
+    normalized_names = {
+        str(key).strip().upper(): value
+        for key, value in dict(name_by_entity or {}).items()
+        if str(key).strip() and _nullable_text(value)
+    }
     for raw in rows:
         entity_id = str(raw.get("entity_id") or raw.get("normalized_symbol") or raw.get("input_symbol") or "")
         entity_id = entity_id.strip().upper()
         if not entity_id or entity_id in {"NONE", "NULL", "NAN"}:
             continue
         country = normalize_country(raw.get("country") or infer_country_from_symbol(entity_id))
+        name = _nullable_text(raw.get("name")) or _nullable_text(normalized_names.get(entity_id))
         out_by_entity[entity_id] = {
             "entity_id": entity_id,
+            "name": name,
             "country": country,
             "region": region_for_country(country),
             "exchange": _nullable_text(raw.get("exchange"), upper=True),

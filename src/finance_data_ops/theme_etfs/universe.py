@@ -137,6 +137,7 @@ def _build_registry_row(
     exchange_mic = _metadata_text(metadata, "exchangeMic", "exchange_mic")
     currency = _metadata_text(metadata, "currency", "financialCurrency") or "USD"
     sector = _metadata_text(metadata, "sector")
+    name = _metadata_text(metadata, "name", "shortName", "longName") or _metadata_text(candidate, "holding_name")
     instrument_type = _metadata_instrument_type(symbol, metadata)
     themes = str(candidate.get("themes") or "")
     source_etfs = str(candidate.get("source_etfs") or "")
@@ -168,6 +169,7 @@ def _build_registry_row(
         "notes": notes,
         "updated_at": now_iso,
         "country": country,
+        "name": name,
         "sector": sector,
     }
 
