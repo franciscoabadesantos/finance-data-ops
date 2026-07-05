@@ -4,7 +4,12 @@ from typing import Any
 
 import pandas as pd
 
-from finance_data_ops.publish.ticker_registry import build_ticker_registry_payload, publish_ticker_registry
+from finance_data_ops.publish.ticker_registry import (
+    build_entity_attributes_static_backfill_payload,
+    build_entity_attributes_static_payload,
+    build_ticker_registry_payload,
+    publish_ticker_registry,
+)
 from finance_data_ops.theme_etfs.universe import build_wave_universe_additions
 
 
@@ -74,6 +79,45 @@ def test_ticker_registry_payload_coerces_notes_to_jsonb_object() -> None:
     }
     assert payload[1]["notes"] == {"raw": "manual review"}
     assert payload[2]["notes"] == {}
+
+
+def test_entity_attributes_payload_normalizes_country_and_recomputes_region() -> None:
+    payload = build_entity_attributes_static_payload(
+        [
+            {"input_symbol": "PAGS", "normalized_symbol": "PAGS", "region": "apac", "country": "Brazil"},
+            {"input_symbol": "INFY.NS", "normalized_symbol": "INFY.NS", "region": "us", "country": "INDIA"},
+            {"input_symbol": "NOKIA", "normalized_symbol": "NOKIA", "region": "apac", "country": "FINLAND"},
+            {"input_symbol": "MYST", "normalized_symbol": "MYST", "region": "us", "country": "Atlantis"},
+        ]
+    )
+
+    by_entity = {row["entity_id"]: row for row in payload}
+    assert by_entity["PAGS"]["country"] == "BR"
+    assert by_entity["PAGS"]["region"] == "AMER"
+    assert by_entity["INFY.NS"]["country"] == "IN"
+    assert by_entity["INFY.NS"]["region"] == "APAC"
+    assert by_entity["NOKIA"]["country"] == "FI"
+    assert by_entity["NOKIA"]["region"] == "EU"
+    assert by_entity["MYST"]["country"] == "ATLANTIS"
+    assert by_entity["MYST"]["region"] == "OTHER"
+
+
+def test_entity_attributes_backfill_payload_repairs_existing_regions() -> None:
+    payload = build_entity_attributes_static_backfill_payload(
+        [
+            {"entity_id": "PAGS", "country": "Brazil", "region": "APAC", "exchange": "NMS", "currency": "usd"},
+            {"entity_id": "SHOP.TO", "country": "CA", "region": "US", "exchange": "tor", "currency": "cad"},
+            {"entity_id": "UNKNOWN", "country": "Atlantis", "region": "US"},
+        ]
+    )
+
+    by_entity = {row["entity_id"]: row for row in payload}
+    assert by_entity["PAGS"]["region"] == "AMER"
+    assert by_entity["PAGS"]["country"] == "BR"
+    assert by_entity["SHOP.TO"]["region"] == "AMER"
+    assert by_entity["SHOP.TO"]["exchange"] == "TOR"
+    assert by_entity["SHOP.TO"]["currency"] == "CAD"
+    assert by_entity["UNKNOWN"]["region"] == "OTHER"
 
 
 def test_theme_universe_expansion_publish_accepts_jsonb_notes_column() -> None:

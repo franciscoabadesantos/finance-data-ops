@@ -7,52 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from finance_data_ops.geography import infer_country_from_symbol, normalize_country, region_for_country
 from finance_data_ops.publish.client import Publisher
-
-
-SUFFIX_TO_COUNTRY = {
-    ".DE": "DE",
-    ".AS": "NL",
-    ".PA": "FR",
-    ".LS": "PT",
-    ".L": "GB",
-    ".CO": "DK",
-    ".AX": "AU",
-    ".T": "JP",
-    ".HK": "HK",
-    ".NS": "IN",
-    ".BO": "IN",
-    ".SS": "CN",
-    ".SZ": "CN",
-    ".KS": "KR",
-    ".KQ": "KR",
-    ".TW": "TW",
-    ".SI": "SG",
-    ".KL": "MY",
-    ".JK": "ID",
-    ".BK": "TH",
-}
-COUNTRY_TO_REGION = {
-    "US": "US",
-    "DE": "EU",
-    "NL": "EU",
-    "FR": "EU",
-    "PT": "EU",
-    "GB": "EU",
-    "DK": "EU",
-    "AU": "APAC",
-    "JP": "APAC",
-    "HK": "APAC",
-    "IN": "APAC",
-    "CN": "APAC",
-    "KR": "APAC",
-    "TW": "APAC",
-    "SG": "APAC",
-    "MY": "APAC",
-    "ID": "APAC",
-    "TH": "APAC",
-}
-_SUFFIX_COUNTRY_PAIRS = sorted(SUFFIX_TO_COUNTRY.items(), key=lambda item: len(item[0]), reverse=True)
 
 
 REGISTRY_COLUMNS = [
@@ -125,12 +81,12 @@ def build_entity_attributes_static_payload(rows: list[dict[str, Any]]) -> list[d
             continue
         seen.add(entity_id)
         extras = extras_by_entity.get(entity_id, {})
-        country = str(extras.get("country") or _infer_country(entity_id)).strip().upper()
+        country = normalize_country(extras.get("country") or infer_country_from_symbol(entity_id))
         out.append(
             {
                 "entity_id": entity_id,
                 "country": country,
-                "region": str(row.get("region") or COUNTRY_TO_REGION.get(country, "US")).strip().upper(),
+                "region": region_for_country(country),
                 "exchange": row.get("exchange"),
                 "exchange_mic": row.get("exchange_mic"),
                 "currency": row.get("currency"),
@@ -156,12 +112,28 @@ def publish_ticker_registry(
     return {"ticker_registry": registry_result, "feature_store.entity_attributes_static": entity_result}
 
 
-def _infer_country(symbol: str) -> str:
-    normalized = str(symbol).strip().upper()
-    for suffix, country in _SUFFIX_COUNTRY_PAIRS:
-        if normalized.endswith(suffix):
-            return country
-    return "US"
+def build_entity_attributes_static_backfill_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    now_utc = pd.Timestamp(datetime.now(UTC)).tz_convert("UTC").isoformat()
+    out_by_entity: dict[str, dict[str, Any]] = {}
+    for raw in rows:
+        entity_id = str(raw.get("entity_id") or raw.get("normalized_symbol") or raw.get("input_symbol") or "")
+        entity_id = entity_id.strip().upper()
+        if not entity_id or entity_id in {"NONE", "NULL", "NAN"}:
+            continue
+        country = normalize_country(raw.get("country") or infer_country_from_symbol(entity_id))
+        out_by_entity[entity_id] = {
+            "entity_id": entity_id,
+            "country": country,
+            "region": region_for_country(country),
+            "exchange": _nullable_text(raw.get("exchange"), upper=True),
+            "exchange_mic": _nullable_text(raw.get("exchange_mic"), upper=True),
+            "currency": _nullable_text(raw.get("currency"), upper=True),
+            "sector": _nullable_text(raw.get("sector")),
+            "updated_at": now_utc,
+        }
+    return list(out_by_entity.values())
 
 
 def _coerce_notes(value: Any) -> dict[str, Any]:
@@ -207,3 +179,14 @@ def _coerce_note_value(key: str, value: str) -> Any:
     if key in {"themes", "source_etfs", "candidates"}:
         return [item for item in value.split(",") if item]
     return value
+
+
+def _nullable_text(value: Any, *, upper: bool = False) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text or text.upper() in {"NONE", "NULL", "NAN"}:
+        return None
+    return text.upper() if upper else text

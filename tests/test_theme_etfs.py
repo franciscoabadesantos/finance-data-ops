@@ -765,6 +765,34 @@ def test_wave_universe_merge_dedupes_existing_filters_cash_and_builds_entity_att
     ]
 
 
+def test_wave_universe_uses_canonical_amer_region_for_brazil() -> None:
+    holdings = pd.DataFrame(
+        [{"etf_ticker": "FINX", "holding_symbol": "PAGS", "holding_name": "PagSeguro", "weight": 0.08}]
+    )
+    themes = pd.DataFrame([{"etf_ticker": "FINX", "theme": "fintech", "wave": 1}])
+
+    registry_rows, entity_rows, summary = build_wave_universe_additions(
+        holdings=holdings,
+        etf_themes=themes,
+        existing_registry=pd.DataFrame(),
+        wave=1,
+        max_new_tickers=10,
+        batch_size=2,
+        metadata_lookup=lambda _symbol: {
+            "country": "Brazil",
+            "sector": "Technology",
+            "exchange": "NMS",
+            "currency": "USD",
+        },
+    )
+
+    assert summary["new_tickers_selected"] == 1
+    assert registry_rows.iloc[0]["region"] == "amer"
+    assert registry_rows.iloc[0]["registry_key"] == "PAGS|amer|NMS"
+    assert entity_rows.iloc[0]["country"] == "BR"
+    assert entity_rows.iloc[0]["region"] == "AMER"
+
+
 def test_wave_universe_merge_resumes_after_prior_theme_batch() -> None:
     holdings = pd.DataFrame(
         [

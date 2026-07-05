@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from finance_data_ops.geography import infer_country_from_symbol, normalize_country, region_for_country
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_payload
 from finance_data_ops.validation.ticker_registry import build_registry_key, read_ticker_registry
 
@@ -131,7 +132,7 @@ def _build_registry_row(
 ) -> dict[str, Any]:
     now_iso = datetime.now(UTC).isoformat()
     country = _metadata_country(symbol, metadata)
-    region = _region_for_country(country)
+    region = region_for_country(country)
     exchange = _metadata_text(metadata, "exchange", "fullExchangeName")
     exchange_mic = _metadata_text(metadata, "exchangeMic", "exchange_mic")
     currency = _metadata_text(metadata, "currency", "financialCurrency") or "USD"
@@ -235,72 +236,8 @@ def _metadata_instrument_type(symbol: str, metadata: Mapping[str, Any]) -> str:
 def _metadata_country(symbol: str, metadata: Mapping[str, Any]) -> str:
     country = _metadata_text(metadata, "country", "countryCode", "country_code")
     if country:
-        return _normalize_country(country)
-    for suffix, country_code in _SUFFIX_TO_COUNTRY.items():
-        if symbol.endswith(suffix):
-            return country_code
-    return "US"
-
-
-_COUNTRY_NAME_TO_CODE = {
-    "UNITED STATES": "US",
-    "UNITED STATES OF AMERICA": "US",
-    "USA": "US",
-    "TAIWAN": "TW",
-    "JAPAN": "JP",
-    "UNITED KINGDOM": "GB",
-    "GREAT BRITAIN": "GB",
-    "SWITZERLAND": "CH",
-    "GERMANY": "DE",
-    "FRANCE": "FR",
-    "ITALY": "IT",
-    "NETHERLANDS": "NL",
-    "CANADA": "CA",
-    "AUSTRALIA": "AU",
-    "SOUTH KOREA": "KR",
-    "KOREA": "KR",
-    "CHINA": "CN",
-    "HONG KONG": "HK",
-    "ISRAEL": "IL",
-    "BRAZIL": "BR",
-}
-
-
-def _normalize_country(country: str) -> str:
-    token = str(country or "").strip().upper()
-    if len(token) == 2:
-        return token
-    return _COUNTRY_NAME_TO_CODE.get(token, token)
-
-
-_SUFFIX_TO_COUNTRY = {
-    ".L": "GB",
-    ".DE": "DE",
-    ".PA": "FR",
-    ".AS": "NL",
-    ".SW": "CH",
-    ".ST": "SE",
-    ".HK": "HK",
-    ".T": "JP",
-    ".AX": "AU",
-    ".TO": "CA",
-    ".KS": "KR",
-    ".KQ": "KR",
-    ".TW": "TW",
-    ".MI": "IT",
-    ".MC": "ES",
-    ".CO": "DK",
-    ".OL": "NO",
-}
-
-
-def _region_for_country(country: str) -> str:
-    normalized = str(country or "US").strip().upper()
-    if normalized in {"US", "CA"}:
-        return "us"
-    if normalized in {"GB", "DE", "FR", "NL", "CH", "SE", "IT", "ES", "DK", "NO", "PT"}:
-        return "eu"
-    return "apac"
+        return normalize_country(country)
+    return infer_country_from_symbol(symbol)
 
 
 def _metadata_text(metadata: Mapping[str, Any], *keys: str) -> str | None:

@@ -40,6 +40,15 @@ python scripts/run_release_calendar_backfill.py --start-date 2000-01-01 --end-da
 python scripts/run_macro_release_backfill.py --start-date 2000-01-01 --end-date 2026-04-13 --force-recompute
 ```
 
+Entity attributes country/region repair:
+
+```bash
+python scripts/run_entity_attributes_static_backfill.py --write-cache --publish
+```
+
+This re-publishes `feature_store.entity_attributes_static` from the cached entity attributes table after applying the
+canonical `normalize_country` and `region_for_country` mapping.
+
 Parity gates:
 
 ```bash
