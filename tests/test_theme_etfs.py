@@ -202,9 +202,9 @@ def test_holdings_country_column_is_primary_and_normalizes_bare_numeric_symbols(
         return (
             "Holdings as of 2026-07-02\n"
             "Ticker,Name,Country,Weight (%)\n"
-            "600900,China Yangtze Power,China,2.00\n"
-            "700,Tencent Holdings,Hong Kong,1.50\n"
-            "6758,Sony Group,Japan,1.25\n"
+            "600900,China Yangtze Power,United States,2.00\n"
+            "700,Tencent Holdings,United States,1.50\n"
+            "6758,Sony Group,United States,1.25\n"
             "MELI,MercadoLibre,Uruguay,1.00\n"
         ).encode()
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -83,7 +84,12 @@ def main() -> None:
             entity_payload,
             on_conflict="entity_id",
         )
-        publish_result = {"etf_holdings": holdings_result, "feature_store.entity_attributes_static": entity_result}
+        cleanup_result = _delete_published_replaced_bare_entities(database_dsn=settings.database_dsn)
+        publish_result = {
+            "etf_holdings": holdings_result,
+            "feature_store.entity_attributes_static": entity_result,
+            "feature_store.entity_attributes_static_bare_cleanup": cleanup_result,
+        }
 
     summary = {
         **holding_summary,
@@ -256,7 +262,35 @@ def _backfill_counts(
         and existing_home_country_by_entity.get(str(row.get("entity_id")).strip().upper()) in {"", "US"}
         and normalize_country(row.get("home_country")) not in {"", "US"}
     )
+    bare_before = _bare_numeric_entities(existing_entities)
+    bare_after = _bare_numeric_ids(row.get("entity_id") for row in entity_payload)
+    duplicate_pairs_before = _replaced_bare_entity_pairs(
+        existing_entities.get("entity_id", pd.Series(dtype=object)).dropna().tolist()
+        if not existing_entities.empty
+        else []
+    )
+    duplicate_pairs_after = _replaced_bare_entity_pairs(row.get("entity_id") for row in entity_payload)
+    non_iso_before = _raw_non_iso_country_count(existing_entities, columns=("country", "home_country"))
+    non_iso_after = _raw_non_iso_country_count(pd.DataFrame(entity_payload), columns=("country", "home_country"))
+    null_home_before = _missing_home_country_count(existing_entities)
+    null_home_after = _missing_home_country_count(pd.DataFrame(entity_payload))
     return {
+        "bare_numeric_entities_before": len(bare_before),
+        "bare_numeric_entities_before_examples": bare_before[:20],
+        "bare_numeric_entities_after": len(bare_after),
+        "bare_numeric_entities_after_examples": bare_after[:20],
+        "safe_duplicate_bare_entities_removable": len(duplicate_pairs_before),
+        "safe_duplicate_bare_entities_removable_examples": [
+            f"{bare}->{normalized}" for bare, normalized in duplicate_pairs_before[:20]
+        ],
+        "duplicate_bare_entities_after": len(duplicate_pairs_after),
+        "duplicate_bare_entities_after_examples": [
+            f"{bare}->{normalized}" for bare, normalized in duplicate_pairs_after[:20]
+        ],
+        "non_iso_country_values_before": non_iso_before,
+        "non_iso_country_values_after": non_iso_after,
+        "missing_home_country_before": null_home_before,
+        "missing_home_country_after": null_home_after,
         "foreign_symbols_reconciled_to_priced_tickers": len(reconciled),
         "foreign_symbols_reconciled_examples": reconciled[:20],
         "entities_that_gained_name": len(newly_named),
@@ -288,6 +322,81 @@ def _delete_published_etf_holdings(*, database_dsn: str, etf_tickers: list[str])
     with psycopg.connect(database_dsn, autocommit=True, application_name="finance-data-ops") as conn:
         with conn.cursor() as cur:
             cur.execute(f"delete from public.etf_holdings where etf_ticker in ({placeholders})", etf_tickers)
+
+
+def _delete_published_replaced_bare_entities(*, database_dsn: str) -> dict[str, Any]:
+    try:
+        import psycopg
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("psycopg[binary] is required for Postgres publishing.") from exc
+
+    with psycopg.connect(database_dsn, autocommit=True, application_name="finance-data-ops") as conn:
+        with conn.cursor() as cur:
+            cur.execute("select entity_id from feature_store.entity_attributes_static")
+            entity_ids = [str(row[0]).strip().upper() for row in cur.fetchall() if str(row[0]).strip()]
+            pairs = _replaced_bare_entity_pairs(entity_ids)
+            if not pairs:
+                return {"status": "ok", "rows": 0, "examples": []}
+            bare_ids = [bare for bare, _ in pairs]
+            placeholders = ", ".join(["%s"] * len(bare_ids))
+            cur.execute(
+                f"delete from feature_store.entity_attributes_static where entity_id in ({placeholders})",
+                bare_ids,
+            )
+    return {
+        "status": "ok",
+        "rows": len(pairs),
+        "examples": [f"{bare}->{normalized}" for bare, normalized in pairs[:20]],
+    }
+
+
+def _bare_numeric_entities(frame: pd.DataFrame) -> list[str]:
+    if frame.empty or "entity_id" not in frame.columns:
+        return []
+    return sorted(_bare_numeric_ids(frame["entity_id"].dropna().tolist()))
+
+
+def _bare_numeric_ids(values: Any) -> list[str]:
+    out = {
+        str(value).strip().upper()
+        for value in values
+        if re.fullmatch(r"(?:600\d{3}|000\d{3}|002\d{3}|300\d{3}|\d{1,4})", str(value).strip().upper())
+    }
+    return sorted(out)
+
+
+def _replaced_bare_entity_pairs(values: Any) -> list[tuple[str, str]]:
+    symbols = {str(value).strip().upper() for value in values if str(value).strip()}
+    pairs = {
+        (symbol, normalize_listing_symbol(symbol))
+        for symbol in symbols
+        if symbol in _bare_numeric_ids([symbol])
+        and normalize_listing_symbol(symbol)
+        and normalize_listing_symbol(symbol) != symbol
+        and normalize_listing_symbol(symbol) in symbols
+    }
+    return sorted(pairs)
+
+
+def _raw_non_iso_country_count(frame: pd.DataFrame, *, columns: tuple[str, ...]) -> int:
+    if frame.empty:
+        return 0
+    count = 0
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        for value in frame[column].dropna().tolist():
+            country = str(value).strip().upper()
+            if country and not re.fullmatch(r"[A-Z]{2}", country):
+                count += 1
+    return count
+
+
+def _missing_home_country_count(frame: pd.DataFrame) -> int:
+    if frame.empty or "home_country" not in frame.columns:
+        return int(len(frame.index)) if not frame.empty else 0
+    normalized = frame["home_country"].map(normalize_country)
+    return int(normalized.eq("").sum())
 
 
 def _text(value: Any) -> str | None:

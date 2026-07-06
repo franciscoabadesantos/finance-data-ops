@@ -61,7 +61,8 @@ This rewrites cached ETF holdings with canonical foreign listing symbols, drops 
 `holding_country` from holdings source country with suffix fallback, fills `feature_store.entity_attributes_static.name`
 from `holding_name`, and publishes the corrected holdings/entity rows. The summary reports existing US-classified rows
 corrected to non-US listing country plus US-listed rows that gained a non-US `home_country`. It does not ingest prices for
-newly discovered foreign constituents.
+newly discovered foreign constituents. When `--publish` is used, it also deletes old bare numeric entity IDs only when
+their normalized replacement already exists in `feature_store.entity_attributes_static`.
 
 Wave A onboarding (ITB homebuilders + US-listed GDX gold miners):
 

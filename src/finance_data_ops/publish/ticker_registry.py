@@ -7,9 +7,9 @@ from typing import Any
 
 import pandas as pd
 
-from finance_data_ops.geography import infer_country_from_symbol, normalize_country, region_for_country
+from finance_data_ops.geography import country_from_source_or_symbol, infer_country_from_symbol, normalize_country, region_for_country
 from finance_data_ops.publish.client import Publisher
-from finance_data_ops.symbology import normalize_symbol_with_country
+from finance_data_ops.symbology import ADR_HOME_COUNTRY_BY_SYMBOL, normalize_symbol_with_country
 
 
 REGISTRY_COLUMNS = [
@@ -207,23 +207,40 @@ def _normalize_entity_id(raw_entity_id: Any, row: dict[str, Any]) -> str:
 def _resolve_listing_country(entity_id: str, row: dict[str, Any]) -> str:
     if _is_adr_row(entity_id, row):
         return infer_country_from_symbol(entity_id)
-    return normalize_country(row.get("holding_country") or row.get("country") or infer_country_from_symbol(entity_id))
+    return country_from_source_or_symbol(row.get("holding_country") or row.get("country"), entity_id)
 
 
 def _resolve_home_country(entity_id: str, row: dict[str, Any], *, listing_country: str) -> str:
     if _is_adr_row(entity_id, row):
+        mapped = _mapped_adr_home_country(entity_id)
+        if mapped:
+            return mapped
+        candidate_values = [
+            row.get("holding_country"),
+            row.get("issuer_country"),
+            row.get("origin_country"),
+            row.get("country"),
+            row.get("home_country"),
+            listing_country,
+        ]
+        for value in candidate_values:
+            country = normalize_country(value)
+            if country and country != "US":
+                return country
         return normalize_country(
-            row.get("home_country")
-            or row.get("holding_country")
+            row.get("holding_country")
             or row.get("issuer_country")
             or row.get("origin_country")
             or row.get("country")
+            or row.get("home_country")
             or listing_country
         )
-    return normalize_country(row.get("home_country") or listing_country)
+    return normalize_country(listing_country)
 
 
 def _is_adr_row(entity_id: str, row: dict[str, Any]) -> bool:
+    if _mapped_adr_home_country(entity_id):
+        return True
     instrument_type = str(row.get("instrument_type") or row.get("quoteType") or row.get("quote_type") or "").upper()
     if instrument_type == "ADR":
         return True
@@ -231,6 +248,10 @@ def _is_adr_row(entity_id: str, row: dict[str, Any]) -> bool:
     if any(marker in name for marker in (" ADR", " ADS", "AMERICAN DEPOSIT")):
         return True
     return False
+
+
+def _mapped_adr_home_country(entity_id: str) -> str:
+    return ADR_HOME_COUNTRY_BY_SYMBOL.get(str(entity_id or "").strip().upper(), "")
 
 
 def _nullable_text(value: Any, *, upper: bool = False) -> str | None:

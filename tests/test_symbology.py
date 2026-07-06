@@ -33,7 +33,10 @@ def test_normalize_listing_symbol_resolves_bare_a_shares() -> None:
 
 def test_normalize_symbol_with_country_resolves_identifiable_bare_numeric_listings() -> None:
     assert normalize_symbol_with_country("700", "HK") == "0700.HK"
+    assert normalize_symbol_with_country("700", "US") == "0700.HK"
     assert normalize_symbol_with_country("6758", "JP") == "6758.T"
+    assert normalize_symbol_with_country("6758", "US") == "6758.T"
+    assert normalize_symbol_with_country("600900", "US") == "600900.SS"
 
 
 def test_normalize_symbol_with_exchange_uses_canonical_suffixes() -> None:

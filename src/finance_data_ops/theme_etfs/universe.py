@@ -9,9 +9,9 @@ from typing import Any
 
 import pandas as pd
 
-from finance_data_ops.geography import infer_country_from_symbol, normalize_country, region_for_country
+from finance_data_ops.geography import country_from_source_or_symbol, infer_country_from_symbol, normalize_country, region_for_country
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_payload
-from finance_data_ops.symbology import normalize_symbol_with_country
+from finance_data_ops.symbology import ADR_HOME_COUNTRY_BY_SYMBOL, normalize_symbol_with_country
 from finance_data_ops.validation.ticker_registry import build_registry_key, read_ticker_registry
 
 
@@ -143,9 +143,13 @@ def _build_registry_row(
     metadata_country = _metadata_country(symbol, metadata)
     if instrument_type == "adr":
         country = infer_country_from_symbol(symbol)
-        home_country = source_country or metadata_country or country
+        home_country = ADR_HOME_COUNTRY_BY_SYMBOL.get(symbol, "") or _first_non_us_country(
+            source_country,
+            metadata_country,
+            country,
+        )
     else:
-        country = source_country or metadata_country or infer_country_from_symbol(symbol)
+        country = country_from_source_or_symbol(source_country or metadata_country, symbol)
         home_country = country
     region = region_for_country(country)
     exchange = _metadata_text(metadata, "exchange", "fullExchangeName")
@@ -239,6 +243,8 @@ def _safe_metadata_lookup(lookup: MetadataLookup, symbol: str) -> dict[str, Any]
 
 
 def _metadata_instrument_type(symbol: str, metadata: Mapping[str, Any], *, name: Any = None) -> str:
+    if str(symbol or "").strip().upper() in ADR_HOME_COUNTRY_BY_SYMBOL:
+        return "adr"
     quote_type = str(metadata.get("quoteType") or metadata.get("quote_type") or "").strip().upper()
     if quote_type == "ADR":
         return "adr"
@@ -268,6 +274,17 @@ def _metadata_text(metadata: Mapping[str, Any], *keys: str) -> str | None:
         if text and text.lower() not in {"nan", "none", "null"}:
             return text
     return None
+
+
+def _first_non_us_country(*values: Any) -> str:
+    fallback = ""
+    for value in values:
+        country = normalize_country(value)
+        if country and not fallback:
+            fallback = country
+        if country and country != "US":
+            return country
+    return fallback
 
 
 def _first_non_empty(values: pd.Series) -> str | None:

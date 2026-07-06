@@ -49,6 +49,8 @@ _COUNTRY_NAME_TO_ISO2 = {
     "JAPAN": "JP",
     "KOREA": "KR",
     "KOREA REPUBLIC OF": "KR",
+    "KOREA REPUBLIC": "KR",
+    "KOREA SOUTH": "KR",
     "LUXEMBOURG": "LU",
     "MALAYSIA": "MY",
     "MEXICO": "MX",
@@ -182,9 +184,12 @@ def country_from_source_or_symbol(source_country: Any, symbol: Any, *, default: 
     """Resolve country from holdings source first, with listing suffix/default fallback."""
 
     country = normalize_country(source_country)
+    inferred = infer_country_from_listing_symbol(symbol)
+    if inferred and country == "US" and inferred != "US":
+        return inferred
     if country:
         return country
-    return infer_country_from_symbol(symbol, default=default)
+    return inferred or infer_country_from_symbol(symbol, default=default)
 
 
 def _normalize_token(raw: Any) -> str:

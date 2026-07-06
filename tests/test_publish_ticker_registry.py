@@ -165,21 +165,35 @@ def test_entity_attributes_payload_adds_adr_home_country_separate_from_listing_c
 def test_entity_attributes_backfill_normalizes_bare_symbols_and_home_country() -> None:
     payload = build_entity_attributes_static_backfill_payload(
         [
-            {"entity_id": "600900", "country": "US", "holding_country": "China", "name": "China Yangtze Power"},
+            {"entity_id": "600900", "country": "US", "home_country": "US", "name": "China Yangtze Power"},
+            {"entity_id": "700", "country": "US", "home_country": "US", "name": "Tencent Holdings"},
             {
                 "entity_id": "RIO",
-                "country": "United Kingdom",
+                "country": "US",
+                "home_country": "US",
                 "instrument_type": "adr",
                 "name": "Rio Tinto PLC ADR",
             },
+            {"entity_id": "AEM", "country": "US", "home_country": "US", "name": "Agnico Eagle Mines Ltd"},
+            {"entity_id": "AU", "country": "US", "home_country": "US", "name": "AngloGold Ashanti PLC ADR"},
+            {"entity_id": "JKS", "country": "US", "home_country": "US", "name": "JinkoSolar Holding Co Ltd ADR"},
+            {"entity_id": "SQM", "country": "US", "home_country": "US", "name": "Sociedad Quimica y Minera ADR"},
+            {"entity_id": "EH", "country": "US", "home_country": "US", "name": "EHang Holdings Ltd ADS"},
         ]
     )
 
     by_entity = {row["entity_id"]: row for row in payload}
     assert by_entity["600900.SS"]["country"] == "CN"
     assert by_entity["600900.SS"]["home_country"] == "CN"
+    assert by_entity["0700.HK"]["country"] == "HK"
+    assert by_entity["0700.HK"]["home_country"] == "HK"
     assert by_entity["RIO"]["country"] == "US"
     assert by_entity["RIO"]["home_country"] == "GB"
+    assert by_entity["AEM"]["home_country"] == "CA"
+    assert by_entity["AU"]["home_country"] == "ZA"
+    assert by_entity["JKS"]["home_country"] == "CN"
+    assert by_entity["SQM"]["home_country"] == "CL"
+    assert by_entity["EH"]["home_country"] == "CN"
 
 
 def test_theme_universe_expansion_publish_accepts_jsonb_notes_column() -> None:

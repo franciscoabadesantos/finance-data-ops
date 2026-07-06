@@ -97,6 +97,33 @@ BLOOMBERG_EXCHANGE_TO_YAHOO_SUFFIX = {
 
 _YAHOO_SUFFIX_COUNTRY_PAIRS = sorted(YAHOO_SUFFIX_TO_COUNTRY.items(), key=lambda item: len(item[0]), reverse=True)
 
+_KNOWN_BARE_NUMERIC_SUFFIX = {
+    "700": ".HK",
+    "0700": ".HK",
+    "9988": ".HK",
+    "3690": ".HK",
+    "6758": ".T",
+    "6501": ".T",
+    "6503": ".T",
+    "6861": ".T",
+    "7203": ".T",
+    "7267": ".T",
+    "7974": ".T",
+    "8035": ".T",
+    "8058": ".T",
+    "8306": ".T",
+    "9432": ".T",
+}
+
+ADR_HOME_COUNTRY_BY_SYMBOL = {
+    "AEM": "CA",
+    "AU": "ZA",
+    "EH": "CN",
+    "JKS": "CN",
+    "RIO": "GB",
+    "SQM": "CL",
+}
+
 
 def normalize_listing_symbol(raw_symbol: Any) -> str:
     """Normalize a provider/listing symbol to the canonical Yahoo-compatible form."""
@@ -128,6 +155,9 @@ def normalize_symbol_with_country(raw_symbol: Any, country: Any) -> str:
     token = normalize_listing_symbol(raw_symbol)
     if not token or "." in token or not token.isdigit():
         return token
+    bare_suffix = _bare_numeric_suffix(token)
+    if bare_suffix is not None:
+        return normalize_listing_symbol(f"{token}{bare_suffix}")
     country_code = str(country or "").strip().upper()
     if country_code == "HK" and 1 <= len(token) <= 4:
         return normalize_listing_symbol(f"{token}.HK")
@@ -162,9 +192,16 @@ def _normalize_yahoo_suffix_symbol(token: str) -> str:
 
 def _normalize_bare_numeric_symbol(token: str) -> str:
     if not token.isdigit() or len(token) != 6:
-        return token
+        suffix = _bare_numeric_suffix(token)
+        return f"{token}{suffix}" if suffix is not None else token
     if token.startswith("600"):
         return f"{token}.SS"
     if token.startswith(("000", "002", "300")):
         return f"{token}.SZ"
     return token
+
+
+def _bare_numeric_suffix(token: str) -> str | None:
+    if not token.isdigit():
+        return None
+    return _KNOWN_BARE_NUMERIC_SUFFIX.get(token.lstrip("0") or token) or _KNOWN_BARE_NUMERIC_SUFFIX.get(token)
