@@ -37,6 +37,9 @@ def test_normalize_symbol_with_country_resolves_identifiable_bare_numeric_listin
     assert normalize_symbol_with_country("6758", "JP") == "6758.T"
     assert normalize_symbol_with_country("6758", "US") == "6758.T"
     assert normalize_symbol_with_country("600900", "US") == "600900.SS"
+    assert normalize_symbol_with_country("1911", "Japan") == "1911.T"
+    assert normalize_symbol_with_country("2330", "Taiwan") == "2330.TW"
+    assert normalize_symbol_with_country("863", "Hong Kong") == "0863.HK"
 
 
 def test_normalize_symbol_with_exchange_uses_canonical_suffixes() -> None:

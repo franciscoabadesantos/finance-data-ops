@@ -14,6 +14,7 @@ def test_normalize_country_accepts_full_names_and_codes() -> None:
     assert normalize_country("Luxembourg") == "LU"
     assert normalize_country("Uruguay") == "UY"
     assert normalize_country("Korea South") == "KR"
+    assert normalize_country("Turkey") == "TR"
 
 
 def test_region_for_country_uses_canonical_taxonomy() -> None:
@@ -31,7 +32,7 @@ def test_infer_country_from_symbol_uses_canonical_suffix_map() -> None:
     assert infer_country_from_symbol("INFY.NS") == "IN"
     assert infer_country_from_symbol("NESN.SW") == "CH"
     assert infer_country_from_symbol("EBS.AT") == "AT"
-    assert infer_country_from_symbol("XYZ.E") == "ES"
+    assert infer_country_from_symbol("CWENE.E") == "TR"
     assert infer_country_from_symbol("XYZ.R") == "RU"
     assert infer_country_from_symbol("AAPL") == "US"
 

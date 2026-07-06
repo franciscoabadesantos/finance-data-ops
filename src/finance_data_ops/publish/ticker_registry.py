@@ -9,7 +9,7 @@ import pandas as pd
 
 from finance_data_ops.geography import country_from_source_or_symbol, infer_country_from_symbol, normalize_country, region_for_country
 from finance_data_ops.publish.client import Publisher
-from finance_data_ops.symbology import ADR_HOME_COUNTRY_BY_SYMBOL, normalize_symbol_with_country
+from finance_data_ops.symbology import ADR_HOME_COUNTRY_BY_SYMBOL, is_placeholder_identifier, normalize_symbol_with_country
 
 
 REGISTRY_COLUMNS = [
@@ -80,7 +80,7 @@ def build_entity_attributes_static_payload(rows: list[dict[str, Any]]) -> list[d
         raw_entity_id = str(row.get("normalized_symbol") or row.get("input_symbol") or "").strip().upper()
         extras = extras_by_entity.get(raw_entity_id, {})
         entity_id = _normalize_entity_id(raw_entity_id, extras)
-        if not entity_id or entity_id in {"NONE", "NULL", "NAN"} or entity_id in seen:
+        if not entity_id or entity_id in {"NONE", "NULL", "NAN"} or entity_id in seen or is_placeholder_identifier(entity_id):
             continue
         seen.add(entity_id)
         country = _resolve_listing_country(entity_id, extras)
@@ -134,7 +134,7 @@ def build_entity_attributes_static_backfill_payload(
     for raw in rows:
         raw_entity_id = str(raw.get("entity_id") or raw.get("normalized_symbol") or raw.get("input_symbol") or "")
         entity_id = _normalize_entity_id(raw_entity_id, raw)
-        if not entity_id or entity_id in {"NONE", "NULL", "NAN"}:
+        if not entity_id or entity_id in {"NONE", "NULL", "NAN"} or is_placeholder_identifier(entity_id):
             continue
         country = _resolve_listing_country(entity_id, raw)
         home_country = _resolve_home_country(entity_id, raw, listing_country=country)

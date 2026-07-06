@@ -9,7 +9,7 @@ from typing import Any
 YAHOO_SUFFIX_TO_COUNTRY = {
     ".AT": "AT",
     ".DE": "DE",
-    ".E": "ES",
+    ".E": "TR",
     ".AS": "NL",
     ".PA": "FR",
     ".LS": "PT",
@@ -159,10 +159,12 @@ def normalize_symbol_with_country(raw_symbol: Any, country: Any) -> str:
     if bare_suffix is not None:
         return normalize_listing_symbol(f"{token}{bare_suffix}")
     country_code = str(country or "").strip().upper()
-    if country_code == "HK" and 1 <= len(token) <= 4:
+    if country_code in {"HK", "HONG KONG", "HONG KONG SAR"} and 1 <= len(token) <= 4:
         return normalize_listing_symbol(f"{token}.HK")
-    if country_code == "JP" and len(token) == 4:
+    if country_code in {"JP", "JAPAN"} and len(token) == 4:
         return normalize_listing_symbol(f"{token}.T")
+    if country_code in {"TW", "TAIWAN"} and len(token) == 4:
+        return normalize_listing_symbol(f"{token}.TW")
     return token
 
 

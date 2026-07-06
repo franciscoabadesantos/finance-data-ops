@@ -205,6 +205,9 @@ def test_holdings_country_column_is_primary_and_normalizes_bare_numeric_symbols(
             "600900,China Yangtze Power,United States,2.00\n"
             "700,Tencent Holdings,United States,1.50\n"
             "6758,Sony Group,United States,1.25\n"
+            "1911,Sumitomo Forestry,Japan,1.10\n"
+            "CWENE.E,Cw Enerji,Turkey,0.90\n"
+            "2200963D,Dead Placeholder,United States,0.50\n"
             "MELI,MercadoLibre,Uruguay,1.00\n"
         ).encode()
 
@@ -215,6 +218,8 @@ def test_holdings_country_column_is_primary_and_normalizes_bare_numeric_symbols(
         {"holding_symbol": "600900.SS", "holding_country": "CN"},
         {"holding_symbol": "0700.HK", "holding_country": "HK"},
         {"holding_symbol": "6758.T", "holding_country": "JP"},
+        {"holding_symbol": "1911.T", "holding_country": "JP"},
+        {"holding_symbol": "CWENE.E", "holding_country": "TR"},
         {"holding_symbol": "MELI", "holding_country": "UY"},
     ]
 

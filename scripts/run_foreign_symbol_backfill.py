@@ -37,7 +37,7 @@ def main() -> None:
 
     normalized_holdings, holding_summary = _normalize_holdings_table(holdings)
     name_by_entity = _holding_name_lookup(normalized_holdings)
-    country_by_entity = _holding_country_lookup(normalized_holdings)
+    country_by_entity = _holding_country_lookup(original_holdings=holdings, normalized_holdings=normalized_holdings)
     entity_rows = _entity_backfill_source_rows(
         entities=entities,
         name_by_entity=name_by_entity,
@@ -153,15 +153,24 @@ def _holding_name_lookup(holdings: pd.DataFrame) -> dict[str, str]:
     return out
 
 
-def _holding_country_lookup(holdings: pd.DataFrame) -> dict[str, str]:
-    if holdings.empty or "holding_country" not in holdings.columns:
+def _holding_country_lookup(*, original_holdings: pd.DataFrame, normalized_holdings: pd.DataFrame) -> dict[str, str]:
+    if normalized_holdings.empty or "holding_country" not in normalized_holdings.columns:
         return {}
     out: dict[str, str] = {}
-    for _, row in holdings.iterrows():
+    for _, row in normalized_holdings.iterrows():
         symbol = str(row.get("holding_symbol") or "").strip().upper()
         country = normalize_country(row.get("holding_country"))
         if symbol and country and symbol not in out:
             out[symbol] = country
+    if original_holdings.empty or "holding_symbol" not in original_holdings.columns:
+        return out
+    source_countries = original_holdings.get("holding_country", pd.Series(index=original_holdings.index, dtype=object)).map(
+        normalize_country
+    )
+    for symbol, country in zip(original_holdings["holding_symbol"].tolist(), source_countries.tolist(), strict=False):
+        raw_symbol = str(symbol or "").strip().upper()
+        if raw_symbol and country and raw_symbol not in out:
+            out[raw_symbol] = country
     return out
 
 
@@ -177,9 +186,15 @@ def _entity_backfill_source_rows(
         sortable_rows: list[tuple[bool, bool, dict[str, Any]]] = []
         for raw in entities.to_dict(orient="records"):
             original_id = str(raw.get("entity_id") or "").strip().upper()
+            country_hint = (
+                country_by_entity.get(original_id)
+                or raw.get("country")
+                or raw.get("holding_country")
+                or raw.get("home_country")
+            )
             entity_id = normalize_symbol_with_country(
                 original_id,
-                raw.get("country") or raw.get("holding_country") or raw.get("home_country"),
+                country_hint,
             )
             if not entity_id or is_placeholder_identifier(entity_id):
                 continue
@@ -270,6 +285,12 @@ def _backfill_counts(
         else []
     )
     duplicate_pairs_after = _replaced_bare_entity_pairs(row.get("entity_id") for row in entity_payload)
+    placeholder_before = _placeholder_entity_ids(
+        existing_entities.get("entity_id", pd.Series(dtype=object)).dropna().tolist()
+        if not existing_entities.empty
+        else []
+    )
+    placeholder_after = _placeholder_entity_ids(row.get("entity_id") for row in entity_payload)
     non_iso_before = _raw_non_iso_country_count(existing_entities, columns=("country", "home_country"))
     non_iso_after = _raw_non_iso_country_count(pd.DataFrame(entity_payload), columns=("country", "home_country"))
     null_home_before = _missing_home_country_count(existing_entities)
@@ -287,6 +308,10 @@ def _backfill_counts(
         "duplicate_bare_entities_after_examples": [
             f"{bare}->{normalized}" for bare, normalized in duplicate_pairs_after[:20]
         ],
+        "placeholder_entities_before": len(placeholder_before),
+        "placeholder_entities_before_examples": placeholder_before[:20],
+        "placeholder_entities_after": len(placeholder_after),
+        "placeholder_entities_after_examples": placeholder_after[:20],
         "non_iso_country_values_before": non_iso_before,
         "non_iso_country_values_after": non_iso_after,
         "missing_home_country_before": null_home_before,
@@ -335,18 +360,23 @@ def _delete_published_replaced_bare_entities(*, database_dsn: str) -> dict[str, 
             cur.execute("select entity_id from feature_store.entity_attributes_static")
             entity_ids = [str(row[0]).strip().upper() for row in cur.fetchall() if str(row[0]).strip()]
             pairs = _replaced_bare_entity_pairs(entity_ids)
-            if not pairs:
-                return {"status": "ok", "rows": 0, "examples": []}
+            placeholder_ids = _placeholder_entity_ids(entity_ids)
+            if not pairs and not placeholder_ids:
+                return {"status": "ok", "rows": 0, "duplicate_examples": [], "placeholder_examples": []}
             bare_ids = [bare for bare, _ in pairs]
-            placeholders = ", ".join(["%s"] * len(bare_ids))
+            delete_ids = sorted(set(bare_ids) | set(placeholder_ids))
+            placeholders = ", ".join(["%s"] * len(delete_ids))
             cur.execute(
                 f"delete from feature_store.entity_attributes_static where entity_id in ({placeholders})",
-                bare_ids,
+                delete_ids,
             )
     return {
         "status": "ok",
-        "rows": len(pairs),
-        "examples": [f"{bare}->{normalized}" for bare, normalized in pairs[:20]],
+        "rows": len(delete_ids),
+        "duplicate_rows": len(pairs),
+        "placeholder_rows": len(placeholder_ids),
+        "duplicate_examples": [f"{bare}->{normalized}" for bare, normalized in pairs[:20]],
+        "placeholder_examples": placeholder_ids[:20],
     }
 
 
@@ -365,17 +395,32 @@ def _bare_numeric_ids(values: Any) -> list[str]:
     return sorted(out)
 
 
+def _placeholder_entity_ids(values: Any) -> list[str]:
+    return sorted(
+        {
+            str(value).strip().upper()
+            for value in values
+            if is_placeholder_identifier(str(value).strip().upper())
+        }
+    )
+
+
 def _replaced_bare_entity_pairs(values: Any) -> list[tuple[str, str]]:
     symbols = {str(value).strip().upper() for value in values if str(value).strip()}
     pairs = {
         (symbol, normalize_listing_symbol(symbol))
         for symbol in symbols
-        if symbol in _bare_numeric_ids([symbol])
+        if _is_safe_entity_cleanup_candidate(symbol)
         and normalize_listing_symbol(symbol)
         and normalize_listing_symbol(symbol) != symbol
         and normalize_listing_symbol(symbol) in symbols
     }
     return sorted(pairs)
+
+
+def _is_safe_entity_cleanup_candidate(symbol: str) -> bool:
+    token = str(symbol or "").strip().upper()
+    return token in _bare_numeric_ids([token]) or bool(re.fullmatch(r"\d{1,3}\.HK", token))
 
 
 def _raw_non_iso_country_count(frame: pd.DataFrame, *, columns: tuple[str, ...]) -> int:

@@ -167,6 +167,8 @@ def test_entity_attributes_backfill_normalizes_bare_symbols_and_home_country() -
         [
             {"entity_id": "600900", "country": "US", "home_country": "US", "name": "China Yangtze Power"},
             {"entity_id": "700", "country": "US", "home_country": "US", "name": "Tencent Holdings"},
+            {"entity_id": "1911", "country": "Japan", "home_country": "US", "name": "Sumitomo Forestry"},
+            {"entity_id": "CWENE.E", "country": "Turkey", "home_country": None, "name": "Cw Enerji"},
             {
                 "entity_id": "RIO",
                 "country": "US",
@@ -187,6 +189,10 @@ def test_entity_attributes_backfill_normalizes_bare_symbols_and_home_country() -
     assert by_entity["600900.SS"]["home_country"] == "CN"
     assert by_entity["0700.HK"]["country"] == "HK"
     assert by_entity["0700.HK"]["home_country"] == "HK"
+    assert by_entity["1911.T"]["country"] == "JP"
+    assert by_entity["1911.T"]["home_country"] == "JP"
+    assert by_entity["CWENE.E"]["country"] == "TR"
+    assert by_entity["CWENE.E"]["home_country"] == "TR"
     assert by_entity["RIO"]["country"] == "US"
     assert by_entity["RIO"]["home_country"] == "GB"
     assert by_entity["AEM"]["home_country"] == "CA"
@@ -194,6 +200,29 @@ def test_entity_attributes_backfill_normalizes_bare_symbols_and_home_country() -
     assert by_entity["JKS"]["home_country"] == "CN"
     assert by_entity["SQM"]["home_country"] == "CL"
     assert by_entity["EH"]["home_country"] == "CN"
+
+
+def test_entity_attributes_payload_filters_placeholder_identifiers() -> None:
+    payload = build_entity_attributes_static_payload(
+        [
+            {
+                "input_symbol": "2670549D",
+                "normalized_symbol": "2670549D",
+                "region": "us",
+                "country": "US",
+                "name": "Dead Placeholder",
+            },
+            {
+                "input_symbol": "AAPL",
+                "normalized_symbol": "AAPL",
+                "region": "us",
+                "country": "US",
+                "name": "Apple Inc",
+            },
+        ]
+    )
+
+    assert [row["entity_id"] for row in payload] == ["AAPL"]
 
 
 def test_theme_universe_expansion_publish_accepts_jsonb_notes_column() -> None:

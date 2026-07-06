@@ -72,6 +72,8 @@ _COUNTRY_NAME_TO_ISO2 = {
     "SWITZERLAND": "CH",
     "TAIWAN": "TW",
     "THAILAND": "TH",
+    "TURKEY": "TR",
+    "TURKIYE": "TR",
     "UNITED KINGDOM": "GB",
     "UNITED ARAB EMIRATES": "AE",
     "UNITED STATES": "US",
@@ -122,6 +124,7 @@ _EU_COUNTRIES = {
     "PL",
     "PT",
     "SE",
+    "TR",
 }
 
 _APAC_COUNTRIES = {

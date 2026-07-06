@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pandas as pd
+
 
 def _load_backfill_module():
     path = Path(__file__).resolve().parents[1] / "scripts" / "run_foreign_symbol_backfill.py"
@@ -17,7 +19,37 @@ def _load_backfill_module():
 def test_replaced_bare_entity_pairs_only_marks_confirmed_replacements() -> None:
     module = _load_backfill_module()
 
-    assert module._replaced_bare_entity_pairs(["600900", "600900.SS", "700", "0700.HK", "1234"]) == [
+    assert module._replaced_bare_entity_pairs(["600900", "600900.SS", "700", "0700.HK", "863.HK", "0863.HK", "1234"]) == [
         ("600900", "600900.SS"),
         ("700", "0700.HK"),
+        ("863.HK", "0863.HK"),
     ]
+
+
+def test_entity_backfill_uses_original_holding_country_for_stale_bare_entities() -> None:
+    module = _load_backfill_module()
+    original = pd.DataFrame(
+        [
+            {"holding_symbol": "1911", "holding_country": "Japan"},
+            {"holding_symbol": "2200963D", "holding_country": "United States"},
+        ]
+    )
+    normalized = pd.DataFrame(
+        [
+            {"holding_symbol": "1911.T", "holding_country": "JP"},
+        ]
+    )
+    country_by_entity = module._holding_country_lookup(original_holdings=original, normalized_holdings=normalized)
+
+    rows = module._entity_backfill_source_rows(
+        entities=pd.DataFrame(
+            [
+                {"entity_id": "1911", "country": "US", "home_country": "US", "name": "Sumitomo Forestry"},
+                {"entity_id": "2200963D", "country": "US", "home_country": "US", "name": "Placeholder"},
+            ]
+        ),
+        name_by_entity={},
+        country_by_entity=country_by_entity,
+    )
+
+    assert [row["entity_id"] for row in rows] == ["1911.T"]
