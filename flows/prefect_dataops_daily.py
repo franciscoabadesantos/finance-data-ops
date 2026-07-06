@@ -1270,6 +1270,97 @@ def dataops_ticker_onboarding_flow(
     }
 
 
+@flow(
+    name="dataops_ticker_onboarding_bulk",
+    retries=0,
+    log_prints=True,
+)
+def dataops_ticker_onboarding_bulk_flow(
+    *,
+    tickers: list[str],
+    region: str | None = None,
+    exchange: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    history_limit: int | None = None,
+    cache_root: str | None = None,
+    publish_enabled: bool = True,
+    onboarding_deployment_name: str = "dataops_ticker_onboarding/ticker-onboarding",
+    trigger_technical_features: bool = True,
+    skip_existing: bool = True,
+) -> dict[str, Any]:
+    """Urgency / bulk onboarding: schedule the onboarding deployment for many tickers.
+
+    Fire-and-forget: each ticker gets an onboarding flow run SCHEDULED (timeout=0) and the
+    self-host work pool runs them concurrently, bounded by the pool/queue concurrency limit
+    (infra) — no bespoke parallel runner. Idempotent: duplicate symbols are collapsed and,
+    when skip_existing is set, already-active tickers are skipped.
+    """
+    settings = load_settings(cache_root=cache_root)
+    logger = get_run_logger()
+    normalized_region = str(region or "us").strip().lower()
+    normalized_exchange = _normalize_optional_text(exchange)
+
+    seen: set[str] = set()
+    scheduled: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    for raw in list(tickers or []):
+        ticker = _normalize_ticker(str(raw))
+        if not ticker or ticker in seen:
+            continue
+        seen.add(ticker)
+
+        if skip_existing:
+            pending = build_pending_registry_row(
+                input_symbol=ticker,
+                region=normalized_region,
+                exchange=normalized_exchange,
+                instrument_type="unknown",
+            )
+            existing = fetch_registry_row_by_key(
+                registry_key=str(pending["registry_key"]),
+                cache_root=settings.cache_root,
+                database_dsn=settings.database_dsn,
+            )
+            if (
+                existing
+                and is_promotable_registry_row(existing)
+                and str(existing.get("status") or "").strip().lower() == "active"
+            ):
+                skipped.append({"ticker": ticker, "reason": "already_active"})
+                continue
+
+        run = run_deployment(
+            onboarding_deployment_name,
+            parameters={
+                "input_symbol": ticker,
+                "region": normalized_region,
+                "exchange": normalized_exchange,
+                "start": _normalize_optional_text(start),
+                "end": _normalize_optional_text(end),
+                "history_limit": history_limit,
+                "publish_enabled": bool(publish_enabled),
+                "trigger_technical_features": bool(trigger_technical_features),
+            },
+            timeout=0,  # schedule and return; the work pool runs it concurrently
+            flow_run_name=f"onboarding-{ticker.lower()}",
+        )
+        scheduled.append({"ticker": ticker, "flow_run_id": str(run.id)})
+
+    logger.info(
+        "Bulk onboarding scheduled %s run(s); skipped %s already-active.",
+        len(scheduled),
+        len(skipped),
+    )
+    return {
+        "requested": len(seen),
+        "scheduled_count": len(scheduled),
+        "scheduled": scheduled,
+        "skipped": skipped,
+    }
+
+
 def _build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Prefect Data Ops flows locally.")
     parser.add_argument(

@@ -7,6 +7,7 @@ from finance_data_ops.validation.ticker_registry import read_ticker_registry
 from flows.prefect_dataops_daily import (
     DEFAULT_TICKER_BACKFILL_START_DATE,
     dataops_ticker_backfill_flow,
+    dataops_ticker_onboarding_bulk_flow,
     dataops_ticker_onboarding_flow,
 )
 
@@ -210,3 +211,40 @@ def test_ticker_backfill_earnings_empty_is_best_effort_and_still_triggers_techni
     assert result["steps"]["earnings"]["best_effort"] is True
     assert result["steps"]["fundamentals"]["status"] == "skipped"
     assert "deployment" in calls
+
+
+def test_bulk_onboarding_schedules_runs_dedupes_and_skips_active(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
+    scheduled: list[tuple[str, object]] = []
+
+    def _fake_run_deployment(name: str, **kwargs):
+        symbol = kwargs["parameters"]["input_symbol"]
+        scheduled.append((name, symbol))
+        return FakeDeploymentRun(id=f"run-{symbol}", state_name="Scheduled")
+
+    def _fake_fetch(**kwargs):
+        # AAA is already active -> should be skipped; others are absent.
+        if str(kwargs["registry_key"]).startswith("AAA|"):
+            return {
+                "status": "active",
+                "validation_status": "validated_full",
+                "promotion_status": "validated_full",
+                "normalized_symbol": "AAA",
+            }
+        return None
+
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_deployment", _fake_run_deployment)
+    monkeypatch.setattr("flows.prefect_dataops_daily.fetch_registry_row_by_key", _fake_fetch)
+
+    result = dataops_ticker_onboarding_bulk_flow.fn(
+        tickers=["bbb", "ccc", "aaa", "bbb"],  # duplicate bbb collapses; aaa already active
+        region="us",
+        cache_root=str(tmp_path),
+        publish_enabled=False,
+    )
+
+    assert result["scheduled_count"] == 2
+    assert {row["ticker"] for row in result["scheduled"]} == {"BBB", "CCC"}
+    assert [row["ticker"] for row in result["skipped"]] == ["AAA"]
+    # every scheduled run targeted the onboarding deployment
+    assert {name for name, _ in scheduled} == {"dataops_ticker_onboarding/ticker-onboarding"}

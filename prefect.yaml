@@ -169,3 +169,67 @@ deployments:
         timezone: "UTC"
         active: true
     work_pool: *self_host_pool
+
+  - name: ticker-validation
+    tags: [dataops, ticker, onboarding, self-host]
+    description: On-demand single-ticker validation (triggered by onboarding).
+    entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_validation_flow
+    parameters:
+      input_symbol: null
+      region: us
+      exchange: null
+      instrument_type_hint: null
+      history_limit: 12
+      publish_registry: true
+    schedules: []
+    work_pool: *self_host_pool
+
+  - name: ticker-backfill
+    tags: [dataops, ticker, onboarding, backfill, self-host]
+    description: On-demand full-history all-domain ticker backfill (best-effort earnings/fundamentals).
+    entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_backfill_flow
+    parameters:
+      ticker: null
+      start: null
+      end: null
+      history_limit: 100
+      region: null
+      publish_enabled: true
+      allow_unhealthy: false
+      trigger_technical_features: true
+    schedules: []
+    work_pool: *self_host_pool
+
+  - name: ticker-onboarding
+    tags: [dataops, ticker, onboarding, self-host]
+    description: On-demand onboarding — validation then full backfill; backend triggers this per ticker.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_onboarding_flow
+    parameters:
+      input_symbol: null
+      region: us
+      exchange: null
+      instrument_type_hint: null
+      start: null
+      end: null
+      history_limit: null
+      publish_enabled: true
+      trigger_technical_features: true
+    schedules: []
+    work_pool: *self_host_pool
+
+  - name: ticker-onboarding-bulk
+    tags: [dataops, ticker, onboarding, bulk, self-host]
+    description: Urgency/bulk onboarding — schedules onboarding runs for a ticker list (Prefect concurrency).
+    entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_onboarding_bulk_flow
+    parameters:
+      tickers: null
+      region: us
+      exchange: null
+      start: null
+      end: null
+      history_limit: null
+      publish_enabled: true
+      trigger_technical_features: true
+      skip_existing: true
+    schedules: []
+    work_pool: *self_host_pool
