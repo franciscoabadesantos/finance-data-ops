@@ -175,7 +175,6 @@ deployments:
     description: On-demand single-ticker validation (triggered by onboarding).
     entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_validation_flow
     parameters:
-      input_symbol: null
       region: us
       exchange: null
       instrument_type_hint: null
@@ -189,7 +188,6 @@ deployments:
     description: On-demand full-history all-domain ticker backfill (best-effort earnings/fundamentals).
     entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_backfill_flow
     parameters:
-      ticker: null
       start: null
       end: null
       history_limit: 100
@@ -205,7 +203,6 @@ deployments:
     description: On-demand onboarding — validation then full backfill; backend triggers this per ticker.
     entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_onboarding_flow
     parameters:
-      input_symbol: null
       region: us
       exchange: null
       instrument_type_hint: null
@@ -222,7 +219,6 @@ deployments:
     description: Urgency/bulk onboarding — schedules onboarding runs for a ticker list (Prefect concurrency).
     entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_onboarding_bulk_flow
     parameters:
-      tickers: null
       region: us
       exchange: null
       start: null
