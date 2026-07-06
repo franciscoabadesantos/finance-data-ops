@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from typing import Any
 
+from prefect.deployments import run_deployment
+
 from flows.dataops_earnings_daily import run_dataops_earnings_daily
 from flows.dataops_fundamentals_daily import run_dataops_fundamentals_daily
 from flows.dataops_market_daily import run_dataops_market_daily
@@ -18,6 +20,12 @@ from app.registry import WorkerRegistryStore, now_iso, parse_notes
 from app.tasks import CloudTasksEnqueuer
 
 PROMOTABLE = {"validated_market_only", "validated_full"}
+DEFAULT_TICKER_BACKFILL_START_DATE = "1900-01-01"
+DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT = 100
+MAX_EARNINGS_HISTORY_LIMIT = 100
+DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME = (
+    "run_technical_feature_backfill_flow/technical-feature-backfill"
+)
 
 
 class JobExecutor:
@@ -181,7 +189,10 @@ class JobExecutor:
             "ticker": normalized_ticker,
             "region": str(patched.get("region") or request.region).strip().lower() or "us",
             "exchange": patched.get("exchange"),
-            "history_limit": int(request.history_limit or self.settings.default_history_limit),
+            "history_limit": _resolve_earnings_history_limit(
+                request.history_limit,
+                default=DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT,
+            ),
             "start": request.start,
             "end": request.end,
             "requested_at": now_iso(),
@@ -224,15 +235,21 @@ class JobExecutor:
         )
 
         end_date = _parse_iso_date(request.end) if request.end else datetime.now(UTC).date()
-        start_date = _parse_iso_date(request.start) if request.start else _subtract_years(
-            end_date, years=self.settings.default_backfill_years
+        start_date = (
+            _parse_iso_date(request.start)
+            if request.start
+            else _parse_iso_date(DEFAULT_TICKER_BACKFILL_START_DATE)
         )
         if start_date > end_date:
             raise ValueError("Backfill start date must be on or before end date.")
 
-        history_limit = int(request.history_limit or self.settings.default_history_limit)
-        if history_limit <= 0:
-            history_limit = self.settings.default_history_limit
+        requested_history_limit = int(request.history_limit or self.settings.default_history_limit)
+        if requested_history_limit <= 0:
+            requested_history_limit = self.settings.default_history_limit
+        history_limit = _resolve_earnings_history_limit(
+            requested_history_limit,
+            default=DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT,
+        )
 
         market = run_dataops_market_daily(
             symbols=[ticker],
@@ -249,6 +266,14 @@ class JobExecutor:
             symbols=[ticker],
             publish_enabled=True,
         )
+        technical_features = trigger_technical_feature_backfill(
+            ticker=ticker,
+            start=start_date.isoformat(),
+            end=end_date.isoformat(),
+            publish_enabled=True,
+            deployment_name=DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME,
+            timeout_seconds=7200,
+        )
 
         current = self.registry.get_by_key(request.registry_key) or row
         notes = parse_notes(current.get("notes"))
@@ -256,6 +281,8 @@ class JobExecutor:
             "ticker": ticker,
             "window": {"start": start_date.isoformat(), "end": end_date.isoformat()},
             "history_limit": history_limit,
+            "requested_history_limit": requested_history_limit,
+            "technical_features": technical_features,
         }
         patched = self.registry.patch_row(
             request.registry_key or "",
@@ -282,6 +309,7 @@ class JobExecutor:
                 "market": market.get("run_id") if isinstance(market, dict) else None,
                 "earnings": earnings.get("run_id") if isinstance(earnings, dict) else None,
                 "fundamentals": fundamentals.get("run_id") if isinstance(fundamentals, dict) else None,
+                "technical_features": technical_features,
             },
         }
 
@@ -505,8 +533,51 @@ def _parse_iso_date(raw: str | None) -> date:
     return date.fromisoformat(token)
 
 
-def _subtract_years(value: date, *, years: int) -> date:
-    try:
-        return value.replace(year=value.year - int(years))
-    except ValueError:
-        return value.replace(month=2, day=28, year=value.year - int(years))
+def _resolve_earnings_history_limit(raw: object | None, *, default: int) -> int:
+    if raw is None:
+        parsed = int(default)
+    else:
+        parsed = int(raw)
+    if parsed <= 0:
+        parsed = int(default)
+    return min(parsed, MAX_EARNINGS_HISTORY_LIMIT)
+
+
+def trigger_technical_feature_backfill(
+    *,
+    ticker: str,
+    start: str,
+    end: str,
+    publish_enabled: bool = True,
+    deployment_name: str = DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    normalized_ticker = str(ticker).strip().upper()
+    parameters = {
+        "symbols": [normalized_ticker],
+        "start": str(start),
+        "end": str(end),
+    }
+    if not bool(publish_enabled):
+        return {
+            "status": "skipped",
+            "reason": "publish_disabled",
+            "deployment_name": deployment_name,
+            "parameters": parameters,
+        }
+
+    flow_run = run_deployment(
+        deployment_name,
+        parameters=parameters,
+        timeout=timeout_seconds,
+        poll_interval=10,
+        flow_run_name=f"technical-backfill-{normalized_ticker.lower()}",
+        idempotency_key=f"technical-backfill:{normalized_ticker}:{start}:{end}",
+    )
+    return {
+        "status": "triggered",
+        "deployment_name": deployment_name,
+        "flow_run_id": str(flow_run.id),
+        "flow_run_state": str(getattr(flow_run, "state_name", "") or ""),
+        "parameters": parameters,
+    }

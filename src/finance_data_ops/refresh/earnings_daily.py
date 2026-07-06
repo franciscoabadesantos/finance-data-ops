@@ -15,6 +15,7 @@ from finance_data_ops.settings import load_settings
 
 
 NON_EARNINGS_INSTRUMENT_TYPES = {"etf", "index_proxy", "country_fund"}
+MAX_YAHOO_EARNINGS_HISTORY_LIMIT = 100
 
 
 def refresh_earnings_daily(
@@ -39,6 +40,7 @@ def refresh_earnings_daily(
         database_dsn=settings.database_dsn,
         tickers=symbols_requested,
     )
+    resolved_history_limit = min(max(int(history_limit), 1), MAX_YAHOO_EARNINGS_HISTORY_LIMIT)
 
     events_frames: list[pd.DataFrame] = []
     history_frames: list[pd.DataFrame] = []
@@ -52,7 +54,7 @@ def refresh_earnings_daily(
         def _fetch_one() -> tuple[pd.DataFrame, pd.DataFrame]:
             events_frame, history_frame = provider.fetch_symbol_earnings(
                 symbol,
-                history_limit=history_limit,
+                history_limit=resolved_history_limit,
             )
             if events_frame.empty and history_frame.empty:
                 raise RuntimeError(f"{symbol}: provider returned zero earnings rows")

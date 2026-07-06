@@ -130,6 +130,77 @@ class FakeSettings:
     default_backfill_years: int = 5
 
 
+def test_worker_backfill_defaults_full_history_caps_earnings_and_triggers_technicals(monkeypatch) -> None:
+    supabase = FakeSupabaseClient()
+    supabase.tables["ticker_registry"].append(
+        {
+            "registry_key": "AAPL|us|default",
+            "input_symbol": "AAPL",
+            "normalized_symbol": "AAPL",
+            "region": "us",
+            "exchange": None,
+            "status": "active",
+            "validation_status": "validated_full",
+            "promotion_status": "validated_full",
+            "notes": {},
+        }
+    )
+    calls: dict[str, dict[str, Any]] = {}
+
+    def _fake_market(**kwargs):
+        calls["market"] = dict(kwargs)
+        return {"run_id": "market-run"}
+
+    def _fake_earnings(**kwargs):
+        calls["earnings"] = dict(kwargs)
+        return {"run_id": "earnings-run"}
+
+    def _fake_fundamentals(**kwargs):
+        calls["fundamentals"] = dict(kwargs)
+        return {"run_id": "fundamentals-run"}
+
+    def _fake_technicals(**kwargs):
+        calls["technical_features"] = dict(kwargs)
+        return {"status": "triggered", "flow_run_id": "technical-run"}
+
+    monkeypatch.setattr("app.executors.run_dataops_market_daily", _fake_market)
+    monkeypatch.setattr("app.executors.run_dataops_earnings_daily", _fake_earnings)
+    monkeypatch.setattr("app.executors.run_dataops_fundamentals_daily", _fake_fundamentals)
+    monkeypatch.setattr("app.executors.trigger_technical_feature_backfill", _fake_technicals)
+
+    request = ExecuteJobRequest(
+        job_type="ticker_backfill",
+        registry_key="AAPL|us|default",
+        ticker="AAPL",
+        region="us",
+        history_limit=120,
+        end="2026-04-18",
+    )
+    executor = JobExecutor(
+        settings=FakeSettings(),
+        registry=WorkerRegistryStore(supabase),  # type: ignore[arg-type]
+        tasks=object(),  # type: ignore[arg-type]
+    )
+
+    result = executor._execute_backfill(
+        request,
+        job_id="worker-backfill-1",
+        idempotency_key="backfill:AAPL",
+    )
+
+    assert result["status"] == "completed"
+    assert calls["market"]["start"] == "1900-01-01"
+    assert calls["market"]["end"] == "2026-04-18"
+    assert calls["earnings"]["history_limit"] == 100
+    assert calls["technical_features"]["ticker"] == "AAPL"
+    assert calls["technical_features"]["start"] == "1900-01-01"
+    assert calls["technical_features"]["end"] == "2026-04-18"
+    assert result["steps"]["technical_features"]["flow_run_id"] == "technical-run"
+    row = supabase.tables["ticker_registry"][0]
+    assert row["notes"]["backfill_result_summary"]["history_limit"] == 100
+    assert row["notes"]["backfill_result_summary"]["requested_history_limit"] == 120
+
+
 def test_analysis_job_transitions_to_completed_and_persists_result() -> None:
     supabase = FakeSupabaseClient()
     supabase.tables["analysis_jobs"].append(

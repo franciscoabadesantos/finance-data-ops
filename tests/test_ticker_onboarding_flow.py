@@ -4,7 +4,11 @@ from dataclasses import dataclass
 import logging
 
 from finance_data_ops.validation.ticker_registry import read_ticker_registry
-from flows.prefect_dataops_daily import dataops_ticker_onboarding_flow
+from flows.prefect_dataops_daily import (
+    DEFAULT_TICKER_BACKFILL_START_DATE,
+    dataops_ticker_backfill_flow,
+    dataops_ticker_onboarding_flow,
+)
 
 
 @dataclass
@@ -48,6 +52,8 @@ def test_onboarding_promotable_triggers_backfill(monkeypatch, tmp_path) -> None:
     assert calls[0][0] == "dataops_ticker_validation/ticker-validation"
     assert calls[1][0] == "dataops_ticker_backfill/ticker-backfill"
     assert calls[1][1]["parameters"]["ticker"] == "ANZ.AX"
+    assert calls[1][1]["parameters"]["history_limit"] == 100
+    assert calls[1][1]["parameters"]["trigger_technical_features"] is True
 
 
 def test_onboarding_rejected_does_not_trigger_backfill(monkeypatch, tmp_path) -> None:
@@ -102,3 +108,59 @@ def test_onboarding_validation_failure_persists_rejected_row(monkeypatch, tmp_pa
     assert row["status"] == "rejected"
     assert row["validation_status"] == "rejected"
     assert str(row["validation_reason"]).startswith("validation_flow_state_failed")
+
+
+def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_technicals(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls: dict[str, object] = {}
+    monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
+
+    def _fake_market(**kwargs):
+        calls["market"] = dict(kwargs)
+        return {"run_id": "market-run"}
+
+    def _fake_earnings(**kwargs):
+        calls["earnings"] = dict(kwargs)
+        return {"run_id": "earnings-run"}
+
+    def _fake_fundamentals(**kwargs):
+        calls["fundamentals"] = dict(kwargs)
+        return {"run_id": "fundamentals-run"}
+
+    def _fake_run_deployment(name: str, **kwargs):
+        calls["deployment"] = {"name": name, **dict(kwargs)}
+        return FakeDeploymentRun(id="technical-run", state_name="Completed")
+
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_market_daily", _fake_market)
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_earnings_daily", _fake_earnings)
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_fundamentals_daily", _fake_fundamentals)
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_deployment", _fake_run_deployment)
+
+    result = dataops_ticker_backfill_flow.fn(
+        ticker="aapl",
+        end="2026-04-18",
+        history_limit=120,
+        cache_root=str(tmp_path),
+        publish_enabled=True,
+    )
+
+    market_call = calls["market"]
+    earnings_call = calls["earnings"]
+    deployment_call = calls["deployment"]
+    assert isinstance(market_call, dict)
+    assert isinstance(earnings_call, dict)
+    assert isinstance(deployment_call, dict)
+    assert market_call["start"] == DEFAULT_TICKER_BACKFILL_START_DATE
+    assert market_call["end"] == "2026-04-18"
+    assert earnings_call["history_limit"] == 100
+    assert result["requested_history_limit"] == 120
+    assert result["history_limit"] == 100
+    assert result["steps"]["technical_features"]["flow_run_id"] == "technical-run"
+    assert deployment_call["name"] == "run_technical_feature_backfill_flow/technical-feature-backfill"
+    assert deployment_call["parameters"] == {
+        "symbols": ["AAPL"],
+        "start": DEFAULT_TICKER_BACKFILL_START_DATE,
+        "end": "2026-04-18",
+    }

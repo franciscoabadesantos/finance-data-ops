@@ -48,10 +48,14 @@ from finance_data_ops.validation.ticker_registry import (
 )
 from finance_data_ops.validation.symbol_resolution import resolve_symbols
 from finance_data_ops.validation.ticker_validation import run_single_ticker_validation
-DEFAULT_TICKER_BACKFILL_YEARS = 5
-DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT = 24
+DEFAULT_TICKER_BACKFILL_START_DATE = "1900-01-01"
+DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT = 100
+MAX_EARNINGS_HISTORY_LIMIT = 100
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
 DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME = "run_daily_feature_flow/feature-build-daily"
+DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME = (
+    "run_technical_feature_backfill_flow/technical-feature-backfill"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +169,7 @@ def _resolve_ticker_backfill_window(
     if start:
         start_date = pd.Timestamp(start).date()
     else:
-        start_date = (pd.Timestamp(end_date) - pd.DateOffset(years=DEFAULT_TICKER_BACKFILL_YEARS)).date()
+        start_date = pd.Timestamp(DEFAULT_TICKER_BACKFILL_START_DATE).date()
     if start_date > end_date:
         raise ValueError(f"Invalid window: start ({start_date.isoformat()}) is after end ({end_date.isoformat()}).")
     return start_date.isoformat(), end_date.isoformat()
@@ -209,6 +213,11 @@ def _normalize_history_limit(raw: object | None, *, default: int) -> int:
     if parsed <= 0:
         raise ValueError("history_limit must be > 0.")
     return parsed
+
+
+def _resolve_earnings_history_limit(raw: object | None, *, default: int) -> int:
+    """Yahoo rejects large earnings limits; keep provider calls within the hard cap."""
+    return min(_normalize_history_limit(raw, default=default), MAX_EARNINGS_HISTORY_LIMIT)
 
 
 def _to_json_text(value: object) -> str:
@@ -376,6 +385,46 @@ def trigger_feature_build_daily_if_ready(
         "parameters": parameters,
         "gate": gate,
         "alert": alert_payload,
+    }
+
+
+def trigger_technical_feature_backfill(
+    *,
+    ticker: str,
+    start: str,
+    end: str,
+    publish_enabled: bool = True,
+    deployment_name: str = DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    normalized_ticker = _normalize_ticker(ticker)
+    parameters = {
+        "symbols": [normalized_ticker],
+        "start": str(start),
+        "end": str(end),
+    }
+    if not bool(publish_enabled):
+        return {
+            "status": "skipped",
+            "reason": "publish_disabled",
+            "deployment_name": deployment_name,
+            "parameters": parameters,
+        }
+
+    flow_run = run_deployment(
+        deployment_name,
+        parameters=parameters,
+        timeout=timeout_seconds,
+        poll_interval=10,
+        flow_run_name=f"technical-backfill-{normalized_ticker.lower()}",
+        idempotency_key=f"technical-backfill:{normalized_ticker}:{start}:{end}",
+    )
+    return {
+        "status": "triggered",
+        "deployment_name": deployment_name,
+        "flow_run_id": str(flow_run.id),
+        "flow_run_state": str(getattr(flow_run, "state_name", "") or ""),
+        "parameters": parameters,
     }
 
 
@@ -606,13 +655,19 @@ def dataops_earnings_daily_flow(
         cache_root=settings.cache_root,
         database_dsn=settings.database_dsn,
     )
-    resolved_history_limit = int(history_limit)
+    resolved_history_limit = _resolve_earnings_history_limit(
+        history_limit,
+        default=DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT,
+    )
     if execution_plan.gap_exists and execution_plan.earliest_missing_date:
         quarters_back = _quarters_between(
             execution_plan.earliest_missing_date,
             execution_plan.expected_end_date,
         )
-        resolved_history_limit = max(resolved_history_limit, quarters_back + 2)
+        resolved_history_limit = min(
+            max(resolved_history_limit, quarters_back + 2),
+            MAX_EARNINGS_HISTORY_LIMIT,
+        )
 
     logger = get_run_logger()
     logger.info(
@@ -798,6 +853,9 @@ def dataops_ticker_backfill_flow(
     max_attempts: int | None = None,
     publish_enabled: bool = True,
     allow_unhealthy: bool = False,
+    trigger_technical_features: bool = True,
+    technical_features_deployment_name: str = DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME,
+    technical_features_timeout_seconds: float | None = 7200,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
     normalized_ticker = _normalize_ticker(ticker)
@@ -805,7 +863,11 @@ def dataops_ticker_backfill_flow(
         start=_normalize_optional_text(start),
         end=_normalize_optional_text(end),
     )
-    resolved_history_limit = _normalize_history_limit(history_limit, default=DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT)
+    requested_history_limit = _normalize_history_limit(history_limit, default=DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT)
+    resolved_history_limit = _resolve_earnings_history_limit(
+        history_limit,
+        default=DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT,
+    )
     run_id = f"run_dataops_ticker_backfill_{uuid4().hex[:12]}"
     started_at = datetime.now(UTC)
     logger = get_run_logger()
@@ -813,6 +875,7 @@ def dataops_ticker_backfill_flow(
     market_summary: dict[str, Any] | None = None
     earnings_summary: dict[str, Any] | None = None
     fundamentals_summary: dict[str, Any] | None = None
+    technical_features_summary: dict[str, Any] | None = None
     failed_step: str | None = None
     error_message: str | None = None
     flow_status = "success"
@@ -858,6 +921,28 @@ def dataops_ticker_backfill_flow(
             raise_on_failed_hard=not bool(allow_unhealthy),
         )
 
+        if bool(trigger_technical_features):
+            failed_step = "technical_features"
+            technical_features_summary = trigger_technical_feature_backfill(
+                ticker=normalized_ticker,
+                start=market_start,
+                end=market_end,
+                publish_enabled=bool(publish_enabled),
+                deployment_name=technical_features_deployment_name,
+                timeout_seconds=technical_features_timeout_seconds,
+            )
+        else:
+            technical_features_summary = {
+                "status": "skipped",
+                "reason": "trigger_disabled",
+                "deployment_name": technical_features_deployment_name,
+                "parameters": {
+                    "symbols": [normalized_ticker],
+                    "start": market_start,
+                    "end": market_end,
+                },
+            }
+
         ended_at = datetime.now(UTC)
         _record_ticker_backfill_status(
             cache_root=settings.cache_root,
@@ -882,10 +967,12 @@ def dataops_ticker_backfill_flow(
             "status": flow_status,
             "market_window": {"start": market_start, "end": market_end},
             "history_limit": resolved_history_limit,
+            "requested_history_limit": requested_history_limit,
             "steps": {
                 "market": market_summary or {},
                 "earnings": earnings_summary or {},
                 "fundamentals": fundamentals_summary or {},
+                "technical_features": technical_features_summary or {},
             },
         }
     except Exception as exc:
@@ -918,10 +1005,12 @@ def dataops_ticker_backfill_flow(
                 "error": error_message,
                 "market_window": {"start": market_start, "end": market_end},
                 "history_limit": resolved_history_limit,
+                "requested_history_limit": requested_history_limit,
                 "partial_results": {
                     "market": _to_json_text(market_summary),
                     "earnings": _to_json_text(earnings_summary),
                     "fundamentals": _to_json_text(fundamentals_summary),
+                    "technical_features": _to_json_text(technical_features_summary),
                 },
             },
         )
@@ -1014,13 +1103,17 @@ def dataops_ticker_onboarding_flow(
     validation_deployment_name: str = "dataops_ticker_validation/ticker-validation",
     backfill_deployment_name: str = "dataops_ticker_backfill/ticker-backfill",
     deployment_timeout_seconds: int = 7200,
+    trigger_technical_features: bool = True,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
     normalized_input = _normalize_ticker(input_symbol)
     normalized_region = str(region or "us").strip().lower()
     normalized_exchange = _normalize_optional_text(exchange)
     normalized_hint = _normalize_optional_text(instrument_type_hint)
-    resolved_history_limit = int(history_limit or DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT)
+    resolved_history_limit = _resolve_earnings_history_limit(
+        history_limit,
+        default=DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT,
+    )
     logger = get_run_logger()
 
     pending_row = build_pending_registry_row(
@@ -1125,6 +1218,7 @@ def dataops_ticker_onboarding_flow(
             "end": _normalize_optional_text(end),
             "history_limit": resolved_history_limit,
             "publish_enabled": bool(publish_enabled),
+            "trigger_technical_features": bool(trigger_technical_features),
         },
         timeout=float(deployment_timeout_seconds),
         poll_interval=10,
@@ -1197,7 +1291,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-feature-build-trigger",
         action="store_true",
-        help="Macro only. Skip the downstream feature-build deployment trigger.",
+        help="Macro/ticker-backfill only. Skip the downstream feature-build deployment trigger.",
     )
     parser.add_argument(
         "--feature-build-deployment-name",
@@ -1275,6 +1369,7 @@ def main() -> None:
                 max_attempts=args.max_attempts,
                 publish_enabled=not bool(args.no_publish),
                 allow_unhealthy=bool(args.allow_unhealthy),
+                trigger_technical_features=not bool(args.no_feature_build_trigger),
             )
         elif args.domain == "ticker-validation":
             result = dataops_ticker_validation_flow(
@@ -1297,6 +1392,7 @@ def main() -> None:
                 history_limit=int(args.history_limit or DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT),
                 cache_root=args.cache_root,
                 publish_enabled=not bool(args.no_publish),
+                trigger_technical_features=not bool(args.no_feature_build_trigger),
             )
     print(json.dumps(result, indent=2, default=str))
 

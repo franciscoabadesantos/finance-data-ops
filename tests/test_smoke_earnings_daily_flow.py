@@ -12,7 +12,11 @@ from flows.dataops_earnings_daily import _build_asset_status_rows, run_dataops_e
 
 
 class FakeEarningsProvider:
+    def __init__(self) -> None:
+        self.history_limits: list[int] = []
+
     def fetch_symbol_earnings(self, symbol: str, *, history_limit: int = 12) -> tuple[pd.DataFrame, pd.DataFrame]:
+        self.history_limits.append(int(history_limit))
         ticker = str(symbol).strip().upper()
         events = pd.DataFrame(
             [
@@ -48,6 +52,21 @@ class FakeEarningsProvider:
             ]
         )
         return events, history
+
+
+def test_earnings_refresh_caps_yahoo_history_limit(tmp_path) -> None:
+    provider = FakeEarningsProvider()
+
+    run_dataops_earnings_daily(
+        symbols=["AAPL"],
+        cache_root=str(tmp_path),
+        publish_enabled=False,
+        provider=provider,
+        history_limit=120,
+        raise_on_failed_hard=False,
+    )
+
+    assert provider.history_limits == [100]
 
 
 @freeze_time("2026-04-12")
