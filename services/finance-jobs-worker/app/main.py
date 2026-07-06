@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import logging
+import threading
 from time import perf_counter
+from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.executors import JobExecutor
@@ -14,6 +17,7 @@ from app.registry import WorkerRegistryStore
 from app.tasks import CloudTasksEnqueuer
 
 LOGGER = logging.getLogger("finance-jobs-worker")
+TICKER_JOB_TYPES = {"ticker_validation", "ticker_backfill"}
 
 
 @asynccontextmanager
@@ -58,17 +62,38 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/jobs/execute")
+@app.post("/jobs/execute", response_model=None)
 def execute_job(
     payload: ExecuteJobRequest,
     x_cloudtasks_taskname: str | None = Header(default=None),
     x_cloudtasks_taskretrycount: str | None = Header(default=None),
-) -> dict[str, object]:
+) -> Any:
     executor: JobExecutor = app.state.executor
     task_name = str(x_cloudtasks_taskname or "").strip() or None
     task_retry_count = int(str(x_cloudtasks_taskretrycount or "0").strip() or "0")
     attempt = max(task_retry_count + 1, 1)
     job_id = (task_name.split("/")[-1] if task_name else f"job-{uuid4().hex[:12]}")
+
+    if payload.job_type in TICKER_JOB_TYPES:
+        _start_ticker_job_background(
+            executor=executor,
+            payload=payload,
+            job_id=job_id,
+            attempt=attempt,
+            task_name=task_name,
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "ok": True,
+                "accepted": True,
+                "job_id": job_id,
+                "job_type": payload.job_type,
+                "registry_key": payload.registry_key,
+                "analysis_job_id": payload.job_id,
+            },
+        )
+
     try:
         result = executor.execute(payload, job_id=job_id, attempt=attempt, task_name=task_name)
         return {
@@ -81,3 +106,40 @@ def execute_job(
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _start_ticker_job_background(
+    *,
+    executor: JobExecutor,
+    payload: ExecuteJobRequest,
+    job_id: str,
+    attempt: int,
+    task_name: str | None,
+) -> None:
+    thread = threading.Thread(
+        target=_run_ticker_job_background,
+        kwargs={
+            "executor": executor,
+            "payload": payload,
+            "job_id": job_id,
+            "attempt": attempt,
+            "task_name": task_name,
+        },
+        name=f"ticker-job-{job_id}",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _run_ticker_job_background(
+    *,
+    executor: JobExecutor,
+    payload: ExecuteJobRequest,
+    job_id: str,
+    attempt: int,
+    task_name: str | None,
+) -> None:
+    try:
+        executor.execute(payload, job_id=job_id, attempt=attempt, task_name=task_name)
+    except Exception:
+        LOGGER.exception("ticker job failed in background job_id=%s job_type=%s", job_id, payload.job_type)
