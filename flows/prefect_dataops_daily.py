@@ -54,7 +54,7 @@ MAX_EARNINGS_HISTORY_LIMIT = 100
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
 DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME = "run_daily_feature_flow/feature-build-daily"
 DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME = (
-    "run_technical_feature_backfill_flow/technical-feature-backfill"
+    "technical-feature-backfill/technical-feature-backfill"
 )
 
 

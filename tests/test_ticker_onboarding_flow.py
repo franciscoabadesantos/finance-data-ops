@@ -158,7 +158,7 @@ def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_techni
     assert result["requested_history_limit"] == 120
     assert result["history_limit"] == 100
     assert result["steps"]["technical_features"]["flow_run_id"] == "technical-run"
-    assert deployment_call["name"] == "run_technical_feature_backfill_flow/technical-feature-backfill"
+    assert deployment_call["name"] == "technical-feature-backfill/technical-feature-backfill"
     assert deployment_call["parameters"] == {
         "symbols": ["AAPL"],
         "start": DEFAULT_TICKER_BACKFILL_START_DATE,

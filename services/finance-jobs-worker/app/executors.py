@@ -24,7 +24,7 @@ DEFAULT_TICKER_BACKFILL_START_DATE = "1900-01-01"
 DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT = 100
 MAX_EARNINGS_HISTORY_LIMIT = 100
 DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME = (
-    "run_technical_feature_backfill_flow/technical-feature-backfill"
+    "technical-feature-backfill/technical-feature-backfill"
 )
 
 
