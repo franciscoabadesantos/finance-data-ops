@@ -17,13 +17,13 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from finance_data_ops.geography import infer_country_from_symbol
+from finance_data_ops.geography import country_from_source_or_symbol, infer_country_from_symbol, normalize_country
 from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.fundamentals import build_etf_holdings_payload
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_backfill_payload
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.settings import load_settings
-from finance_data_ops.symbology import is_placeholder_identifier, normalize_listing_symbol
+from finance_data_ops.symbology import is_placeholder_identifier, normalize_listing_symbol, normalize_symbol_with_country
 
 
 def main() -> None:
@@ -36,7 +36,12 @@ def main() -> None:
 
     normalized_holdings, holding_summary = _normalize_holdings_table(holdings)
     name_by_entity = _holding_name_lookup(normalized_holdings)
-    entity_rows = _entity_backfill_source_rows(entities=entities, name_by_entity=name_by_entity)
+    country_by_entity = _holding_country_lookup(normalized_holdings)
+    entity_rows = _entity_backfill_source_rows(
+        entities=entities,
+        name_by_entity=name_by_entity,
+        country_by_entity=country_by_entity,
+    )
     entity_payload = build_entity_attributes_static_backfill_payload(entity_rows, name_by_entity=name_by_entity)
     counts = _backfill_counts(
         original_holdings=holdings,
@@ -95,7 +100,14 @@ def _normalize_holdings_table(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[s
 
     out = frame.copy()
     original = out["holding_symbol"].astype(str).str.upper()
-    normalized = original.map(normalize_listing_symbol)
+    source_countries = out.get("holding_country", pd.Series(index=out.index, dtype=object)).map(normalize_country)
+    normalized = pd.Series(
+        [
+            normalize_symbol_with_country(symbol, country)
+            for symbol, country in zip(original.tolist(), source_countries.tolist(), strict=False)
+        ],
+        index=out.index,
+    )
     placeholder_mask = original.map(is_placeholder_identifier) | normalized.map(is_placeholder_identifier)
     changed_pairs = sorted(
         {
@@ -106,7 +118,12 @@ def _normalize_holdings_table(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[s
     )
     out = out.loc[~placeholder_mask].copy()
     normalized = normalized.loc[~placeholder_mask]
+    source_countries = source_countries.loc[~placeholder_mask]
     out["holding_symbol"] = normalized
+    out["holding_country"] = [
+        country_from_source_or_symbol(country, symbol)
+        for country, symbol in zip(source_countries.tolist(), normalized.tolist(), strict=False)
+    ]
     out = out.loc[out["holding_symbol"].astype(str).str.strip().ne("")]
     out = out.drop_duplicates(subset=["etf_ticker", "holding_symbol", "as_of"], keep="last").reset_index(drop=True)
     return out, {
@@ -130,18 +147,40 @@ def _holding_name_lookup(holdings: pd.DataFrame) -> dict[str, str]:
     return out
 
 
-def _entity_backfill_source_rows(*, entities: pd.DataFrame, name_by_entity: dict[str, str]) -> list[dict[str, Any]]:
+def _holding_country_lookup(holdings: pd.DataFrame) -> dict[str, str]:
+    if holdings.empty or "holding_country" not in holdings.columns:
+        return {}
+    out: dict[str, str] = {}
+    for _, row in holdings.iterrows():
+        symbol = str(row.get("holding_symbol") or "").strip().upper()
+        country = normalize_country(row.get("holding_country"))
+        if symbol and country and symbol not in out:
+            out[symbol] = country
+    return out
+
+
+def _entity_backfill_source_rows(
+    *,
+    entities: pd.DataFrame,
+    name_by_entity: dict[str, str],
+    country_by_entity: dict[str, str],
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     entity_ids: set[str] = set()
     if not entities.empty:
         sortable_rows: list[tuple[bool, bool, dict[str, Any]]] = []
         for raw in entities.to_dict(orient="records"):
             original_id = str(raw.get("entity_id") or "").strip().upper()
-            entity_id = normalize_listing_symbol(original_id)
+            entity_id = normalize_symbol_with_country(
+                original_id,
+                raw.get("country") or raw.get("holding_country") or raw.get("home_country"),
+            )
             if not entity_id or is_placeholder_identifier(entity_id):
                 continue
             row = dict(raw)
             row["entity_id"] = entity_id
+            if entity_id in country_by_entity:
+                row["holding_country"] = country_by_entity[entity_id]
             sortable_rows.append((original_id == entity_id, bool(_text(row.get("name"))), row))
         for _, _, row in sorted(sortable_rows, key=lambda item: (item[0], item[1])):
             entity_id = str(row["entity_id"]).strip().upper()
@@ -151,7 +190,8 @@ def _entity_backfill_source_rows(*, entities: pd.DataFrame, name_by_entity: dict
     for entity_id, name in sorted(name_by_entity.items()):
         if entity_id in entity_ids:
             continue
-        rows.append({"entity_id": entity_id, "country": infer_country_from_symbol(entity_id), "name": name})
+        country = country_by_entity.get(entity_id) or infer_country_from_symbol(entity_id)
+        rows.append({"entity_id": entity_id, "country": country, "holding_country": country, "name": name})
     return rows
 
 
@@ -192,11 +232,39 @@ def _backfill_counts(
         for row in entity_payload
         if _text(row.get("name")) and not existing_name_by_entity.get(str(row.get("entity_id")).strip().upper())
     )
+    existing_country_by_entity = {}
+    existing_home_country_by_entity = {}
+    if not existing_entities.empty and "entity_id" in existing_entities.columns:
+        for _, row in existing_entities.iterrows():
+            entity_id = normalize_symbol_with_country(
+                row.get("entity_id"),
+                row.get("country") or row.get("holding_country") or row.get("home_country"),
+            )
+            if entity_id:
+                existing_country_by_entity[entity_id] = normalize_country(row.get("country"))
+                existing_home_country_by_entity[entity_id] = normalize_country(row.get("home_country"))
+    us_listing_corrected = sorted(
+        str(row.get("entity_id")).strip().upper()
+        for row in entity_payload
+        if existing_country_by_entity.get(str(row.get("entity_id")).strip().upper()) == "US"
+        and normalize_country(row.get("country")) not in {"", "US"}
+    )
+    us_home_corrected = sorted(
+        str(row.get("entity_id")).strip().upper()
+        for row in entity_payload
+        if existing_country_by_entity.get(str(row.get("entity_id")).strip().upper()) == "US"
+        and existing_home_country_by_entity.get(str(row.get("entity_id")).strip().upper()) in {"", "US"}
+        and normalize_country(row.get("home_country")) not in {"", "US"}
+    )
     return {
         "foreign_symbols_reconciled_to_priced_tickers": len(reconciled),
         "foreign_symbols_reconciled_examples": reconciled[:20],
         "entities_that_gained_name": len(newly_named),
         "entities_that_gained_name_examples": newly_named[:20],
+        "us_misclassified_listing_country_corrected": len(us_listing_corrected),
+        "us_misclassified_listing_country_corrected_examples": us_listing_corrected[:20],
+        "us_listed_home_country_corrected": len(us_home_corrected),
+        "us_listed_home_country_corrected_examples": us_home_corrected[:20],
     }
 
 

@@ -57,6 +57,7 @@ create table if not exists public.etf_holdings (
   etf_ticker text not null,
   holding_symbol text not null,
   holding_name text,
+  holding_country text,
   weight double precision,
   as_of date not null,
   source text,
@@ -71,6 +72,8 @@ alter table if exists public.etf_holdings
   add column if not exists holding_symbol text;
 alter table if exists public.etf_holdings
   add column if not exists holding_name text;
+alter table if exists public.etf_holdings
+  add column if not exists holding_country text;
 alter table if exists public.etf_holdings
   add column if not exists weight double precision;
 alter table if exists public.etf_holdings

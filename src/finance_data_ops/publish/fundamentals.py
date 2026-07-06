@@ -231,6 +231,7 @@ def build_etf_holdings_payload(holdings_frame: pd.DataFrame) -> list[dict[str, A
             .astype(str)
             .str.upper(),
             "holding_name": frame.get("holding_name", pd.Series(index=frame.index, dtype=object)),
+            "holding_country": frame.get("holding_country", pd.Series(index=frame.index, dtype=object)),
             "weight": pd.to_numeric(frame.get("weight"), errors="coerce"),
             "as_of": pd.to_datetime(frame.get("as_of"), errors="coerce").dt.date,
             "source": frame.get("source", frame.get("provider", "data_ops")),
@@ -246,6 +247,7 @@ def build_etf_holdings_payload(holdings_frame: pd.DataFrame) -> list[dict[str, A
     payload["etf_ticker"] = _normalize_string_series(payload["etf_ticker"])
     payload["holding_symbol"] = _normalize_string_series(payload["holding_symbol"])
     payload["holding_name"] = _normalize_string_series(payload["holding_name"])
+    payload["holding_country"] = _normalize_string_series(payload["holding_country"])
     payload["source"] = _normalize_string_series(payload["source"])
     payload["fetched_at"] = payload["fetched_at"].fillna(now_utc)
     payload["updated_at"] = payload["updated_at"].fillna(now_utc)
@@ -256,6 +258,7 @@ def build_etf_holdings_payload(holdings_frame: pd.DataFrame) -> list[dict[str, A
             "etf_ticker",
             "holding_symbol",
             "holding_name",
+            "holding_country",
             "weight",
             "as_of",
             "source",

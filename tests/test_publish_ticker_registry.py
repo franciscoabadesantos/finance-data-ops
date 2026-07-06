@@ -99,11 +99,14 @@ def test_entity_attributes_payload_normalizes_country_and_recomputes_region() ->
 
     by_entity = {row["entity_id"]: row for row in payload}
     assert by_entity["PAGS"]["country"] == "BR"
+    assert by_entity["PAGS"]["home_country"] == "BR"
     assert by_entity["PAGS"]["region"] == "AMER"
     assert by_entity["INFY.NS"]["country"] == "IN"
+    assert by_entity["INFY.NS"]["home_country"] == "IN"
     assert by_entity["INFY.NS"]["region"] == "APAC"
     assert by_entity["INFY.NS"]["name"] == "Infosys Ltd"
     assert by_entity["NOKIA"]["country"] == "FI"
+    assert by_entity["NOKIA"]["home_country"] == "FI"
     assert by_entity["NOKIA"]["region"] == "EU"
     assert by_entity["MYST"]["country"] == "ATLANTIS"
     assert by_entity["MYST"]["region"] == "OTHER"
@@ -136,6 +139,47 @@ def test_entity_attributes_backfill_payload_repairs_existing_regions() -> None:
     assert by_entity["SHOP.TO"]["currency"] == "CAD"
     assert by_entity["UNKNOWN"]["region"] == "OTHER"
     assert by_entity["UNKNOWN"]["name"] == "Mystery Co"
+
+
+def test_entity_attributes_payload_adds_adr_home_country_separate_from_listing_country() -> None:
+    payload = build_entity_attributes_static_payload(
+        [
+            {
+                "input_symbol": "RIO",
+                "normalized_symbol": "RIO",
+                "region": "us",
+                "exchange": "NYQ",
+                "currency": "USD",
+                "instrument_type": "adr",
+                "country": "United Kingdom",
+                "holding_name": "Rio Tinto PLC ADR",
+            }
+        ]
+    )
+
+    assert payload[0]["country"] == "US"
+    assert payload[0]["home_country"] == "GB"
+    assert payload[0]["region"] == "US"
+
+
+def test_entity_attributes_backfill_normalizes_bare_symbols_and_home_country() -> None:
+    payload = build_entity_attributes_static_backfill_payload(
+        [
+            {"entity_id": "600900", "country": "US", "holding_country": "China", "name": "China Yangtze Power"},
+            {
+                "entity_id": "RIO",
+                "country": "United Kingdom",
+                "instrument_type": "adr",
+                "name": "Rio Tinto PLC ADR",
+            },
+        ]
+    )
+
+    by_entity = {row["entity_id"]: row for row in payload}
+    assert by_entity["600900.SS"]["country"] == "CN"
+    assert by_entity["600900.SS"]["home_country"] == "CN"
+    assert by_entity["RIO"]["country"] == "US"
+    assert by_entity["RIO"]["home_country"] == "GB"
 
 
 def test_theme_universe_expansion_publish_accepts_jsonb_notes_column() -> None:

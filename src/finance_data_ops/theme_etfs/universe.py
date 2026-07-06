@@ -11,6 +11,7 @@ import pandas as pd
 
 from finance_data_ops.geography import infer_country_from_symbol, normalize_country, region_for_country
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_payload
+from finance_data_ops.symbology import normalize_symbol_with_country
 from finance_data_ops.validation.ticker_registry import build_registry_key, read_ticker_registry
 
 
@@ -101,7 +102,11 @@ def _rank_wave_candidates(*, holdings: pd.DataFrame, etf_themes: pd.DataFrame, w
     frame = frame.merge(wave_etfs, on="etf_ticker", how="inner")
     if frame.empty:
         return pd.DataFrame()
-    frame["normalized_symbol"] = frame["holding_symbol"].map(_normalize_candidate_symbol)
+    frame["holding_country"] = frame.get("holding_country", pd.Series(index=frame.index, dtype=object)).map(normalize_country)
+    frame["normalized_symbol"] = frame.apply(
+        lambda row: normalize_symbol_with_country(row.get("holding_symbol"), row.get("holding_country")),
+        axis=1,
+    )
     frame["weight"] = pd.to_numeric(frame.get("weight"), errors="coerce").fillna(0.0).clip(lower=0.0)
     frame = frame.loc[frame.apply(_is_candidate_equity_row, axis=1)].copy()
     if frame.empty:
@@ -116,6 +121,7 @@ def _rank_wave_candidates(*, holdings: pd.DataFrame, etf_themes: pd.DataFrame, w
             themes=("theme", lambda values: ",".join(sorted({str(v) for v in values if str(v).strip()}))),
             source_etfs=("etf_ticker", lambda values: ",".join(sorted({str(v) for v in values if str(v).strip()}))),
             holding_name=("holding_name", _first_non_empty),
+            holding_country=("holding_country", _first_non_empty),
         )
         .sort_values(["theme_count", "aggregate_weight", "normalized_symbol"], ascending=[False, False, True])
         .reset_index(drop=True)
@@ -131,14 +137,21 @@ def _build_registry_row(
     wave: int,
 ) -> dict[str, Any]:
     now_iso = datetime.now(UTC).isoformat()
-    country = _metadata_country(symbol, metadata)
+    name = _metadata_text(metadata, "name", "shortName", "longName") or _metadata_text(candidate, "holding_name")
+    instrument_type = _metadata_instrument_type(symbol, metadata, name=name)
+    source_country = normalize_country(candidate.get("holding_country"))
+    metadata_country = _metadata_country(symbol, metadata)
+    if instrument_type == "adr":
+        country = infer_country_from_symbol(symbol)
+        home_country = source_country or metadata_country or country
+    else:
+        country = source_country or metadata_country or infer_country_from_symbol(symbol)
+        home_country = country
     region = region_for_country(country)
     exchange = _metadata_text(metadata, "exchange", "fullExchangeName")
     exchange_mic = _metadata_text(metadata, "exchangeMic", "exchange_mic")
     currency = _metadata_text(metadata, "currency", "financialCurrency") or "USD"
     sector = _metadata_text(metadata, "sector")
-    name = _metadata_text(metadata, "name", "shortName", "longName") or _metadata_text(candidate, "holding_name")
-    instrument_type = _metadata_instrument_type(symbol, metadata)
     themes = str(candidate.get("themes") or "")
     source_etfs = str(candidate.get("source_etfs") or "")
     notes = (
@@ -169,6 +182,7 @@ def _build_registry_row(
         "notes": notes,
         "updated_at": now_iso,
         "country": country,
+        "home_country": home_country,
         "name": name,
         "sector": sector,
     }
@@ -224,9 +238,12 @@ def _safe_metadata_lookup(lookup: MetadataLookup, symbol: str) -> dict[str, Any]
     return dict(payload or {}) if isinstance(payload, Mapping) else {}
 
 
-def _metadata_instrument_type(symbol: str, metadata: Mapping[str, Any]) -> str:
+def _metadata_instrument_type(symbol: str, metadata: Mapping[str, Any], *, name: Any = None) -> str:
     quote_type = str(metadata.get("quoteType") or metadata.get("quote_type") or "").strip().upper()
     if quote_type == "ADR":
+        return "adr"
+    name_token = str(name or "").strip().upper()
+    if any(marker in name_token for marker in (" ADR", " ADS", "AMERICAN DEPOSIT")):
         return "adr"
     if quote_type in {"ETF", "MUTUALFUND", "FUND", "INDEX"}:
         return "unknown"
@@ -239,7 +256,7 @@ def _metadata_country(symbol: str, metadata: Mapping[str, Any]) -> str:
     country = _metadata_text(metadata, "country", "countryCode", "country_code")
     if country:
         return normalize_country(country)
-    return infer_country_from_symbol(symbol)
+    return ""
 
 
 def _metadata_text(metadata: Mapping[str, Any], *keys: str) -> str | None:

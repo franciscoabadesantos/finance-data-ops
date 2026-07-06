@@ -7,11 +7,14 @@ from typing import Any
 
 
 YAHOO_SUFFIX_TO_COUNTRY = {
+    ".AT": "AT",
     ".DE": "DE",
+    ".E": "ES",
     ".AS": "NL",
     ".PA": "FR",
     ".LS": "PT",
     ".L": "GB",
+    ".R": "RU",
     ".CO": "DK",
     ".AX": "AU",
     ".T": "JP",
@@ -107,6 +110,8 @@ def normalize_listing_symbol(raw_symbol: Any) -> str:
         suffix = BLOOMBERG_EXCHANGE_TO_YAHOO_SUFFIX.get(exchange)
         if suffix is not None:
             token = f"{base}{suffix}"
+    if "." not in token and " " not in token:
+        token = _normalize_bare_numeric_symbol(token)
     return _normalize_yahoo_suffix_symbol(token)
 
 
@@ -115,6 +120,20 @@ def normalize_symbol_with_exchange(raw_symbol: Any, exchange_code: Any) -> str:
     exchange = str(exchange_code or "").strip().upper()
     suffix = YAHOO_SUFFIX_BY_EXCHANGE.get(exchange, "")
     return normalize_listing_symbol(f"{base}{suffix}")
+
+
+def normalize_symbol_with_country(raw_symbol: Any, country: Any) -> str:
+    """Normalize symbols using source country when the provider omits an exchange suffix."""
+
+    token = normalize_listing_symbol(raw_symbol)
+    if not token or "." in token or not token.isdigit():
+        return token
+    country_code = str(country or "").strip().upper()
+    if country_code == "HK" and 1 <= len(token) <= 4:
+        return normalize_listing_symbol(f"{token}.HK")
+    if country_code == "JP" and len(token) == 4:
+        return normalize_listing_symbol(f"{token}.T")
+    return token
 
 
 def infer_country_from_listing_symbol(raw_symbol: Any) -> str | None:
@@ -139,3 +158,13 @@ def _normalize_yahoo_suffix_symbol(token: str) -> str:
     if suffix == "HK" and base.isdigit():
         base = base.zfill(4)
     return f"{base}.{suffix}"
+
+
+def _normalize_bare_numeric_symbol(token: str) -> str:
+    if not token.isdigit() or len(token) != 6:
+        return token
+    if token.startswith("600"):
+        return f"{token}.SS"
+    if token.startswith(("000", "002", "300")):
+        return f"{token}.SZ"
+    return token

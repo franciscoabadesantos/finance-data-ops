@@ -5,6 +5,7 @@ from finance_data_ops.symbology import (
     is_placeholder_identifier,
     normalize_listing_symbol,
     normalize_symbol_with_exchange,
+    normalize_symbol_with_country,
 )
 
 
@@ -21,6 +22,18 @@ def test_normalize_listing_symbol_keeps_other_foreign_suffixes_stable() -> None:
     assert normalize_listing_symbol("000001 C2") == "000001.SZ"
     assert normalize_listing_symbol("600519 C1") == "600519.SS"
     assert normalize_listing_symbol("VOD LN") == "VOD.L"
+
+
+def test_normalize_listing_symbol_resolves_bare_a_shares() -> None:
+    assert normalize_listing_symbol("600900") == "600900.SS"
+    assert normalize_listing_symbol("000001") == "000001.SZ"
+    assert normalize_listing_symbol("002415") == "002415.SZ"
+    assert normalize_listing_symbol("300750") == "300750.SZ"
+
+
+def test_normalize_symbol_with_country_resolves_identifiable_bare_numeric_listings() -> None:
+    assert normalize_symbol_with_country("700", "HK") == "0700.HK"
+    assert normalize_symbol_with_country("6758", "JP") == "6758.T"
 
 
 def test_normalize_symbol_with_exchange_uses_canonical_suffixes() -> None:

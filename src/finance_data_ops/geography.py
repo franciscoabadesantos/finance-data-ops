@@ -21,9 +21,13 @@ _COUNTRY_NAME_TO_ISO2 = {
     "ARGENTINA": "AR",
     "AUSTRALIA": "AU",
     "AUSTRIA": "AT",
+    "BAHAMAS": "BS",
     "BELGIUM": "BE",
+    "BERMUDA": "BM",
     "BRAZIL": "BR",
     "CANADA": "CA",
+    "CAYMAN ISLANDS": "KY",
+    "CAYMAN ISLANDS THE": "KY",
     "CHILE": "CL",
     "CHINA": "CN",
     "COLOMBIA": "CO",
@@ -45,6 +49,7 @@ _COUNTRY_NAME_TO_ISO2 = {
     "JAPAN": "JP",
     "KOREA": "KR",
     "KOREA REPUBLIC OF": "KR",
+    "LUXEMBOURG": "LU",
     "MALAYSIA": "MY",
     "MEXICO": "MX",
     "NETHERLANDS": "NL",
@@ -54,6 +59,9 @@ _COUNTRY_NAME_TO_ISO2 = {
     "PHILIPPINES": "PH",
     "POLAND": "PL",
     "PORTUGAL": "PT",
+    "PUERTO RICO": "PR",
+    "RUSSIA": "RU",
+    "RUSSIAN FEDERATION": "RU",
     "SINGAPORE": "SG",
     "SOUTH AFRICA": "ZA",
     "SOUTH KOREA": "KR",
@@ -63,8 +71,11 @@ _COUNTRY_NAME_TO_ISO2 = {
     "TAIWAN": "TW",
     "THAILAND": "TH",
     "UNITED KINGDOM": "GB",
+    "UNITED ARAB EMIRATES": "AE",
     "UNITED STATES": "US",
     "UNITED STATES OF AMERICA": "US",
+    "URUGUAY": "UY",
+    "UAE": "AE",
     "USA": "US",
 }
 
@@ -165,6 +176,15 @@ def infer_country_from_symbol(symbol: Any, *, default: str = "US") -> str:
     if country:
         return country
     return normalize_country(default)
+
+
+def country_from_source_or_symbol(source_country: Any, symbol: Any, *, default: str = "US") -> str:
+    """Resolve country from holdings source first, with listing suffix/default fallback."""
+
+    country = normalize_country(source_country)
+    if country:
+        return country
+    return infer_country_from_symbol(symbol, default=default)
 
 
 def _normalize_token(raw: Any) -> str:

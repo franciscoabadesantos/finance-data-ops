@@ -47,7 +47,9 @@ python scripts/run_entity_attributes_static_backfill.py --write-cache --publish
 ```
 
 This re-publishes `feature_store.entity_attributes_static` from the cached entity attributes table after applying the
-canonical `normalize_country` and `region_for_country` mapping.
+canonical symbol normalization, ISO-2 `normalize_country`, `region_for_country`, and `home_country` mapping.
+
+Apply `sql/017_symbology_country_home_country.sql` before publishing the country/home-country backfill.
 
 Foreign ETF holding symbol/name repair:
 
@@ -56,8 +58,10 @@ python scripts/run_foreign_symbol_backfill.py --write-cache --publish
 ```
 
 This rewrites cached ETF holdings with canonical foreign listing symbols, drops numeric placeholder identifiers, fills
-`feature_store.entity_attributes_static.name` from `holding_name`, and publishes the corrected holdings/entity rows. It
-does not ingest prices for newly discovered foreign constituents.
+`holding_country` from holdings source country with suffix fallback, fills `feature_store.entity_attributes_static.name`
+from `holding_name`, and publishes the corrected holdings/entity rows. The summary reports existing US-classified rows
+corrected to non-US listing country plus US-listed rows that gained a non-US `home_country`. It does not ingest prices for
+newly discovered foreign constituents.
 
 Wave A onboarding (ITB homebuilders + US-listed GDX gold miners):
 

@@ -9,6 +9,7 @@ import pandas as pd
 
 from finance_data_ops.geography import infer_country_from_symbol, normalize_country, region_for_country
 from finance_data_ops.publish.client import Publisher
+from finance_data_ops.symbology import normalize_symbol_with_country
 
 
 REGISTRY_COLUMNS = [
@@ -76,17 +77,20 @@ def build_entity_attributes_static_payload(rows: list[dict[str, Any]]) -> list[d
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in registry_rows:
-        entity_id = str(row.get("normalized_symbol") or row.get("input_symbol") or "").strip().upper()
+        raw_entity_id = str(row.get("normalized_symbol") or row.get("input_symbol") or "").strip().upper()
+        extras = extras_by_entity.get(raw_entity_id, {})
+        entity_id = _normalize_entity_id(raw_entity_id, extras)
         if not entity_id or entity_id in {"NONE", "NULL", "NAN"} or entity_id in seen:
             continue
         seen.add(entity_id)
-        extras = extras_by_entity.get(entity_id, {})
-        country = normalize_country(extras.get("country") or infer_country_from_symbol(entity_id))
+        country = _resolve_listing_country(entity_id, extras)
+        home_country = _resolve_home_country(entity_id, extras, listing_country=country)
         out.append(
             {
                 "entity_id": entity_id,
                 "name": _nullable_text(extras.get("name") or extras.get("holding_name")),
                 "country": country,
+                "home_country": home_country,
                 "region": region_for_country(country),
                 "exchange": row.get("exchange"),
                 "exchange_mic": row.get("exchange_mic"),
@@ -128,16 +132,18 @@ def build_entity_attributes_static_backfill_payload(
         if str(key).strip() and _nullable_text(value)
     }
     for raw in rows:
-        entity_id = str(raw.get("entity_id") or raw.get("normalized_symbol") or raw.get("input_symbol") or "")
-        entity_id = entity_id.strip().upper()
+        raw_entity_id = str(raw.get("entity_id") or raw.get("normalized_symbol") or raw.get("input_symbol") or "")
+        entity_id = _normalize_entity_id(raw_entity_id, raw)
         if not entity_id or entity_id in {"NONE", "NULL", "NAN"}:
             continue
-        country = normalize_country(raw.get("country") or infer_country_from_symbol(entity_id))
+        country = _resolve_listing_country(entity_id, raw)
+        home_country = _resolve_home_country(entity_id, raw, listing_country=country)
         name = _nullable_text(raw.get("name")) or _nullable_text(normalized_names.get(entity_id))
         out_by_entity[entity_id] = {
             "entity_id": entity_id,
             "name": name,
             "country": country,
+            "home_country": home_country,
             "region": region_for_country(country),
             "exchange": _nullable_text(raw.get("exchange"), upper=True),
             "exchange_mic": _nullable_text(raw.get("exchange_mic"), upper=True),
@@ -191,6 +197,40 @@ def _coerce_note_value(key: str, value: str) -> Any:
     if key in {"themes", "source_etfs", "candidates"}:
         return [item for item in value.split(",") if item]
     return value
+
+
+def _normalize_entity_id(raw_entity_id: Any, row: dict[str, Any]) -> str:
+    country = normalize_country(row.get("holding_country") or row.get("country") or row.get("home_country"))
+    return normalize_symbol_with_country(raw_entity_id, country)
+
+
+def _resolve_listing_country(entity_id: str, row: dict[str, Any]) -> str:
+    if _is_adr_row(entity_id, row):
+        return infer_country_from_symbol(entity_id)
+    return normalize_country(row.get("holding_country") or row.get("country") or infer_country_from_symbol(entity_id))
+
+
+def _resolve_home_country(entity_id: str, row: dict[str, Any], *, listing_country: str) -> str:
+    if _is_adr_row(entity_id, row):
+        return normalize_country(
+            row.get("home_country")
+            or row.get("holding_country")
+            or row.get("issuer_country")
+            or row.get("origin_country")
+            or row.get("country")
+            or listing_country
+        )
+    return normalize_country(row.get("home_country") or listing_country)
+
+
+def _is_adr_row(entity_id: str, row: dict[str, Any]) -> bool:
+    instrument_type = str(row.get("instrument_type") or row.get("quoteType") or row.get("quote_type") or "").upper()
+    if instrument_type == "ADR":
+        return True
+    name = str(row.get("name") or row.get("holding_name") or "").upper()
+    if any(marker in name for marker in (" ADR", " ADS", "AMERICAN DEPOSIT")):
+        return True
+    return False
 
 
 def _nullable_text(value: Any, *, upper: bool = False) -> str | None:

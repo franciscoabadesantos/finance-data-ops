@@ -188,6 +188,37 @@ def test_ishares_issuer_holdings_preferred_over_yfinance_top_ten() -> None:
     assert set(holdings["source"]) == {"theme_etf:ishares_csv"}
 
 
+def test_holdings_country_column_is_primary_and_normalizes_bare_numeric_symbols() -> None:
+    spec = ThemeETF(
+        theme="global_health",
+        etf_ticker="GHLT",
+        wave=1,
+        source_type="issuer_csv",
+        source_ref="https://example.test/ghlt.csv",
+        issuer="Example",
+    )
+
+    def fake_fetch(_url: str) -> bytes:
+        return (
+            "Holdings as of 2026-07-02\n"
+            "Ticker,Name,Country,Weight (%)\n"
+            "600900,China Yangtze Power,China,2.00\n"
+            "700,Tencent Holdings,Hong Kong,1.50\n"
+            "6758,Sony Group,Japan,1.25\n"
+            "MELI,MercadoLibre,Uruguay,1.00\n"
+        ).encode()
+
+    holdings, _, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
+
+    assert failures == []
+    assert holdings[["holding_symbol", "holding_country"]].to_dict(orient="records") == [
+        {"holding_symbol": "600900.SS", "holding_country": "CN"},
+        {"holding_symbol": "0700.HK", "holding_country": "HK"},
+        {"holding_symbol": "6758.T", "holding_country": "JP"},
+        {"holding_symbol": "MELI", "holding_country": "UY"},
+    ]
+
+
 def test_vaneck_percent_weights_below_one_percent_scale_to_fractions() -> None:
     spec = ThemeETF(
         theme="ai_semis",
@@ -537,7 +568,7 @@ def test_full_holdings_filter_non_equity_cash_and_placeholder_rows() -> None:
     holdings, themes, failures = fetch_theme_etf_holdings(theme_etfs=[spec], fetch_bytes=fake_fetch)
 
     assert failures == []
-    assert holdings["holding_symbol"].tolist() == ["FSLR", "600900", "ENPH"]
+    assert holdings["holding_symbol"].tolist() == ["FSLR", "600900.SS", "ENPH"]
     assert themes.iloc[0]["holdings_count"] == 3
 
 
@@ -800,6 +831,53 @@ def test_wave_universe_uses_canonical_amer_region_for_brazil() -> None:
     assert registry_rows.iloc[0]["registry_key"] == "PAGS|amer|NMS"
     assert entity_rows.iloc[0]["country"] == "BR"
     assert entity_rows.iloc[0]["region"] == "AMER"
+
+
+def test_wave_universe_prefers_holding_country_and_separates_adr_home_country() -> None:
+    holdings = pd.DataFrame(
+        [
+            {
+                "etf_ticker": "AIQ",
+                "holding_symbol": "600900",
+                "holding_name": "China Yangtze Power",
+                "holding_country": "China",
+                "weight": 0.08,
+            },
+            {
+                "etf_ticker": "AIQ",
+                "holding_symbol": "RIO",
+                "holding_name": "Rio Tinto PLC ADR",
+                "holding_country": "United Kingdom",
+                "weight": 0.07,
+            },
+        ]
+    )
+    themes = pd.DataFrame([{"etf_ticker": "AIQ", "theme": "ai", "wave": 1}])
+
+    registry_rows, entity_rows, summary = build_wave_universe_additions(
+        holdings=holdings,
+        etf_themes=themes,
+        existing_registry=pd.DataFrame(),
+        wave=1,
+        max_new_tickers=10,
+        batch_size=2,
+        metadata_lookup=lambda symbol: {
+            "RIO": {"quoteType": "ADR", "country": "United Kingdom", "exchange": "NYQ", "currency": "USD"},
+            "600900.SS": {"exchange": "SHH", "currency": "CNY"},
+        }.get(symbol, {}),
+    )
+
+    assert summary["new_tickers_selected"] == 2
+    registry_by_symbol = {row["normalized_symbol"]: row for row in registry_rows.to_dict(orient="records")}
+    entity_by_id = {row["entity_id"]: row for row in entity_rows.to_dict(orient="records")}
+    assert registry_by_symbol["600900.SS"]["country"] == "CN"
+    assert registry_by_symbol["600900.SS"]["region"] == "apac"
+    assert entity_by_id["600900.SS"]["country"] == "CN"
+    assert entity_by_id["600900.SS"]["home_country"] == "CN"
+    assert registry_by_symbol["RIO"]["country"] == "US"
+    assert registry_by_symbol["RIO"]["home_country"] == "GB"
+    assert entity_by_id["RIO"]["country"] == "US"
+    assert entity_by_id["RIO"]["home_country"] == "GB"
 
 
 def test_wave_universe_merge_resumes_after_prior_theme_batch() -> None:

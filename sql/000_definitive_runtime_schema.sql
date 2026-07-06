@@ -332,6 +332,7 @@ create table public.etf_holdings (
   etf_ticker text not null,
   holding_symbol text not null,
   holding_name text,
+  holding_country text,
   weight double precision,
   as_of date not null,
   source text,

@@ -12,8 +12,9 @@ from typing import Any
 import pandas as pd
 import requests
 
+from finance_data_ops.geography import country_from_source_or_symbol, normalize_country
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
-from finance_data_ops.symbology import is_placeholder_identifier, normalize_listing_symbol
+from finance_data_ops.symbology import is_placeholder_identifier, normalize_listing_symbol, normalize_symbol_with_country
 from finance_data_ops.theme_etfs.config import THEME_ETFS, ThemeETF
 
 
@@ -677,6 +678,17 @@ _WEIGHT_COLUMNS = [
 ]
 _DATE_COLUMNS = ["date", "Date", "as_of", "asOfDate", "As Of", "Fund Holdings Data as of"]
 _ASSET_CLASS_COLUMNS = ["asset_class", "Asset Class", "Class", "Security Type", "Type"]
+_COUNTRY_COLUMNS = [
+    "country",
+    "Country",
+    "location",
+    "Location",
+    "Country/Region",
+    "Country / Region",
+    "Domicile",
+    "Geography",
+    "Market",
+]
 
 
 def _extract_as_of_from_lines(lines: list[str]) -> date | None:
@@ -722,13 +734,15 @@ def _normalize_holdings_frame(
     weight_column = _first_existing_column(frame, _WEIGHT_COLUMNS)
     date_column = _first_existing_column(frame, _DATE_COLUMNS)
     asset_class_column = _first_existing_column(frame, _ASSET_CLASS_COLUMNS)
+    country_column = _first_existing_column(frame, _COUNTRY_COLUMNS)
     if symbol_column is None or weight_column is None:
         raise RuntimeError(f"Missing required symbol/weight columns for {spec.etf_ticker}.")
 
     default_as_of = frame.attrs.get("as_of")
     rows: list[dict[str, Any]] = []
     for index, row in frame.iterrows():
-        symbol = _normalize_holding_symbol(row.get(symbol_column))
+        source_country = normalize_country(row.get(country_column)) if country_column else ""
+        symbol = _normalize_holding_symbol(row.get(symbol_column), country=source_country)
         name = _coerce_text(row.get(name_column)) if name_column else None
         asset_class = _coerce_text(row.get(asset_class_column)) if asset_class_column else None
         if not _is_equity_like_holding(symbol=symbol, name=name, asset_class=asset_class):
@@ -744,6 +758,7 @@ def _normalize_holdings_frame(
                 "etf_ticker": spec.etf_ticker.upper(),
                 "holding_symbol": symbol,
                 "holding_name": name,
+                "holding_country": country_from_source_or_symbol(source_country, symbol),
                 "_raw_weight": parsed_weight[0],
                 "_raw_weight_is_percent": parsed_weight[1],
                 "as_of": as_of or fetched_at.date(),
@@ -771,6 +786,7 @@ def _normalize_holdings_frame(
             "etf_ticker",
             "holding_symbol",
             "holding_name",
+            "holding_country",
             "weight",
             "as_of",
             "source",
@@ -862,11 +878,11 @@ def _first_existing_column(frame: pd.DataFrame, candidates: list[str]) -> str | 
     return None
 
 
-def _normalize_holding_symbol(value: Any) -> str | None:
+def _normalize_holding_symbol(value: Any, *, country: Any = None) -> str | None:
     text = _coerce_text(value)
     if text is None:
         return None
-    token = normalize_listing_symbol(text)
+    token = normalize_symbol_with_country(text, country) if country else normalize_listing_symbol(text)
     return token or None
 
 
@@ -974,6 +990,7 @@ def _empty_holdings_frame() -> pd.DataFrame:
             "etf_ticker",
             "holding_symbol",
             "holding_name",
+            "holding_country",
             "weight",
             "as_of",
             "source",
