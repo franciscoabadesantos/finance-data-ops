@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Callable
 
 from prefect.deployments import run_deployment
 
@@ -18,6 +19,8 @@ from app.data_ops_jobs import run_data_ops_rebuild_job, run_data_ops_series_upse
 from app.models import ExecuteJobRequest
 from app.registry import WorkerRegistryStore, now_iso, parse_notes
 from app.tasks import CloudTasksEnqueuer
+
+logger = logging.getLogger(__name__)
 
 PROMOTABLE = {"validated_market_only", "validated_full"}
 DEFAULT_TICKER_BACKFILL_START_DATE = "1900-01-01"
@@ -257,14 +260,25 @@ class JobExecutor:
             end=end_date.isoformat(),
             publish_enabled=True,
         )
-        earnings = run_dataops_earnings_daily(
-            symbols=[ticker],
-            history_limit=history_limit,
-            publish_enabled=True,
+        # Earnings and fundamentals are best-effort during onboarding: a freshly
+        # listed ticker (recent IPO) legitimately has none yet, which must not abort
+        # the prices + technical-features chain that drives eligibility.
+        earnings = _run_best_effort_backfill_step(
+            "earnings",
+            lambda: run_dataops_earnings_daily(
+                symbols=[ticker],
+                history_limit=history_limit,
+                publish_enabled=True,
+                raise_on_failed_hard=False,
+            ),
         )
-        fundamentals = run_dataops_fundamentals_daily(
-            symbols=[ticker],
-            publish_enabled=True,
+        fundamentals = _run_best_effort_backfill_step(
+            "fundamentals",
+            lambda: run_dataops_fundamentals_daily(
+                symbols=[ticker],
+                publish_enabled=True,
+                raise_on_failed_hard=False,
+            ),
         )
         technical_features = trigger_technical_feature_backfill(
             ticker=ticker,
@@ -531,6 +545,22 @@ def _parse_iso_date(raw: str | None) -> date:
         raise ValueError("date value is required")
     token = text[:10]
     return date.fromisoformat(token)
+
+
+def _run_best_effort_backfill_step(step: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """Run an onboarding backfill sub-step that must not abort the backfill.
+
+    Earnings and fundamentals are best-effort: a freshly listed ticker (a recent
+    IPO) legitimately has none yet, so a hard failure there must not stop the
+    prices + technical-features chain that determines relationship-map eligibility.
+    Any failure is captured and returned instead of raised.
+    """
+    try:
+        result = fn()
+        return result if isinstance(result, dict) else {"status": "completed", "step": step}
+    except Exception as exc:  # noqa: BLE001 - best-effort onboarding step
+        logger.warning("Onboarding backfill step %s failed (best-effort): %s", step, exc)
+        return {"status": "skipped", "step": step, "best_effort": True, "error": str(exc)}
 
 
 def _resolve_earnings_history_limit(raw: object | None, *, default: int) -> int:

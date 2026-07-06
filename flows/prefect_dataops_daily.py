@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 import pandas as pd
@@ -837,6 +837,27 @@ def dataops_release_calendar_daily_flow(
     return summary
 
 
+def _run_best_effort_backfill_step(
+    step: str,
+    fn: Callable[[], dict[str, Any]],
+    *,
+    logger: Any,
+) -> dict[str, Any]:
+    """Run an onboarding backfill sub-step that must not abort the backfill.
+
+    Earnings and fundamentals are best-effort: a freshly listed ticker (a recent
+    IPO) legitimately has none yet, so a hard failure there must not stop the
+    prices + technical-features chain that determines relationship-map eligibility.
+    Any failure is captured and returned instead of raised.
+    """
+    try:
+        result = fn()
+        return result if isinstance(result, dict) else {"status": "completed", "step": step}
+    except Exception as exc:  # noqa: BLE001 - best-effort onboarding step
+        logger.warning("Onboarding backfill step %s failed (best-effort): %s", step, exc)
+        return {"status": "skipped", "step": step, "best_effort": True, "error": str(exc)}
+
+
 @flow(
     name="dataops_ticker_backfill",
     retries=0,
@@ -902,23 +923,32 @@ def dataops_ticker_backfill_flow(
             raise_on_failed_hard=not bool(allow_unhealthy),
         )
 
-        failed_step = "earnings"
-        earnings_summary = run_dataops_earnings_daily(
-            symbols=[normalized_ticker],
-            history_limit=resolved_history_limit,
-            cache_root=cache_root,
-            publish_enabled=bool(publish_enabled),
-            max_attempts=int(max_attempts or settings.default_max_attempts),
-            raise_on_failed_hard=not bool(allow_unhealthy),
+        # Earnings and fundamentals are best-effort during onboarding: a freshly
+        # listed ticker (recent IPO) legitimately has none yet, and that must not
+        # abort the prices + technical-features chain that drives eligibility.
+        earnings_summary = _run_best_effort_backfill_step(
+            "earnings",
+            lambda: run_dataops_earnings_daily(
+                symbols=[normalized_ticker],
+                history_limit=resolved_history_limit,
+                cache_root=cache_root,
+                publish_enabled=bool(publish_enabled),
+                max_attempts=int(max_attempts or settings.default_max_attempts),
+                raise_on_failed_hard=False,
+            ),
+            logger=logger,
         )
 
-        failed_step = "fundamentals"
-        fundamentals_summary = run_dataops_fundamentals_daily(
-            symbols=[normalized_ticker],
-            cache_root=cache_root,
-            publish_enabled=bool(publish_enabled),
-            max_attempts=int(max_attempts or settings.default_max_attempts),
-            raise_on_failed_hard=not bool(allow_unhealthy),
+        fundamentals_summary = _run_best_effort_backfill_step(
+            "fundamentals",
+            lambda: run_dataops_fundamentals_daily(
+                symbols=[normalized_ticker],
+                cache_root=cache_root,
+                publish_enabled=bool(publish_enabled),
+                max_attempts=int(max_attempts or settings.default_max_attempts),
+                raise_on_failed_hard=False,
+            ),
+            logger=logger,
         )
 
         if bool(trigger_technical_features):

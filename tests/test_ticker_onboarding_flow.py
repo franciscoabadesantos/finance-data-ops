@@ -164,3 +164,49 @@ def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_techni
         "start": DEFAULT_TICKER_BACKFILL_START_DATE,
         "end": "2026-04-18",
     }
+
+
+def test_ticker_backfill_earnings_empty_is_best_effort_and_still_triggers_technicals(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A freshly listed ticker (recent IPO) with no earnings must not abort the backfill."""
+    calls: dict[str, object] = {}
+    monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
+
+    def _fake_market(**kwargs):
+        calls["market"] = dict(kwargs)
+        return {"run_id": "market-run"}
+
+    def _fake_earnings(**kwargs):
+        calls["earnings"] = dict(kwargs)
+        raise RuntimeError("Data Ops earnings daily unhealthy status: earnings_empty")
+
+    def _fake_fundamentals(**kwargs):
+        calls["fundamentals"] = dict(kwargs)
+        raise RuntimeError("fundamentals empty")
+
+    def _fake_run_deployment(name: str, **kwargs):
+        calls["deployment"] = {"name": name, **dict(kwargs)}
+        return FakeDeploymentRun(id="technical-run", state_name="Completed")
+
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_market_daily", _fake_market)
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_earnings_daily", _fake_earnings)
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_fundamentals_daily", _fake_fundamentals)
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_deployment", _fake_run_deployment)
+
+    result = dataops_ticker_backfill_flow.fn(
+        ticker="spcx",
+        end="2026-07-06",
+        history_limit=100,
+        cache_root=str(tmp_path),
+        publish_enabled=True,
+    )
+
+    # Earnings + fundamentals failed, but the backfill still succeeded and triggered technicals.
+    assert result["status"] == "success"
+    assert result["steps"]["technical_features"]["flow_run_id"] == "technical-run"
+    assert result["steps"]["earnings"]["status"] == "skipped"
+    assert result["steps"]["earnings"]["best_effort"] is True
+    assert result["steps"]["fundamentals"]["status"] == "skipped"
+    assert "deployment" in calls

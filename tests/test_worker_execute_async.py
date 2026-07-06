@@ -191,3 +191,56 @@ def test_ticker_execute_returns_202_and_completes_in_background(monkeypatch) -> 
     assert run["status"] == "completed"
     assert tasks.backfill_payloads[0]["payload"]["job_type"] == "ticker_backfill"
     assert parse_notes(registry.registry_row["notes"])["backfill_job_id"] == "job-backfill"
+
+
+def test_backfill_earnings_empty_is_best_effort_and_completes(monkeypatch) -> None:
+    """Executor backfill: earnings/fundamentals failure is non-fatal; technicals still run."""
+    from app.models import ExecuteJobRequest  # type: ignore[import-not-found]
+
+    registry = MinimalRegistry(completed_event=threading.Event())
+    registry.registry_row["status"] = "pending_backfill"
+    executor = JobExecutor(
+        settings=FakeSettings(),
+        registry=registry,  # type: ignore[arg-type]
+        tasks=FakeTasks(),  # type: ignore[arg-type]
+    )
+
+    steps: dict[str, Any] = {}
+
+    def _fake_market(**kwargs):
+        steps["market"] = dict(kwargs)
+        return {"run_id": "market-run"}
+
+    def _fake_earnings(**kwargs):
+        steps["earnings"] = dict(kwargs)
+        raise RuntimeError("Data Ops earnings daily unhealthy status: earnings_empty")
+
+    def _fake_fundamentals(**kwargs):
+        steps["fundamentals"] = dict(kwargs)
+        raise RuntimeError("fundamentals empty")
+
+    def _fake_technicals(**kwargs):
+        steps["technicals"] = dict(kwargs)
+        return {"status": "completed", "flow_run_id": "tech-run"}
+
+    monkeypatch.setattr(worker_executors, "run_dataops_market_daily", _fake_market)
+    monkeypatch.setattr(worker_executors, "run_dataops_earnings_daily", _fake_earnings)
+    monkeypatch.setattr(worker_executors, "run_dataops_fundamentals_daily", _fake_fundamentals)
+    monkeypatch.setattr(worker_executors, "trigger_technical_feature_backfill", _fake_technicals)
+
+    request = ExecuteJobRequest(
+        job_type="ticker_backfill",
+        registry_key="NET|us|default",
+        ticker="NET",
+        region="us",
+        history_limit=100,
+        end="2026-07-06",
+        idempotency_key="backfill:NET|us|default",
+    )
+    result = executor._execute_backfill(request, job_id="job-bf", idempotency_key="backfill:NET|us|default")
+
+    # Technicals ran despite earnings + fundamentals failing, and the backfill completed.
+    assert "technicals" in steps
+    assert result["status"] == "completed"
+    assert result["steps"]["technical_features"]["flow_run_id"] == "tech-run"
+    assert registry.registry_row["status"] == "active"
