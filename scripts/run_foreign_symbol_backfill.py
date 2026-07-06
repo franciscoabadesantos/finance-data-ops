@@ -407,20 +407,22 @@ def _placeholder_entity_ids(values: Any) -> list[str]:
 
 def _replaced_bare_entity_pairs(values: Any) -> list[tuple[str, str]]:
     symbols = {str(value).strip().upper() for value in values if str(value).strip()}
-    pairs = {
-        (symbol, normalize_listing_symbol(symbol))
-        for symbol in symbols
-        if _is_safe_entity_cleanup_candidate(symbol)
-        and normalize_listing_symbol(symbol)
-        and normalize_listing_symbol(symbol) != symbol
-        and normalize_listing_symbol(symbol) in symbols
-    }
+    suffixed_by_stem: dict[str, list[str]] = {}
+    for symbol in symbols:
+        match = re.fullmatch(r"(\d+)\.([A-Z][A-Z0-9]*)", symbol)
+        if not match:
+            continue
+        stem = match.group(1).lstrip("0") or match.group(1)
+        suffixed_by_stem.setdefault(stem, []).append(symbol)
+
+    pairs = set()
+    for symbol in symbols:
+        if not re.fullmatch(r"\d+", symbol):
+            continue
+        stem = symbol.lstrip("0") or symbol
+        for suffixed in suffixed_by_stem.get(stem, []):
+            pairs.add((symbol, suffixed))
     return sorted(pairs)
-
-
-def _is_safe_entity_cleanup_candidate(symbol: str) -> bool:
-    token = str(symbol or "").strip().upper()
-    return token in _bare_numeric_ids([token]) or bool(re.fullmatch(r"\d{1,3}\.HK", token))
 
 
 def _raw_non_iso_country_count(frame: pd.DataFrame, *, columns: tuple[str, ...]) -> int:

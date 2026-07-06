@@ -19,10 +19,26 @@ def _load_backfill_module():
 def test_replaced_bare_entity_pairs_only_marks_confirmed_replacements() -> None:
     module = _load_backfill_module()
 
-    assert module._replaced_bare_entity_pairs(["600900", "600900.SS", "700", "0700.HK", "863.HK", "0863.HK", "1234"]) == [
+    assert module._replaced_bare_entity_pairs(
+        [
+            "1911",
+            "1911.T",
+            "3576",
+            "3576.TW",
+            "700",
+            "0700.HK",
+            "600900",
+            "600900.SS",
+            "002176",
+            "002176.SZ",
+            "1234",
+        ]
+    ) == [
+        ("002176", "002176.SZ"),
+        ("1911", "1911.T"),
+        ("3576", "3576.TW"),
         ("600900", "600900.SS"),
         ("700", "0700.HK"),
-        ("863.HK", "0863.HK"),
     ]
 
 
