@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 import hashlib
 import json
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 try:
     from google.api_core.exceptions import AlreadyExists
@@ -31,7 +33,11 @@ class CloudTasksEnqueuer:
     def __init__(self, settings: WorkerSettings) -> None:
         self.settings = settings
         self.enabled = bool(settings.cloud_tasks_enabled)
+        worker_base_url = str(settings.worker_base_url or "").strip().rstrip("/")
+        self.target_url = f"{worker_base_url}/jobs/execute" if worker_base_url else ""
         if not self.enabled:
+            if not self.target_url:
+                raise RuntimeError("WORKER_BASE_URL is required when CLOUD_TASKS_ENABLED=false.")
             self.client = None
             return
 
@@ -48,13 +54,19 @@ class CloudTasksEnqueuer:
             settings.gcp_location,
             settings.gcp_tasks_queue,
         )
-        self.target_url = f"{str(settings.worker_base_url).rstrip('/')}/jobs/execute"
 
     def enqueue_backfill(self, payload: dict[str, Any], *, idempotency_key: str) -> EnqueueResult:
+        return self._dispatch(payload, idempotency_key=idempotency_key)
+
+    def _dispatch(self, payload: dict[str, Any], *, idempotency_key: str) -> EnqueueResult:
+        task_id = _task_id_from_key(idempotency_key)
         if not self.enabled:
-            task_id = _task_id_from_key(idempotency_key)
+            self._dispatch_local_worker(payload, task_id=task_id)
             return EnqueueResult(job_id=task_id, state="QUEUED")
 
+        return self._create_cloud_task(payload, idempotency_key=idempotency_key)
+
+    def _create_cloud_task(self, payload: dict[str, Any], *, idempotency_key: str) -> EnqueueResult:
         assert self.client is not None
         assert tasks_v2 is not None
         task_id = _task_id_from_key(idempotency_key)
@@ -86,6 +98,37 @@ class CloudTasksEnqueuer:
             return EnqueueResult(job_id=task_job_id, state="QUEUED")
         except AlreadyExists:
             return EnqueueResult(job_id=task_id, state="QUEUED")
+
+    def _dispatch_local_worker(self, payload: dict[str, Any], *, task_id: str) -> None:
+        if not self.target_url:
+            raise RuntimeError("WORKER_BASE_URL is required when CLOUD_TASKS_ENABLED=false.")
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-CloudTasks-TaskName": task_id,
+            "X-CloudTasks-TaskRetryCount": "0",
+        }
+        if self.settings.worker_shared_token:
+            headers["Authorization"] = f"Bearer {self.settings.worker_shared_token}"
+
+        request = urllib_request.Request(
+            self.target_url,
+            data=json.dumps(payload, default=str).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(request, timeout=30.0) as response:
+                status_code = int(getattr(response, "status", response.getcode()))
+        except urllib_error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace").strip()
+            message = detail or str(exc.reason or "").strip() or "unknown error"
+            raise RuntimeError(f"Local worker dispatch failed with HTTP {exc.code}: {message}") from exc
+        except urllib_error.URLError as exc:
+            raise RuntimeError(f"Local worker dispatch failed: {exc.reason}") from exc
+
+        if status_code >= 400:
+            raise RuntimeError(f"Local worker dispatch failed with HTTP {status_code}.")
 
     @staticmethod
     def now_iso() -> str:
