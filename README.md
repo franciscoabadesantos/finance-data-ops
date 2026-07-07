@@ -118,13 +118,16 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
   - `dataops_ticker_backfill` (targeted single-ticker backfill)
   - `dataops_ticker_validation` (on-demand symbol normalization + validation)
   - `dataops_ticker_onboarding` (event-driven validation gate + conditional backfill)
+  - `dataops_daily` (aggregate source refresh + feature-store handoff)
 - Deployment definitions:
   - [prefect.yaml](/home/franciscosantos/finance-data-ops/prefect.yaml)
-  - Includes 8 deployments: `market-daily`, `fundamentals-daily`, `earnings-daily`, `macro-daily`, `release-calendar-daily`, `ticker-validation`, `ticker-onboarding`, `ticker-backfill`
+  - Includes source, aggregate, production, and onboarding deployments including `dataops-daily`, `market-daily`, `fundamentals-daily`, `earnings-daily`, `macro-daily`, `release-calendar-daily`, `ticker-validation`, `ticker-onboarding`, and `ticker-backfill`
   - Region is handled via deployment parameters/flow logic (`region`) instead of per-region deployments
-  - Daily symbol resolution order: deployment `symbols` override -> validated `ticker_registry` region universe -> `DATA_OPS_SYMBOLS_<REGION>` fallback -> `DATA_OPS_SYMBOLS` fallback
-  - Validation output in `ticker_registry` is the production-universe gate; direct manual symbol additions should be fallback-only during rollout.
+  - Daily symbol resolution order: deployment `symbols` override -> `DATA_OPS_SYMBOLS_<REGION>` -> `DATA_OPS_SYMBOLS`
+  - `ticker_registry` is pipeline state for onboarding/validation, not the tracked-universe source of truth. The registry fallback is migration-only and requires `DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE=true`.
+  - Feature-store handoff is config-driven: `FEATURE_BUILD_DAILY_DEPLOYMENT` defaults to `feature-build-daily/feature-build-daily`; optional targeted onboarding scorecard builds use `FEATURE_SCORECARD_BUILD_DEPLOYMENT`.
   - Cadence strategy (weekday UTC):
+    - Aggregate source handoff: `23:10`
     - Market: `06:30`, `14:30`, `22:30` (higher freshness priority)
     - Earnings: `08:00`, `20:00` (medium freshness priority)
     - Fundamentals: `03:00` (low-change domain, daily is sufficient)

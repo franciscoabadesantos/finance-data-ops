@@ -6,6 +6,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_FEATURE_BUILD_DAILY_DEPLOYMENT = "feature-build-daily/feature-build-daily"
+DEFAULT_FEATURE_SCORECARD_BUILD_DEPLOYMENT = ""
+
 
 def discover_repo_root(start: Path | None = None) -> Path:
     current = (start or Path(__file__)).resolve()
@@ -29,6 +32,9 @@ class DataOpsSettings:
     default_max_attempts: int
     symbol_batch_size: int
     alert_webhook_url: str
+    feature_build_daily_deployment: str = DEFAULT_FEATURE_BUILD_DAILY_DEPLOYMENT
+    feature_scorecard_build_deployment: str = DEFAULT_FEATURE_SCORECARD_BUILD_DEPLOYMENT
+    allow_ticker_registry_universe: bool = False
 
     def require_database(self) -> None:
         if not self.database_dsn:
@@ -67,6 +73,11 @@ def load_settings(
     default_max_attempts = _parse_positive_int(env_map.get("DATA_OPS_MAX_ATTEMPTS"), fallback=3)
     symbol_batch_size = _parse_positive_int(env_map.get("DATA_OPS_SYMBOL_BATCH_SIZE"), fallback=100)
     alert_webhook_url = str(env_map.get("DATA_OPS_ALERT_WEBHOOK_URL") or "").strip()
+    feature_build_daily_deployment = str(
+        env_map.get("FEATURE_BUILD_DAILY_DEPLOYMENT") or DEFAULT_FEATURE_BUILD_DAILY_DEPLOYMENT
+    ).strip()
+    feature_scorecard_build_deployment = str(env_map.get("FEATURE_SCORECARD_BUILD_DEPLOYMENT") or "").strip()
+    allow_ticker_registry_universe = _parse_bool(env_map.get("DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE"))
 
     return DataOpsSettings(
         repo_root=repo_root,
@@ -77,6 +88,9 @@ def load_settings(
         default_max_attempts=default_max_attempts,
         symbol_batch_size=symbol_batch_size,
         alert_webhook_url=alert_webhook_url,
+        feature_build_daily_deployment=feature_build_daily_deployment,
+        feature_scorecard_build_deployment=feature_scorecard_build_deployment,
+        allow_ticker_registry_universe=allow_ticker_registry_universe,
     )
 
 
@@ -94,3 +108,16 @@ def _parse_positive_int(raw: str | int | None, *, fallback: int) -> int:
     except (TypeError, ValueError):
         pass
     return int(fallback)
+
+
+def _parse_bool(raw: str | bool | None, *, fallback: bool = False) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return bool(fallback)
+    token = str(raw).strip().lower()
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(fallback)

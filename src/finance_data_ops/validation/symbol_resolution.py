@@ -49,6 +49,15 @@ def resolve_symbols(
         return list(settings.default_symbols)
 
     if normalized_region:
+        region_env_key = REGION_SYMBOL_ENV.get(normalized_region, f"DATA_OPS_SYMBOLS_{normalized_region.upper()}")
+        region_symbols = parse_symbols(env_map.get(region_env_key))
+        if region_symbols:
+            return region_symbols
+
+    if settings.default_symbols:
+        return list(settings.default_symbols)
+
+    if normalized_region and settings.allow_ticker_registry_universe:
         registry_symbols = load_validated_symbols(
             normalized_region,
             require_market=True,
@@ -58,9 +67,4 @@ def resolve_symbols(
         if registry_symbols:
             return registry_symbols
 
-        region_env_key = REGION_SYMBOL_ENV.get(normalized_region, f"DATA_OPS_SYMBOLS_{normalized_region.upper()}")
-        region_symbols = parse_symbols(env_map.get(region_env_key))
-        if region_symbols:
-            return region_symbols
-
-    return list(settings.default_symbols)
+    return []

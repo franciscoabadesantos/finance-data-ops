@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from finance_data_ops.settings import DataOpsSettings
+from finance_data_ops.settings import load_settings
 from flows import prefect_dataops_daily
 
 
@@ -84,7 +85,7 @@ def test_feature_build_trigger_runs_when_watermarks_are_ready(monkeypatch, tmp_p
     assert {call["explicit_end"] for call in calls} == {"2026-06-30"}
     assert deployments == [
         {
-            "name": "run_daily_feature_flow/feature-build-daily",
+            "name": "feature-build-daily/feature-build-daily",
             "parameters": {"as_of_date": "2026-06-30"},
             "timeout": None,
             "poll_interval": 10,
@@ -92,6 +93,22 @@ def test_feature_build_trigger_runs_when_watermarks_are_ready(monkeypatch, tmp_p
             "idempotency_key": "feature-build-daily:2026-06-30",
         }
     ]
+
+
+def test_feature_build_deployment_settings_default_and_override(tmp_path) -> None:
+    defaults = load_settings(env={}, cache_root=tmp_path)
+    assert defaults.feature_build_daily_deployment == "feature-build-daily/feature-build-daily"
+    assert defaults.feature_scorecard_build_deployment == ""
+
+    configured = load_settings(
+        env={
+            "FEATURE_BUILD_DAILY_DEPLOYMENT": "custom-flow/custom-daily",
+            "FEATURE_SCORECARD_BUILD_DEPLOYMENT": "scorecard-flow/scorecard-only",
+        },
+        cache_root=tmp_path,
+    )
+    assert configured.feature_build_daily_deployment == "custom-flow/custom-daily"
+    assert configured.feature_scorecard_build_deployment == "scorecard-flow/scorecard-only"
 
 
 def test_feature_build_trigger_degrades_when_soft_watermark_is_not_ready(monkeypatch, tmp_path) -> None:
@@ -177,29 +194,90 @@ def test_feature_build_trigger_skips_and_alerts_when_market_watermark_is_not_rea
     assert alerts[0]["context"]["blocked"][0]["domain"] == "market"
 
 
-def test_macro_daily_flow_invokes_feature_build_gate_after_publish(monkeypatch, tmp_path) -> None:
+def test_feature_build_trigger_uses_configured_deployment(monkeypatch, tmp_path) -> None:
+    deployments: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        prefect_dataops_daily,
+        "resolve_feature_build_watermark_gate",
+        lambda **kwargs: {
+            "status": "ready",
+            "ready": True,
+            "as_of_date": kwargs["as_of_date"],
+            "requirements": [],
+            "blocked": [],
+            "degraded": [],
+        },
+    )
+
+    def _fake_run_deployment(name, **kwargs):
+        deployments.append({"name": name, **kwargs})
+        return SimpleNamespace(id="flow-run-1", state_name="Scheduled")
+
+    monkeypatch.setattr(prefect_dataops_daily, "run_deployment", _fake_run_deployment)
+
+    settings = _settings(tmp_path)
+    result = prefect_dataops_daily.trigger_feature_build_daily_if_ready(
+        as_of_date="2026-06-30",
+        settings=settings,
+        deployment_name="custom-flow/custom-deployment",
+    )
+
+    assert result["deployment_name"] == "custom-flow/custom-deployment"
+    assert deployments[0]["name"] == "custom-flow/custom-deployment"
+
+
+def test_feature_build_trigger_wrong_deployment_error_is_clear(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        prefect_dataops_daily,
+        "resolve_feature_build_watermark_gate",
+        lambda **kwargs: {
+            "status": "ready",
+            "ready": True,
+            "as_of_date": kwargs["as_of_date"],
+            "requirements": [],
+            "blocked": [],
+            "degraded": [],
+        },
+    )
+    monkeypatch.setattr(
+        prefect_dataops_daily,
+        "run_deployment",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("deployment not found")),
+    )
+
+    try:
+        prefect_dataops_daily.trigger_feature_build_daily_if_ready(
+            as_of_date="2026-06-30",
+            settings=_settings(tmp_path),
+            deployment_name="missing/missing",
+        )
+    except RuntimeError as exc:
+        assert "Failed to trigger feature-store daily build deployment 'missing/missing'" in str(exc)
+        assert "FEATURE_BUILD_DAILY_DEPLOYMENT" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected clear deployment error")
+
+
+def test_dataops_daily_flow_invokes_feature_build_gate_after_source_domains(monkeypatch, tmp_path) -> None:
     captured: dict[str, Any] = {}
 
-    def _fake_resolve_gap_aware_window(**_kwargs):
-        return SimpleNamespace(
-            start_date="2026-06-30",
-            end_date="2026-06-30",
-            mode="normal",
-            latest_complete_canonical_date="2026-06-30",
-            gap_exists=False,
-            as_dict=lambda: {"mode": "normal", "end_date": "2026-06-30"},
-        )
+    def _fake_domain(name: str):
+        def _inner(**kwargs):
+            captured[name] = kwargs
+            return {"execution": {"end_date": "2026-06-30"}, "domain": name}
 
-    def _fake_run_dataops_macro_daily(**kwargs):
-        captured["macro_kwargs"] = kwargs
-        return {"ok": True}
+        return _inner
 
     def _fake_trigger_feature_build_daily_if_ready(**kwargs):
         captured["trigger_kwargs"] = kwargs
         return {"status": "triggered", "as_of_date": kwargs["as_of_date"]}
 
-    monkeypatch.setattr(prefect_dataops_daily, "resolve_gap_aware_window", _fake_resolve_gap_aware_window)
-    monkeypatch.setattr(prefect_dataops_daily, "run_dataops_macro_daily", _fake_run_dataops_macro_daily)
+    monkeypatch.setattr(prefect_dataops_daily.dataops_release_calendar_daily_flow, "fn", _fake_domain("release"))
+    monkeypatch.setattr(prefect_dataops_daily.dataops_macro_daily_flow, "fn", _fake_domain("macro"))
+    monkeypatch.setattr(prefect_dataops_daily.dataops_earnings_daily_flow, "fn", _fake_domain("earnings"))
+    monkeypatch.setattr(prefect_dataops_daily.dataops_fundamentals_daily_flow, "fn", _fake_domain("fundamentals"))
+    monkeypatch.setattr(prefect_dataops_daily.dataops_market_daily_flow, "fn", _fake_domain("market"))
     monkeypatch.setattr(
         prefect_dataops_daily,
         "trigger_feature_build_daily_if_ready",
@@ -207,13 +285,16 @@ def test_macro_daily_flow_invokes_feature_build_gate_after_publish(monkeypatch, 
     )
     monkeypatch.setattr(prefect_dataops_daily, "get_run_logger", lambda: logging.getLogger("test-feature-build"))
 
-    result = prefect_dataops_daily.dataops_macro_daily_flow.fn(
+    result = prefect_dataops_daily.dataops_daily_flow.fn(
+        region="all",
         end="2026-06-30",
         cache_root=str(tmp_path),
         publish_enabled=True,
+        feature_build_deployment_name="feature-build-daily/feature-build-daily",
     )
 
-    assert captured["macro_kwargs"]["end"] == "2026-06-30"
+    assert captured["macro"]["trigger_feature_build"] is False
+    assert captured["market"]["end"] == "2026-06-30"
     assert captured["trigger_kwargs"]["as_of_date"] == "2026-06-30"
-    assert captured["trigger_kwargs"]["deployment_name"] == "run_daily_feature_flow/feature-build-daily"
+    assert captured["trigger_kwargs"]["deployment_name"] == "feature-build-daily/feature-build-daily"
     assert result["feature_build_trigger"] == {"status": "triggered", "as_of_date": "2026-06-30"}

@@ -41,7 +41,12 @@ from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.ticker_registry import publish_ticker_registry
 from finance_data_ops.refresh.gap_repair import resolve_gap_aware_window, resolve_watermark_execution
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
-from finance_data_ops.settings import DataOpsSettings, load_settings
+from finance_data_ops.settings import (
+    DEFAULT_FEATURE_BUILD_DAILY_DEPLOYMENT,
+    DEFAULT_FEATURE_SCORECARD_BUILD_DEPLOYMENT,
+    DataOpsSettings,
+    load_settings,
+)
 from finance_data_ops.validation.ticker_registry import (
     build_pending_registry_row,
     fetch_registry_row_by_key,
@@ -54,7 +59,8 @@ DEFAULT_TICKER_BACKFILL_START_DATE = "1900-01-01"
 DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT = 100
 MAX_EARNINGS_HISTORY_LIMIT = 100
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
-DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME = "run_daily_feature_flow/feature-build-daily"
+DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME = DEFAULT_FEATURE_BUILD_DAILY_DEPLOYMENT
+DEFAULT_SCORECARD_BUILD_DEPLOYMENT_NAME = DEFAULT_FEATURE_SCORECARD_BUILD_DEPLOYMENT
 DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME = (
     "technical-feature-backfill/technical-feature-backfill"
 )
@@ -320,14 +326,42 @@ def _emit_feature_build_alert(
     return payload
 
 
+def resolve_feature_build_daily_deployment_name(
+    *,
+    settings: DataOpsSettings,
+    deployment_name: str | None = None,
+) -> str:
+    resolved = _normalize_optional_text(deployment_name) or settings.feature_build_daily_deployment
+    if not resolved:
+        return DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME
+    return str(resolved).strip()
+
+
+def resolve_scorecard_build_deployment_name(
+    *,
+    settings: DataOpsSettings,
+    deployment_name: str | None = None,
+) -> str:
+    return str(
+        _normalize_optional_text(deployment_name)
+        or settings.feature_scorecard_build_deployment
+        or DEFAULT_SCORECARD_BUILD_DEPLOYMENT_NAME
+        or ""
+    ).strip()
+
+
 def trigger_feature_build_daily_if_ready(
     *,
     as_of_date: str,
     settings: DataOpsSettings,
-    deployment_name: str = DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME,
+    deployment_name: str | None = None,
     timeout_seconds: float | None = None,
     extra_parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    resolved_deployment_name = resolve_feature_build_daily_deployment_name(
+        settings=settings,
+        deployment_name=deployment_name,
+    )
     gate = resolve_feature_build_watermark_gate(as_of_date=as_of_date, settings=settings)
     if not bool(gate["ready"]):
         blocked = list(gate.get("blocked") or [])
@@ -354,14 +388,21 @@ def trigger_feature_build_daily_if_ready(
         }
 
     parameters = {"as_of_date": gate["as_of_date"], **dict(extra_parameters or {})}
-    flow_run = run_deployment(
-        deployment_name,
-        parameters=parameters,
-        timeout=timeout_seconds,
-        poll_interval=10,
-        flow_run_name=f"feature-build-daily-{str(gate['as_of_date'])}",
-        idempotency_key=f"feature-build-daily:{str(gate['as_of_date'])}",
-    )
+    try:
+        flow_run = run_deployment(
+            resolved_deployment_name,
+            parameters=parameters,
+            timeout=timeout_seconds,
+            poll_interval=10,
+            flow_run_name=f"feature-build-daily-{str(gate['as_of_date'])}",
+            idempotency_key=f"feature-build-daily:{str(gate['as_of_date'])}",
+        )
+    except Exception as exc:  # noqa: BLE001 - surface Prefect deployment-contract failures clearly
+        raise RuntimeError(
+            "Failed to trigger feature-store daily build deployment "
+            f"{resolved_deployment_name!r}. Set FEATURE_BUILD_DAILY_DEPLOYMENT to a valid "
+            "Prefect deployment name in <flow-name>/<deployment-name> form."
+        ) from exc
     degraded = list(gate.get("degraded") or [])
     alert_payload = None
     if degraded:
@@ -373,7 +414,7 @@ def trigger_feature_build_daily_if_ready(
             run_id=str(flow_run.id),
             context={
                 "as_of_date": gate["as_of_date"],
-                "deployment_name": deployment_name,
+                "deployment_name": resolved_deployment_name,
                 "flow_run_id": str(flow_run.id),
                 "degraded": degraded,
             },
@@ -381,12 +422,73 @@ def trigger_feature_build_daily_if_ready(
     return {
         "status": "triggered",
         "as_of_date": gate["as_of_date"],
-        "deployment_name": deployment_name,
+        "deployment_name": resolved_deployment_name,
         "flow_run_id": str(flow_run.id),
         "flow_run_state": str(getattr(flow_run, "state_name", "") or ""),
         "parameters": parameters,
         "gate": gate,
         "alert": alert_payload,
+    }
+
+
+def trigger_scorecard_build_for_ticker(
+    *,
+    ticker: str,
+    as_of_date: str,
+    settings: DataOpsSettings,
+    publish_enabled: bool = True,
+    deployment_name: str | None = None,
+    timeout_seconds: float | None = 0,
+) -> dict[str, Any]:
+    normalized_ticker = _normalize_ticker(ticker)
+    resolved_as_of_date = pd.Timestamp(as_of_date).date().isoformat()
+    resolved_deployment_name = resolve_scorecard_build_deployment_name(
+        settings=settings,
+        deployment_name=deployment_name,
+    )
+    parameters = {"symbols": [normalized_ticker], "as_of_date": resolved_as_of_date}
+    if not bool(publish_enabled):
+        return {
+            "status": "skipped",
+            "reason": "publish_disabled",
+            "deployment_name": resolved_deployment_name,
+            "parameters": parameters,
+        }
+    if not resolved_deployment_name:
+        return {
+            "status": "skipped",
+            "reason": "deployment_not_configured",
+            "deployment_name": "",
+            "parameters": parameters,
+        }
+    try:
+        flow_run = run_deployment(
+            resolved_deployment_name,
+            parameters=parameters,
+            timeout=timeout_seconds,
+            poll_interval=10,
+            flow_run_name=f"scorecard-build-{normalized_ticker.lower()}-{resolved_as_of_date}",
+            idempotency_key=f"scorecard-build:{normalized_ticker}:{resolved_as_of_date}",
+        )
+    except Exception as exc:  # noqa: BLE001 - onboarding must expose downstream status without failing registry work
+        return {
+            "status": "failed",
+            "reason": "deployment_trigger_failed",
+            "deployment_name": resolved_deployment_name,
+            "parameters": parameters,
+            "error": (
+                "Failed to trigger feature-store scorecard deployment "
+                f"{resolved_deployment_name!r}. Set FEATURE_SCORECARD_BUILD_DEPLOYMENT to a valid "
+                "Prefect deployment name or leave it unset to disable targeted scorecard builds."
+            ),
+            "exception": str(exc),
+        }
+    return {
+        "status": "triggered",
+        "deployment_name": resolved_deployment_name,
+        "flow_run_id": str(flow_run.id),
+        "flow_run_state": str(getattr(flow_run, "state_name", "") or ""),
+        "parameters": parameters,
     }
 
 
@@ -714,8 +816,8 @@ def dataops_macro_daily_flow(
     publish_enabled: bool = True,
     allow_unhealthy: bool = False,
     force_recompute: bool = False,
-    trigger_feature_build: bool = True,
-    feature_build_deployment_name: str = DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME,
+    trigger_feature_build: bool = False,
+    feature_build_deployment_name: str | None = None,
     feature_build_timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
@@ -768,10 +870,121 @@ def dataops_macro_daily_flow(
             summary["feature_build_trigger"] = trigger_feature_build_daily_if_ready(
                 as_of_date=resolved_end,
                 settings=settings,
-                deployment_name=str(feature_build_deployment_name),
+                deployment_name=feature_build_deployment_name,
                 timeout_seconds=feature_build_timeout_seconds,
             )
     return summary
+
+
+@flow(
+    name="dataops_daily",
+    retries=0,
+    log_prints=True,
+)
+def dataops_daily_flow(
+    *,
+    symbols: str | list[str] | None = None,
+    region: str | None = "all",
+    start: str | None = None,
+    end: str | None = None,
+    lookback_days: int | None = None,
+    cache_root: str | None = None,
+    max_attempts: int | None = None,
+    publish_enabled: bool = True,
+    allow_unhealthy: bool = False,
+    force_recompute_macro: bool = False,
+    force_recompute_release_calendar: bool = False,
+    refresh_theme_etfs: bool = True,
+    trigger_feature_build: bool = True,
+    feature_build_deployment_name: str | None = None,
+    feature_build_timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Run source-domain daily refreshes, then hand off to feature-store builds."""
+    settings = load_settings(cache_root=cache_root)
+    logger = get_run_logger()
+    normalized_region = str(region or "all").strip().lower() or "all"
+    logger.info("Starting aggregate Data Ops daily flow (region=%s).", normalized_region)
+
+    summaries: dict[str, Any] = {}
+    summaries["release_calendar"] = dataops_release_calendar_daily_flow.fn(
+        end_date=end,
+        lookback_days=lookback_days,
+        cache_root=cache_root,
+        max_attempts=max_attempts,
+        publish_enabled=bool(publish_enabled),
+        allow_unhealthy=bool(allow_unhealthy),
+        force_recompute=bool(force_recompute_release_calendar),
+    )
+    summaries["macro"] = dataops_macro_daily_flow.fn(
+        start=start,
+        end=end,
+        lookback_days=lookback_days,
+        cache_root=cache_root,
+        max_attempts=max_attempts,
+        publish_enabled=bool(publish_enabled),
+        allow_unhealthy=bool(allow_unhealthy),
+        force_recompute=bool(force_recompute_macro),
+        trigger_feature_build=False,
+    )
+    summaries["earnings"] = dataops_earnings_daily_flow.fn(
+        symbols=symbols,
+        region=normalized_region,
+        cache_root=cache_root,
+        max_attempts=max_attempts,
+        publish_enabled=bool(publish_enabled),
+        allow_unhealthy=bool(allow_unhealthy),
+    )
+    summaries["fundamentals"] = dataops_fundamentals_daily_flow.fn(
+        symbols=symbols,
+        region=normalized_region,
+        cache_root=cache_root,
+        max_attempts=max_attempts,
+        publish_enabled=bool(publish_enabled),
+        allow_unhealthy=bool(allow_unhealthy),
+        refresh_theme_etfs=bool(refresh_theme_etfs),
+    )
+    summaries["market"] = dataops_market_daily_flow.fn(
+        symbols=symbols,
+        start=start,
+        end=end,
+        lookback_days=lookback_days,
+        region=normalized_region,
+        cache_root=cache_root,
+        max_attempts=max_attempts,
+        publish_enabled=bool(publish_enabled),
+        allow_unhealthy=bool(allow_unhealthy),
+    )
+
+    market_execution = dict((summaries.get("market") or {}).get("execution") or {})
+    as_of_date = str(end or market_execution.get("end_date") or datetime.now(UTC).date().isoformat())
+    if bool(trigger_feature_build):
+        if not bool(publish_enabled):
+            feature_build_trigger = {
+                "status": "skipped",
+                "reason": "publish_disabled",
+                "as_of_date": as_of_date,
+            }
+        else:
+            feature_build_trigger = trigger_feature_build_daily_if_ready(
+                as_of_date=as_of_date,
+                settings=settings,
+                deployment_name=feature_build_deployment_name,
+                timeout_seconds=feature_build_timeout_seconds,
+            )
+    else:
+        feature_build_trigger = {
+            "status": "skipped",
+            "reason": "trigger_disabled",
+            "as_of_date": as_of_date,
+        }
+
+    return {
+        "status": "completed",
+        "region": normalized_region,
+        "as_of_date": as_of_date,
+        "domains": summaries,
+        "feature_build_trigger": feature_build_trigger,
+    }
 
 
 @flow(
@@ -891,6 +1104,9 @@ def dataops_ticker_backfill_flow(
     trigger_technical_features: bool = True,
     technical_features_deployment_name: str = DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME,
     technical_features_timeout_seconds: float | None = 7200,
+    trigger_scorecard_build: bool = True,
+    scorecard_build_deployment_name: str | None = None,
+    scorecard_build_timeout_seconds: float | None = 0,
     isolated_cache: bool = True,
 ) -> dict[str, Any]:
     # Onboarding backfills run in parallel (bulk). Give each run its OWN cache_root so concurrent
@@ -918,6 +1134,7 @@ def dataops_ticker_backfill_flow(
     earnings_summary: dict[str, Any] | None = None
     fundamentals_summary: dict[str, Any] | None = None
     technical_features_summary: dict[str, Any] | None = None
+    scorecard_build_summary: dict[str, Any] | None = None
     failed_step: str | None = None
     error_message: str | None = None
     flow_status = "success"
@@ -994,6 +1211,29 @@ def dataops_ticker_backfill_flow(
                 },
             }
 
+        if bool(trigger_scorecard_build):
+            scorecard_build_summary = trigger_scorecard_build_for_ticker(
+                ticker=normalized_ticker,
+                as_of_date=market_end,
+                settings=settings,
+                publish_enabled=bool(publish_enabled),
+                deployment_name=scorecard_build_deployment_name,
+                timeout_seconds=scorecard_build_timeout_seconds,
+            )
+        else:
+            scorecard_build_summary = {
+                "status": "skipped",
+                "reason": "trigger_disabled",
+                "deployment_name": resolve_scorecard_build_deployment_name(
+                    settings=settings,
+                    deployment_name=scorecard_build_deployment_name,
+                ),
+                "parameters": {
+                    "symbols": [normalized_ticker],
+                    "as_of_date": market_end,
+                },
+            }
+
         ended_at = datetime.now(UTC)
         _record_ticker_backfill_status(
             cache_root=settings.cache_root,
@@ -1025,6 +1265,7 @@ def dataops_ticker_backfill_flow(
                 "earnings": earnings_summary or {},
                 "fundamentals": fundamentals_summary or {},
                 "technical_features": technical_features_summary or {},
+                "scorecard_build": scorecard_build_summary or {},
             },
         }
     except Exception as exc:
@@ -1063,6 +1304,7 @@ def dataops_ticker_backfill_flow(
                     "earnings": _to_json_text(earnings_summary),
                     "fundamentals": _to_json_text(fundamentals_summary),
                     "technical_features": _to_json_text(technical_features_summary),
+                    "scorecard_build": _to_json_text(scorecard_build_summary),
                 },
             },
         )
@@ -1157,6 +1399,7 @@ def dataops_ticker_onboarding_flow(
     backfill_deployment_name: str = "dataops_ticker_backfill/ticker-backfill",
     deployment_timeout_seconds: int = 7200,
     trigger_technical_features: bool = True,
+    trigger_scorecard_build: bool = True,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
     normalized_input = _normalize_ticker(input_symbol)
@@ -1272,6 +1515,7 @@ def dataops_ticker_onboarding_flow(
             "history_limit": resolved_history_limit,
             "publish_enabled": bool(publish_enabled),
             "trigger_technical_features": bool(trigger_technical_features),
+            "trigger_scorecard_build": bool(trigger_scorecard_build),
         },
         timeout=float(deployment_timeout_seconds),
         poll_interval=10,
@@ -1317,6 +1561,7 @@ def dataops_ticker_onboarding_bulk_flow(
     publish_enabled: bool = True,
     onboarding_deployment_name: str = "dataops_ticker_onboarding/ticker-onboarding",
     trigger_technical_features: bool = True,
+    trigger_scorecard_build: bool = True,
     skip_existing: bool = True,
 ) -> dict[str, Any]:
     """Urgency / bulk onboarding: schedule the onboarding deployment for many tickers.
@@ -1374,6 +1619,7 @@ def dataops_ticker_onboarding_bulk_flow(
                 "history_limit": history_limit,
                 "publish_enabled": bool(publish_enabled),
                 "trigger_technical_features": bool(trigger_technical_features),
+                "trigger_scorecard_build": bool(trigger_scorecard_build),
             },
             timeout=0,  # schedule and return; the work pool runs it concurrently
             # Name the run with the backend's deterministic convention so /tickers/status can find
@@ -1402,6 +1648,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         "domain",
         choices=[
             "market",
+            "daily",
             "fundamentals",
             "earnings",
             "macro",
@@ -1447,13 +1694,18 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-feature-build-trigger",
         action="store_true",
-        help="Macro/ticker-backfill only. Skip the downstream feature-build deployment trigger.",
+        help="Daily/macro/ticker-backfill only. Skip downstream feature-store deployment triggers.",
+    )
+    parser.add_argument(
+        "--feature-build-trigger",
+        action="store_true",
+        help="Macro only. Opt in to the downstream feature-build trigger from the macro flow.",
     )
     parser.add_argument(
         "--feature-build-deployment-name",
         type=str,
-        default=DEFAULT_FEATURE_BUILD_DEPLOYMENT_NAME,
-        help="Macro only. Prefect deployment name for the downstream feature build.",
+        default=None,
+        help="Daily/macro only. Prefect deployment name for the downstream feature build.",
     )
     parser.add_argument("--sleep-seconds", type=float, default=0.0, help="Release-calendar only. Provider pacing.")
     parser.add_argument("--official-start-year", type=int, default=None, help="Release-calendar official start year.")
@@ -1472,7 +1724,18 @@ def main() -> None:
         "allow_unhealthy": bool(args.allow_unhealthy),
     }
 
-    if args.domain == "market":
+    if args.domain == "daily":
+        result = dataops_daily_flow(
+            **common_kwargs,
+            start=args.start,
+            end=args.end,
+            lookback_days=args.lookback_days,
+            force_recompute_macro=bool(args.force_recompute),
+            force_recompute_release_calendar=bool(args.force_recompute),
+            trigger_feature_build=not bool(args.no_feature_build_trigger),
+            feature_build_deployment_name=args.feature_build_deployment_name,
+        )
+    elif args.domain == "market":
         result = dataops_market_daily_flow(
             **common_kwargs,
             start=args.start,
@@ -1496,8 +1759,8 @@ def main() -> None:
             publish_enabled=not bool(args.no_publish),
             allow_unhealthy=bool(args.allow_unhealthy),
             force_recompute=bool(args.force_recompute),
-            trigger_feature_build=not bool(args.no_feature_build_trigger),
-            feature_build_deployment_name=str(args.feature_build_deployment_name),
+            trigger_feature_build=bool(args.feature_build_trigger) and not bool(args.no_feature_build_trigger),
+            feature_build_deployment_name=args.feature_build_deployment_name,
         )
     elif args.domain == "release-calendar":
         result = dataops_release_calendar_daily_flow(
@@ -1526,6 +1789,7 @@ def main() -> None:
                 publish_enabled=not bool(args.no_publish),
                 allow_unhealthy=bool(args.allow_unhealthy),
                 trigger_technical_features=not bool(args.no_feature_build_trigger),
+                trigger_scorecard_build=not bool(args.no_feature_build_trigger),
             )
         elif args.domain == "ticker-validation":
             result = dataops_ticker_validation_flow(
@@ -1549,6 +1813,7 @@ def main() -> None:
                 cache_root=args.cache_root,
                 publish_enabled=not bool(args.no_publish),
                 trigger_technical_features=not bool(args.no_feature_build_trigger),
+                trigger_scorecard_build=not bool(args.no_feature_build_trigger),
             )
     print(json.dumps(result, indent=2, default=str))
 
