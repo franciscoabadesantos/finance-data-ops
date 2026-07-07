@@ -281,10 +281,12 @@ def test_ticker_backfill_earnings_empty_is_best_effort_and_still_triggers_techni
 def test_bulk_onboarding_schedules_runs_dedupes_and_skips_active(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
     scheduled: list[tuple[str, object]] = []
+    run_names: list[str] = []
 
     def _fake_run_deployment(name: str, **kwargs):
         symbol = kwargs["parameters"]["input_symbol"]
         scheduled.append((name, symbol))
+        run_names.append(kwargs.get("flow_run_name"))
         return FakeDeploymentRun(id=f"run-{symbol}", state_name="Scheduled")
 
     def _fake_fetch(**kwargs):
@@ -313,3 +315,5 @@ def test_bulk_onboarding_schedules_runs_dedupes_and_skips_active(monkeypatch, tm
     assert [row["ticker"] for row in result["skipped"]] == ["AAA"]
     # every scheduled run targeted the onboarding deployment
     assert {name for name, _ in scheduled} == {"dataops_ticker_onboarding/ticker-onboarding"}
+    # runs are named with the backend's deterministic convention so /tickers/status can find them
+    assert set(run_names) == {"onboard-bbb-us-default", "onboard-ccc-us-default"}

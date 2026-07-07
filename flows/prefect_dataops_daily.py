@@ -844,6 +844,13 @@ def _cleanup_isolated_cache(path: str | None) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _backend_onboarding_run_name(registry_key: str) -> str:
+    """Onboarding flow-run name the backend expects for status lookup (finance-backend
+    OnboardingService._onboarding_run_name). Must stay in sync with it."""
+    slug = str(registry_key or "").strip().lower().replace("|", "-").replace(" ", "-")
+    return f"onboard-{slug}" if slug else "onboard-unknown"
+
+
 def _run_best_effort_backfill_step(
     step: str,
     fn: Callable[[], dict[str, Any]],
@@ -1334,15 +1341,17 @@ def dataops_ticker_onboarding_bulk_flow(
             continue
         seen.add(ticker)
 
+        pending = build_pending_registry_row(
+            input_symbol=ticker,
+            region=normalized_region,
+            exchange=normalized_exchange,
+            instrument_type="unknown",
+        )
+        registry_key = str(pending["registry_key"])
+
         if skip_existing:
-            pending = build_pending_registry_row(
-                input_symbol=ticker,
-                region=normalized_region,
-                exchange=normalized_exchange,
-                instrument_type="unknown",
-            )
             existing = fetch_registry_row_by_key(
-                registry_key=str(pending["registry_key"]),
+                registry_key=registry_key,
                 cache_root=settings.cache_root,
                 database_dsn=settings.database_dsn,
             )
@@ -1367,7 +1376,10 @@ def dataops_ticker_onboarding_bulk_flow(
                 "trigger_technical_features": bool(trigger_technical_features),
             },
             timeout=0,  # schedule and return; the work pool runs it concurrently
-            flow_run_name=f"onboarding-{ticker.lower()}",
+            # Name the run with the backend's deterministic convention so /tickers/status can find
+            # it (the backend looks up onboard-<registry_key>); otherwise bulk runs show as
+            # pending_backfill even when they completed with data.
+            flow_run_name=_backend_onboarding_run_name(registry_key),
         )
         scheduled.append({"ticker": ticker, "flow_run_id": str(run.id)})
 
