@@ -10,7 +10,9 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -837,6 +839,11 @@ def dataops_release_calendar_daily_flow(
     return summary
 
 
+def _cleanup_isolated_cache(path: str | None) -> None:
+    if path:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def _run_best_effort_backfill_step(
     step: str,
     fn: Callable[[], dict[str, Any]],
@@ -877,7 +884,14 @@ def dataops_ticker_backfill_flow(
     trigger_technical_features: bool = True,
     technical_features_deployment_name: str = DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME,
     technical_features_timeout_seconds: float | None = 7200,
+    isolated_cache: bool = True,
 ) -> dict[str, Any]:
+    # Onboarding backfills run in parallel (bulk). Give each run its OWN cache_root so concurrent
+    # runs never share parquet cache tables (concurrent read-modify-write corrupts them). The data
+    # still publishes to Postgres, so isolating the scratch cache loses nothing.
+    isolated_cache_dir = tempfile.mkdtemp(prefix="ticker-backfill-") if isolated_cache else None
+    if isolated_cache_dir is not None:
+        cache_root = isolated_cache_dir
     settings = load_settings(cache_root=cache_root)
     normalized_ticker = _normalize_ticker(ticker)
     market_start, market_end = _resolve_ticker_backfill_window(
@@ -990,6 +1004,7 @@ def dataops_ticker_backfill_flow(
         )
 
         logger.info("Ticker backfill completed (ticker=%s).", normalized_ticker)
+        _cleanup_isolated_cache(isolated_cache_dir)
         return {
             "run_id": run_id,
             "ticker": normalized_ticker,
@@ -1046,6 +1061,7 @@ def dataops_ticker_backfill_flow(
         )
         emit_alert(payload)
         emit_alert_webhook(payload, webhook_url=settings.alert_webhook_url)
+        _cleanup_isolated_cache(isolated_cache_dir)
         raise
 
 

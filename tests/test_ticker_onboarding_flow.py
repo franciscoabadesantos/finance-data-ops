@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 
 import pytest
 
@@ -176,6 +177,7 @@ def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_techni
         history_limit=120,
         cache_root=str(tmp_path),
         publish_enabled=True,
+        isolated_cache=False,
     )
 
     market_call = calls["market"]
@@ -196,6 +198,38 @@ def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_techni
         "start": DEFAULT_TICKER_BACKFILL_START_DATE,
         "end": "2026-04-18",
     }
+
+
+def test_ticker_backfill_isolated_cache_uses_temp_dir_and_cleans_up(monkeypatch, tmp_path) -> None:
+    """Each onboarding backfill must run in its own cache_root (no shared parquet contention)."""
+    monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
+    seen: dict[str, object] = {}
+
+    def _fake_market(**kwargs):
+        seen["cache_root"] = kwargs.get("cache_root")
+        return {"run_id": "market-run"}
+
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_market_daily", _fake_market)
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_earnings_daily", lambda **k: {"run_id": "e"})
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_fundamentals_daily", lambda **k: {"run_id": "f"})
+    monkeypatch.setattr(
+        "flows.prefect_dataops_daily.run_deployment",
+        lambda name, **kwargs: FakeDeploymentRun(id="technical-run", state_name="Completed"),
+    )
+
+    result = dataops_ticker_backfill_flow.fn(
+        ticker="aapl",
+        end="2026-04-18",
+        cache_root=str(tmp_path),
+        publish_enabled=True,
+        isolated_cache=True,
+    )
+
+    used = str(seen["cache_root"])
+    assert used != str(tmp_path)  # ran in an isolated dir, not the shared cache
+    assert "ticker-backfill-" in used
+    assert not os.path.exists(used)  # temp cache cleaned up after the run
+    assert result["status"] == "success"
 
 
 def test_ticker_backfill_earnings_empty_is_best_effort_and_still_triggers_technicals(
