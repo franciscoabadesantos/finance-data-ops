@@ -1255,6 +1255,13 @@ def dataops_ticker_onboarding_flow(
         flow_run_name=f"onboarding-backfill-{promoted_symbol.lower()}",
     )
     backfill_state = str(backfill_run.state_name or "")
+    if backfill_state.strip().lower() != "completed":
+        # Do not report onboarding success when the backfill child failed: the parent run must
+        # fail so the registry/status never shows "ready" without data (validation already ran,
+        # so the ticker stays validated_full/pending_backfill and is re-triggerable).
+        raise RuntimeError(
+            f"Onboarding backfill did not complete for {promoted_symbol} (state={backfill_state})."
+        )
     return {
         "input_symbol": normalized_input,
         "promoted_symbol": promoted_symbol,

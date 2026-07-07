@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -49,5 +51,16 @@ def write_parquet_table(
         if dedupe_cols:
             out = out.drop_duplicates(subset=dedupe_cols, keep="last")
 
-    out.to_parquet(path, index=False)
+    # Write atomically: a concurrent reader (e.g. a parallel bulk backfill) must never observe a
+    # partially-written parquet file (which surfaces as "Couldn't deserialize thrift: No more data
+    # to read"). Write to a temp file in the same directory, then atomically replace.
+    tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".parquet.tmp")
+    os.close(tmp_fd)
+    try:
+        out.to_parquet(tmp_name, index=False)
+        os.replace(tmp_name, path)
+    except BaseException:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
+        raise
     return path

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 
+import pytest
+
 from finance_data_ops.validation.ticker_registry import read_ticker_registry
 from flows.prefect_dataops_daily import (
     DEFAULT_TICKER_BACKFILL_START_DATE,
@@ -55,6 +57,35 @@ def test_onboarding_promotable_triggers_backfill(monkeypatch, tmp_path) -> None:
     assert calls[1][1]["parameters"]["ticker"] == "ANZ.AX"
     assert calls[1][1]["parameters"]["history_limit"] == 100
     assert calls[1][1]["parameters"]["trigger_technical_features"] is True
+
+
+def test_onboarding_backfill_failure_fails_the_flow(monkeypatch, tmp_path) -> None:
+    """A failed backfill child must fail the onboarding parent (never report ready without data)."""
+    monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
+
+    def _fake_run_deployment(name: str, **kwargs):
+        if "ticker_validation" in name:
+            return FakeDeploymentRun(id="val-run", state_name="Completed")
+        return FakeDeploymentRun(id="bf-run", state_name="Failed")
+
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_deployment", _fake_run_deployment)
+    monkeypatch.setattr(
+        "flows.prefect_dataops_daily.fetch_registry_row_by_key",
+        lambda **kwargs: {
+            "status": "active",
+            "promotion_status": "validated_full",
+            "normalized_symbol": "CELH",
+            "validation_reason": "all_domains_supported",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="backfill did not complete"):
+        dataops_ticker_onboarding_flow.fn(
+            input_symbol="CELH",
+            region="us",
+            cache_root=str(tmp_path),
+            publish_enabled=False,
+        )
 
 
 def test_onboarding_rejected_does_not_trigger_backfill(monkeypatch, tmp_path) -> None:
