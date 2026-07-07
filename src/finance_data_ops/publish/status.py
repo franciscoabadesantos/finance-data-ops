@@ -1,4 +1,9 @@
-"""Publish operational status/freshness/coverage surfaces."""
+"""Publish operational status/freshness/coverage surfaces.
+
+`symbol_data_coverage` is a diagnostic publication surface. It is useful for
+operator visibility and per-domain refresh outcomes, but it is not the
+canonical tracked-universe or product-readiness contract.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,8 @@ import json
 from typing import Any
 
 from finance_data_ops.publish.client import Publisher
+
+SYMBOL_DATA_COVERAGE_SEMANTICS = "diagnostic"
 
 
 def publish_status_surfaces(

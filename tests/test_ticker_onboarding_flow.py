@@ -191,6 +191,11 @@ def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_techni
     assert earnings_call["history_limit"] == 100
     assert result["requested_history_limit"] == 120
     assert result["history_limit"] == 100
+    assert result["materialization_status"] == {
+        "source_data_status": "complete",
+        "technical_features_status": "triggered",
+        "scorecard_build_status": "skipped",
+    }
     assert result["steps"]["technical_features"]["flow_run_id"] == "technical-run"
     assert result["steps"]["scorecard_build"]["status"] == "skipped"
     assert result["steps"]["scorecard_build"]["reason"] == "deployment_not_configured"
@@ -232,6 +237,7 @@ def test_ticker_backfill_isolated_cache_uses_temp_dir_and_cleans_up(monkeypatch,
     assert "ticker-backfill-" in used
     assert not os.path.exists(used)  # temp cache cleaned up after the run
     assert result["status"] == "success"
+    assert result["materialization_status"]["source_data_status"] == "complete"
 
 
 def test_ticker_backfill_triggers_configured_scorecard_build_after_technicals(
@@ -312,6 +318,7 @@ def test_ticker_backfill_scorecard_trigger_failure_is_reported_not_raised(
 
     assert result["status"] == "success"
     assert result["steps"]["technical_features"]["flow_run_id"] == "technical-run"
+    assert result["materialization_status"]["scorecard_build_status"] == "failed"
     assert result["steps"]["scorecard_build"]["status"] == "failed"
     assert "FEATURE_SCORECARD_BUILD_DEPLOYMENT" in result["steps"]["scorecard_build"]["error"]
 
@@ -359,6 +366,7 @@ def test_ticker_backfill_earnings_empty_is_best_effort_and_still_triggers_techni
     assert result["steps"]["earnings"]["status"] == "skipped"
     assert result["steps"]["earnings"]["best_effort"] is True
     assert result["steps"]["fundamentals"]["status"] == "skipped"
+    assert result["materialization_status"]["source_data_status"] == "partial"
     assert "deployment" in calls
 
 

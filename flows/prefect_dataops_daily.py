@@ -546,6 +546,9 @@ def _record_ticker_backfill_status(
     history_limit: int,
     failed_step: str | None,
     error_message: str | None,
+    source_data_status: str | None = None,
+    technical_features_status: str | None = None,
+    scorecard_build_status: str | None = None,
 ) -> None:
     existing = read_parquet_table("ticker_backfill_status", cache_root=cache_root, required=False)
     previous_last_success = None
@@ -569,6 +572,9 @@ def _record_ticker_backfill_status(
                 "history_limit": int(history_limit),
                 "failed_step": failed_step,
                 "error_message": str(error_message or "") or None,
+                "source_data_status": str(source_data_status or "") or None,
+                "technical_features_status": str(technical_features_status or "") or None,
+                "scorecard_build_status": str(scorecard_build_status or "") or None,
                 "started_at": started_at.isoformat(),
                 "ended_at": ended_at.isoformat(),
                 "last_success_at": last_success_at,
@@ -1234,6 +1240,13 @@ def dataops_ticker_backfill_flow(
                 },
             }
 
+        materialization_status = _ticker_backfill_materialization_status(
+            market_summary=market_summary,
+            earnings_summary=earnings_summary,
+            fundamentals_summary=fundamentals_summary,
+            technical_features_summary=technical_features_summary,
+            scorecard_build_summary=scorecard_build_summary,
+        )
         ended_at = datetime.now(UTC)
         _record_ticker_backfill_status(
             cache_root=settings.cache_root,
@@ -1248,6 +1261,9 @@ def dataops_ticker_backfill_flow(
             history_limit=resolved_history_limit,
             failed_step=None,
             error_message=None,
+            source_data_status=materialization_status["source_data_status"],
+            technical_features_status=materialization_status["technical_features_status"],
+            scorecard_build_status=materialization_status["scorecard_build_status"],
         )
 
         logger.info("Ticker backfill completed (ticker=%s).", normalized_ticker)
@@ -1260,6 +1276,7 @@ def dataops_ticker_backfill_flow(
             "market_window": {"start": market_start, "end": market_end},
             "history_limit": resolved_history_limit,
             "requested_history_limit": requested_history_limit,
+            "materialization_status": materialization_status,
             "steps": {
                 "market": market_summary or {},
                 "earnings": earnings_summary or {},
@@ -1285,6 +1302,9 @@ def dataops_ticker_backfill_flow(
             history_limit=resolved_history_limit,
             failed_step=failed_step,
             error_message=error_message,
+            source_data_status="failed" if failed_step == "market" else "partial",
+            technical_features_status="failed" if failed_step == "technical_features" else None,
+            scorecard_build_status=None,
         )
 
         payload = build_alert_payload(
@@ -1312,6 +1332,28 @@ def dataops_ticker_backfill_flow(
         emit_alert_webhook(payload, webhook_url=settings.alert_webhook_url)
         _cleanup_isolated_cache(isolated_cache_dir)
         raise
+
+
+def _ticker_backfill_materialization_status(
+    *,
+    market_summary: dict[str, Any] | None,
+    earnings_summary: dict[str, Any] | None,
+    fundamentals_summary: dict[str, Any] | None,
+    technical_features_summary: dict[str, Any] | None,
+    scorecard_build_summary: dict[str, Any] | None,
+) -> dict[str, str]:
+    source_steps = [earnings_summary or {}, fundamentals_summary or {}]
+    if not market_summary:
+        source_data_status = "failed"
+    elif any(str(step.get("status") or "").lower() == "skipped" for step in source_steps):
+        source_data_status = "partial"
+    else:
+        source_data_status = "complete"
+    return {
+        "source_data_status": source_data_status,
+        "technical_features_status": str((technical_features_summary or {}).get("status") or "unknown"),
+        "scorecard_build_status": str((scorecard_build_summary or {}).get("status") or "unknown"),
+    }
 
 
 @flow(
