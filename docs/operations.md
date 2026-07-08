@@ -96,7 +96,7 @@ Optional:
 - `DATA_OPS_ALERT_WEBHOOK_URL`
 - `DATA_OPS_SYMBOLS_US` / `DATA_OPS_SYMBOLS_EU` / `DATA_OPS_SYMBOLS_APAC`
 - `FEATURE_BUILD_DAILY_DEPLOYMENT` (default `feature-build-daily/feature-build-daily`)
-- `FEATURE_SCORECARD_BUILD_DEPLOYMENT` (optional targeted onboarding scorecard build)
+- `FEATURE_SCORECARD_BUILD_DEPLOYMENT` (default `scorecard-daily/scorecard-daily`; targeted onboarding scorecard build)
 - `DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE` (default `false`; migration-only fallback)
 
 ## Healthy run checks

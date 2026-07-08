@@ -19,7 +19,7 @@ definitions:
         DATA_OPS_ALERT_WEBHOOK_URL: "{{ prefect.blocks.secret.data-ops-alert-webhook-url }}"
         DATA_OPS_SYMBOL_BATCH_SIZE: "100"
         FEATURE_BUILD_DAILY_DEPLOYMENT: "feature-build-daily/feature-build-daily"
-        FEATURE_SCORECARD_BUILD_DEPLOYMENT: ""
+        FEATURE_SCORECARD_BUILD_DEPLOYMENT: "scorecard-daily/scorecard-daily"
         DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE: "false"
         DATA_OPS_DAILY_INFERENCE_COMMAND: "{{ prefect.blocks.secret.data-ops-daily-inference-command }}"
         DATA_OPS_DAILY_INFERENCE_CONFIG_REF: "{{ prefect.blocks.secret.data-ops-daily-inference-config-ref }}"

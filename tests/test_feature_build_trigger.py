@@ -98,7 +98,7 @@ def test_feature_build_trigger_runs_when_watermarks_are_ready(monkeypatch, tmp_p
 def test_feature_build_deployment_settings_default_and_override(tmp_path) -> None:
     defaults = load_settings(env={}, cache_root=tmp_path)
     assert defaults.feature_build_daily_deployment == "feature-build-daily/feature-build-daily"
-    assert defaults.feature_scorecard_build_deployment == ""
+    assert defaults.feature_scorecard_build_deployment == "scorecard-daily/scorecard-daily"
 
     configured = load_settings(
         env={

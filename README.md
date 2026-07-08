@@ -125,7 +125,7 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
   - Region is handled via deployment parameters/flow logic (`region`) instead of per-region deployments
   - Daily symbol resolution order: deployment `symbols` override -> `DATA_OPS_SYMBOLS_<REGION>` -> `DATA_OPS_SYMBOLS`
   - `ticker_registry` is pipeline state for onboarding/validation, not the tracked-universe source of truth. The registry fallback is migration-only and requires `DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE=true`.
-  - Feature-store handoff is config-driven: `FEATURE_BUILD_DAILY_DEPLOYMENT` defaults to `feature-build-daily/feature-build-daily`; optional targeted onboarding scorecard builds use `FEATURE_SCORECARD_BUILD_DEPLOYMENT`.
+  - Feature-store handoff is config-driven: `FEATURE_BUILD_DAILY_DEPLOYMENT` defaults to `feature-build-daily/feature-build-daily`; targeted onboarding scorecard builds use `FEATURE_SCORECARD_BUILD_DEPLOYMENT`, defaulting to `scorecard-daily/scorecard-daily`.
   - Cadence strategy (weekday UTC):
     - Aggregate source handoff: `23:10`
     - Market: `06:30`, `14:30`, `22:30` (higher freshness priority)

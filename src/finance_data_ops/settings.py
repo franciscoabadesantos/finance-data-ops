@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_FEATURE_BUILD_DAILY_DEPLOYMENT = "feature-build-daily/feature-build-daily"
-DEFAULT_FEATURE_SCORECARD_BUILD_DEPLOYMENT = ""
+DEFAULT_FEATURE_SCORECARD_BUILD_DEPLOYMENT = "scorecard-daily/scorecard-daily"
 
 
 def discover_repo_root(start: Path | None = None) -> Path:
@@ -76,7 +76,9 @@ def load_settings(
     feature_build_daily_deployment = str(
         env_map.get("FEATURE_BUILD_DAILY_DEPLOYMENT") or DEFAULT_FEATURE_BUILD_DAILY_DEPLOYMENT
     ).strip()
-    feature_scorecard_build_deployment = str(env_map.get("FEATURE_SCORECARD_BUILD_DEPLOYMENT") or "").strip()
+    feature_scorecard_build_deployment = str(
+        env_map.get("FEATURE_SCORECARD_BUILD_DEPLOYMENT") or DEFAULT_FEATURE_SCORECARD_BUILD_DEPLOYMENT
+    ).strip()
     allow_ticker_registry_universe = _parse_bool(env_map.get("DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE"))
 
     return DataOpsSettings(

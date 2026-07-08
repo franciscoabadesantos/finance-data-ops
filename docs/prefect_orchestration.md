@@ -53,7 +53,7 @@ Deployment contract:
 
 - `FEATURE_BUILD_DAILY_DEPLOYMENT` is the Prefect deployment name for the full daily feature-store build.
 - Self-host default: `feature-build-daily/feature-build-daily`.
-- `FEATURE_SCORECARD_BUILD_DEPLOYMENT` is optional. When set, ticker onboarding schedules a targeted scorecard-only build after source data and technical feature backfill complete. When unset, onboarding reports `scorecard_build.status=skipped` with `reason=deployment_not_configured`.
+- `FEATURE_SCORECARD_BUILD_DEPLOYMENT` is the Prefect deployment name for targeted onboarding scorecard-only builds. Self-host default: `scorecard-daily/scorecard-daily`. Ticker onboarding schedules a targeted scorecard-only build after source data and technical feature backfill complete. If no scorecard deployment is configured, onboarding reports `scorecard_build.status=skipped` with `reason=deployment_not_configured`.
 
 Orchestration order:
 

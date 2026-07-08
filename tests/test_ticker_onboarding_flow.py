@@ -143,11 +143,11 @@ def test_onboarding_validation_failure_persists_rejected_row(monkeypatch, tmp_pa
     assert str(row["validation_reason"]).startswith("validation_flow_state_failed")
 
 
-def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_technicals(
+def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_features(
     monkeypatch,
     tmp_path,
 ) -> None:
-    calls: dict[str, object] = {}
+    calls: dict[str, object] = {"deployments": []}
     monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
 
     def _fake_market(**kwargs):
@@ -163,8 +163,12 @@ def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_techni
         return {"run_id": "fundamentals-run"}
 
     def _fake_run_deployment(name: str, **kwargs):
-        calls["deployment"] = {"name": name, **dict(kwargs)}
-        return FakeDeploymentRun(id="technical-run", state_name="Completed")
+        deployment_calls = calls["deployments"]
+        assert isinstance(deployment_calls, list)
+        deployment_calls.append({"name": name, **dict(kwargs)})
+        if name == "technical-feature-backfill/technical-feature-backfill":
+            return FakeDeploymentRun(id="technical-run", state_name="Completed")
+        return FakeDeploymentRun(id="scorecard-run", state_name="Scheduled")
 
     monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_market_daily", _fake_market)
     monkeypatch.setattr("flows.prefect_dataops_daily.run_dataops_earnings_daily", _fake_earnings)
@@ -182,10 +186,10 @@ def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_techni
 
     market_call = calls["market"]
     earnings_call = calls["earnings"]
-    deployment_call = calls["deployment"]
+    deployment_calls = calls["deployments"]
     assert isinstance(market_call, dict)
     assert isinstance(earnings_call, dict)
-    assert isinstance(deployment_call, dict)
+    assert isinstance(deployment_calls, list)
     assert market_call["start"] == DEFAULT_TICKER_BACKFILL_START_DATE
     assert market_call["end"] == "2026-04-18"
     assert earnings_call["history_limit"] == 100
@@ -194,17 +198,20 @@ def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_techni
     assert result["materialization_status"] == {
         "source_data_status": "complete",
         "technical_features_status": "triggered",
-        "scorecard_build_status": "skipped",
+        "scorecard_build_status": "triggered",
     }
     assert result["steps"]["technical_features"]["flow_run_id"] == "technical-run"
-    assert result["steps"]["scorecard_build"]["status"] == "skipped"
-    assert result["steps"]["scorecard_build"]["reason"] == "deployment_not_configured"
-    assert deployment_call["name"] == "technical-feature-backfill/technical-feature-backfill"
-    assert deployment_call["parameters"] == {
+    assert result["steps"]["scorecard_build"]["status"] == "triggered"
+    assert result["steps"]["scorecard_build"]["flow_run_id"] == "scorecard-run"
+    assert len(deployment_calls) == 2
+    assert deployment_calls[0]["name"] == "technical-feature-backfill/technical-feature-backfill"
+    assert deployment_calls[0]["parameters"] == {
         "symbols": ["AAPL"],
         "start": DEFAULT_TICKER_BACKFILL_START_DATE,
         "end": "2026-04-18",
     }
+    assert deployment_calls[1]["name"] == "scorecard-daily/scorecard-daily"
+    assert deployment_calls[1]["parameters"] == {"symbols": ["AAPL"], "as_of_date": "2026-04-18"}
 
 
 def test_ticker_backfill_isolated_cache_uses_temp_dir_and_cleans_up(monkeypatch, tmp_path) -> None:
