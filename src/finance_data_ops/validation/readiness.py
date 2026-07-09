@@ -55,7 +55,7 @@ def build_ticker_readiness_rows(
     feature-store product surface and can lag source/technical readiness.
     """
 
-    registry_by_symbol = _registry_rows_by_symbol(registry_frame)
+    registry_by_symbol = _primary_registry_rows_by_symbol(registry_frame)
     coverage_by_symbol = _rows_by_symbol(coverage_frame)
     price_stats = _materialized_stats(prices_frame, preferred_date_cols=("price_date", "date"))
     technical_stats = _materialized_stats(
@@ -130,6 +130,7 @@ def build_readiness_audit(
     technicals_frame: pd.DataFrame | None,
     scorecard_frame: pd.DataFrame | None,
     coverage_frame: pd.DataFrame | None = None,
+    readiness_frame: pd.DataFrame | None = None,
 ) -> ReadinessAudit:
     rows = build_ticker_readiness_rows(
         registry_frame=registry_frame,
@@ -138,6 +139,8 @@ def build_readiness_audit(
         scorecard_frame=scorecard_frame,
         coverage_frame=coverage_frame,
     )
+    registry_rows_by_symbol = _registry_rows_by_symbol(registry_frame)
+    readiness_by_symbol = _rows_by_symbol(readiness_frame)
     issues: list[dict[str, Any]] = []
     for row in rows:
         ticker = str(row["ticker"])
@@ -153,9 +156,17 @@ def build_readiness_audit(
             issues.append(_issue("prices_without_technicals", ticker, row))
         if has_technicals and not has_scorecard:
             issues.append(_issue("technicals_without_scorecard", ticker, row))
-        if registry_status == "rejected" and (has_prices or has_technicals or has_scorecard):
+        if (
+            registry_status == "rejected"
+            and (has_prices or has_technicals or has_scorecard)
+            and not _is_rejected_shadow_with_tracked_canonical(
+                ticker=ticker,
+                registry_rows=registry_rows_by_symbol.get(ticker, []),
+                readiness_row=readiness_by_symbol.get(ticker, {}),
+            )
+        ):
             issues.append(_issue("rejected_with_materialized_data", ticker, row))
-        if bool(row.get("is_placeholder_symbol")):
+        if bool(row.get("is_placeholder_symbol")) and not _is_cleaned_rejected_placeholder(row):
             issues.append(_issue("placeholder_like_symbol", ticker, row))
         if _coverage_disagrees(row):
             issues.append(_issue("coverage_disagrees_with_materialized_rows", ticker, row))
@@ -238,8 +249,39 @@ def _registry_active_validated(row: dict[str, Any]) -> bool:
     return status == "active" and promotion in VALIDATED_PROMOTION_STATUSES
 
 
-def _registry_rows_by_symbol(frame: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
-    out: dict[str, dict[str, Any]] = {}
+def _is_cleaned_rejected_placeholder(row: dict[str, Any]) -> bool:
+    return bool(
+        row.get("registry_status") == "rejected"
+        and not row.get("source_price_available")
+        and not row.get("technical_features_available")
+        and not row.get("scorecard_available")
+        and row.get("coverage_market_data_available") is None
+        and not row.get("coverage_status")
+    )
+
+
+def _is_rejected_shadow_with_tracked_canonical(
+    *,
+    ticker: str,
+    registry_rows: list[dict[str, Any]],
+    readiness_row: dict[str, Any],
+) -> bool:
+    if not registry_rows:
+        return False
+    has_rejected = any(str(row.get("status") or "").strip().lower() == "rejected" for row in registry_rows)
+    has_canonical = any(str(row.get("status") or "").strip().lower() != "rejected" for row in registry_rows)
+    if not (has_rejected and has_canonical):
+        return False
+    readiness_symbol = _normalize_symbol(readiness_row.get("ticker") or readiness_row.get("symbol") or readiness_row.get("entity_id"))
+    return bool(
+        readiness_symbol == ticker
+        and _readiness_tracked(readiness_row)
+        and _readiness_scorecard_ready(readiness_row)
+    )
+
+
+def _registry_rows_by_symbol(frame: pd.DataFrame | None) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {}
     if frame is None or frame.empty:
         return out
     symbol_col = "normalized_symbol" if "normalized_symbol" in frame.columns else _symbol_column(frame)
@@ -248,8 +290,12 @@ def _registry_rows_by_symbol(frame: pd.DataFrame | None) -> dict[str, dict[str, 
     for row in frame.to_dict(orient="records"):
         symbol = _normalize_symbol(row.get(symbol_col))
         if symbol:
-            out[symbol] = row
+            out.setdefault(symbol, []).append(row)
     return out
+
+
+def _primary_registry_rows_by_symbol(frame: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+    return {symbol: rows[-1] for symbol, rows in _registry_rows_by_symbol(frame).items() if rows}
 
 
 def _rows_by_symbol(frame: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
@@ -301,7 +347,7 @@ def _latest_date(values: pd.Series) -> str | None:
 def _symbol_column(frame: pd.DataFrame | None) -> str | None:
     if frame is None:
         return None
-    for candidate in ("ticker", "symbol", "normalized_symbol"):
+    for candidate in ("ticker", "symbol", "normalized_symbol", "entity_id"):
         if candidate in frame.columns:
             return candidate
     return None
@@ -341,3 +387,28 @@ def _nullable_bool(value: object) -> bool | None:
     if token in {"false", "0", "no", "n"}:
         return False
     return None
+
+
+def _readiness_tracked(row: dict[str, Any]) -> bool:
+    if not row:
+        return False
+    if _truthy_first(row, ("is_tracked", "tracked_search_ready", "tracked", "search_ready")):
+        return True
+    state = str(row.get("readiness_state") or row.get("state") or "").strip().lower()
+    return bool(state.startswith("tracked"))
+
+
+def _readiness_scorecard_ready(row: dict[str, Any]) -> bool:
+    if not row:
+        return False
+    if _truthy_first(row, ("is_scorecard_ready", "has_scorecard", "scorecard_available")):
+        return True
+    state = str(row.get("readiness_state") or row.get("state") or "").strip().lower()
+    return state == "tracked_with_scorecard"
+
+
+def _truthy_first(row: dict[str, Any], keys: tuple[str, ...]) -> bool:
+    for key in keys:
+        if key in row and _nullable_bool(row.get(key)) is True:
+            return True
+    return False

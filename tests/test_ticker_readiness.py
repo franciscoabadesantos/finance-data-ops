@@ -148,3 +148,56 @@ def test_residue_audit_catches_seeded_examples() -> None:
     assert ("coverage_disagrees_with_materialized_rows", "PRICE_ONLY") in issues
     assert ("coverage_disagrees_with_materialized_rows", "ACTIVE_NOPRICE") in issues
     assert audit.as_dict()["tracked_tickers"] == ["READY"]
+
+
+def test_audit_suppresses_cleaned_rejected_placeholder() -> None:
+    audit = build_readiness_audit(
+        registry_frame=pd.DataFrame(
+            [
+                {
+                    "normalized_symbol": "2200963D",
+                    "status": "rejected",
+                    "promotion_status": "rejected",
+                    "validation_status": "rejected",
+                }
+            ]
+        ),
+        prices_frame=pd.DataFrame(columns=["ticker", "date"]),
+        technicals_frame=pd.DataFrame(columns=["ticker", "as_of_date"]),
+        scorecard_frame=pd.DataFrame(columns=["ticker", "as_of_date"]),
+        coverage_frame=pd.DataFrame(columns=["ticker", "market_data_available", "coverage_status"]),
+    )
+
+    assert audit.issues == []
+
+
+def test_audit_suppresses_rejected_shadow_when_canonical_readiness_is_ready() -> None:
+    audit = build_readiness_audit(
+        registry_frame=pd.DataFrame(
+            [
+                {
+                    "registry_key": "ADBE|us|default",
+                    "normalized_symbol": "ADBE",
+                    "status": "rejected",
+                    "promotion_status": "rejected",
+                    "validation_status": "rejected",
+                    "notes": {"superseded_by": "ADBE|us|NMS"},
+                },
+                {
+                    "registry_key": "ADBE|us|NMS",
+                    "normalized_symbol": "ADBE",
+                    "status": "pending_validation",
+                    "promotion_status": "pending_validation",
+                    "validation_status": "pending_validation",
+                },
+            ]
+        ),
+        readiness_frame=pd.DataFrame([{"ticker": "ADBE", "is_tracked": True, "is_scorecard_ready": True}]),
+        prices_frame=pd.DataFrame([{"ticker": "ADBE", "date": "2026-07-09"}]),
+        technicals_frame=pd.DataFrame([{"ticker": "ADBE", "as_of_date": "2026-07-09"}]),
+        scorecard_frame=pd.DataFrame([{"ticker": "ADBE", "as_of_date": "2026-07-09"}]),
+        coverage_frame=pd.DataFrame(),
+    )
+
+    issues = {(issue["issue_type"], issue["ticker"]) for issue in audit.issues}
+    assert ("rejected_with_materialized_data", "ADBE") not in issues

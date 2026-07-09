@@ -243,6 +243,7 @@ def _read_postgres_inputs(
                 "has_fundamentals",
                 "has_earnings",
                 "has_scorecard",
+                "is_scorecard_ready",
                 "source_price_available",
                 "technical_features_available",
                 "scorecard_available",

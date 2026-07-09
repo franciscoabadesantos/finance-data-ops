@@ -23,6 +23,7 @@ from finance_data_ops.validation.readiness import build_readiness_audit
 
 DEFAULT_TECHNICAL_TABLE = "feature_store.technical_features_daily"
 DEFAULT_SCORECARD_TABLE = "feature_store.scorecard_daily"
+DEFAULT_READINESS_TABLE = "feature_store.ticker_readiness"
 TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
 
@@ -34,14 +35,16 @@ def main() -> None:
         source = "postgres" if settings.database_dsn else "local"
 
     if source == "postgres":
-        registry, prices, technicals, scorecard, coverage, warnings = _read_postgres_inputs(
+        registry, readiness, prices, technicals, scorecard, coverage, warnings = _read_postgres_inputs(
             database_dsn=settings.database_dsn,
+            readiness_table=args.readiness_table,
             technical_table=args.technical_table,
             scorecard_table=args.scorecard_table,
         )
     else:
-        registry, prices, technicals, scorecard, coverage, warnings = _read_local_inputs(
+        registry, readiness, prices, technicals, scorecard, coverage, warnings = _read_local_inputs(
             cache_root=settings.cache_root,
+            readiness_table=args.local_readiness_table,
             technical_table=args.local_technical_table,
             scorecard_table=args.local_scorecard_table,
         )
@@ -52,11 +55,13 @@ def main() -> None:
         technicals_frame=technicals,
         scorecard_frame=scorecard,
         coverage_frame=coverage,
+        readiness_frame=readiness,
     ).as_dict()
     audit["source"] = source
     audit["warnings"] = warnings
     audit["tables"] = {
         "registry": "public.ticker_registry" if source == "postgres" else "ticker_registry",
+        "readiness": args.readiness_table if source == "postgres" else args.local_readiness_table,
         "prices": "source_cache.market_price_daily" if source == "postgres" else "market_price_daily",
         "technicals": args.technical_table if source == "postgres" else args.local_technical_table,
         "scorecard": args.scorecard_table if source == "postgres" else args.local_scorecard_table,
@@ -74,8 +79,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", choices=["auto", "postgres", "local"], default="auto")
     parser.add_argument("--cache-root", default=None)
     parser.add_argument("--summary", action="store_true", help="Print counts and issue rows only.")
+    parser.add_argument("--readiness-table", default=DEFAULT_READINESS_TABLE)
     parser.add_argument("--technical-table", default=DEFAULT_TECHNICAL_TABLE)
     parser.add_argument("--scorecard-table", default=DEFAULT_SCORECARD_TABLE)
+    parser.add_argument("--local-readiness-table", default="ticker_readiness")
     parser.add_argument("--local-technical-table", default="technical_features_daily")
     parser.add_argument("--local-scorecard-table", default="scorecard_daily")
     return parser
@@ -97,12 +104,14 @@ def _summary(audit: dict[str, Any]) -> dict[str, Any]:
 def _read_local_inputs(
     *,
     cache_root: str | Path,
+    readiness_table: str,
     technical_table: str,
     scorecard_table: str,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
     warnings: list[str] = []
     return (
         read_parquet_table("ticker_registry", cache_root=cache_root, required=False),
+        _read_local_optional_table(readiness_table, cache_root=cache_root, warnings=warnings),
         read_parquet_table("market_price_daily", cache_root=cache_root, required=False),
         _read_local_optional_table(technical_table, cache_root=cache_root, warnings=warnings),
         _read_local_optional_table(scorecard_table, cache_root=cache_root, warnings=warnings),
@@ -126,9 +135,10 @@ def _read_local_optional_table(
 def _read_postgres_inputs(
     *,
     database_dsn: str,
+    readiness_table: str,
     technical_table: str,
     scorecard_table: str,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
     if not database_dsn:
         raise ValueError("DATA_OPS_DATABASE_URL is required for --source postgres.")
     try:
@@ -149,6 +159,28 @@ def _read_postgres_inputs(
                 "status",
                 "validation_status",
                 "promotion_status",
+                "registry_key",
+                "exchange",
+                "notes",
+            ],
+            warnings=warnings,
+        )
+        readiness = _query_known_table(
+            conn,
+            readiness_table,
+            [
+                "ticker",
+                "symbol",
+                "entity_id",
+                "readiness_state",
+                "tracked_search_ready",
+                "tracked",
+                "is_tracked",
+                "search_ready",
+                "has_scorecard",
+                "scorecard_available",
+                "is_scorecard_ready",
+                "updated_at",
             ],
             warnings=warnings,
         )
@@ -179,7 +211,7 @@ def _read_postgres_inputs(
             ["ticker", "market_data_available", "coverage_status", "reason", "updated_at"],
             warnings=warnings,
         )
-    return registry, prices, technicals, scorecard, coverage, warnings
+    return registry, readiness, prices, technicals, scorecard, coverage, warnings
 
 
 def _query_known_table(

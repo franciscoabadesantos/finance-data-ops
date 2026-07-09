@@ -27,6 +27,7 @@ CLEANUP_CLASSES = (
     "repairable_missing_technicals",
     "repairable_missing_scorecard",
 )
+NON_ACTIONABLE_CLASSES = ("already_cleaned",)
 
 
 def build_ticker_readiness_cleanup_plan(
@@ -98,23 +99,30 @@ def build_ticker_readiness_cleanup_plan(
 
         if is_placeholder_symbol(symbol):
             if not context["has_prices"] and not context["has_technicals"] and not context["has_scorecard"]:
-                actions.append(_cleanup_registry_and_coverage_action(context, issue_class="invalid_placeholder"))
+                if _all_registry_rows_rejected(context) and not context["has_coverage"]:
+                    actions.append(_already_cleaned_action(context, reason="rejected_placeholder_no_materialized_data"))
+                else:
+                    actions.append(_cleanup_registry_and_coverage_action(context, issue_class="invalid_placeholder"))
                 seen_symbols.add(symbol)
             continue
 
         if symbol in aliases:
-            actions.append(
-                _superseded_alias_action(
-                    context,
-                    superseded_by=aliases[symbol],
-                    canonical_tracked=_canonical_tracked(
-                        aliases[symbol],
-                        readiness_by_symbol=readiness_by_symbol,
-                        price_stats=price_stats,
-                        technical_stats=technical_stats,
+            superseded_by = aliases[symbol]
+            if _cleaned_superseded_alias(context, superseded_by=superseded_by):
+                actions.append(_already_cleaned_action(context, reason=f"superseded_by:{superseded_by}"))
+            else:
+                actions.append(
+                    _superseded_alias_action(
+                        context,
+                        superseded_by=superseded_by,
+                        canonical_tracked=_canonical_tracked(
+                            superseded_by,
+                            readiness_by_symbol=readiness_by_symbol,
+                            price_stats=price_stats,
+                            technical_stats=technical_stats,
+                        ),
                     ),
                 )
-            )
             seen_symbols.add(symbol)
             continue
 
@@ -151,15 +159,17 @@ def build_ticker_readiness_cleanup_plan(
                 actions.append(_partial_keep_review_action(context))
             seen_symbols.add(symbol)
 
-    grouped = {issue_class: [] for issue_class in CLEANUP_CLASSES}
+    grouped = {issue_class: [] for issue_class in (*CLEANUP_CLASSES, *NON_ACTIONABLE_CLASSES)}
     for action in actions:
         grouped[str(action["issue_class"])].append(action)
     grouped = {key: value for key, value in grouped.items() if value}
+    actionable_groups = {key: value for key, value in grouped.items() if key not in NON_ACTIONABLE_CLASSES}
 
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "dry_run": True,
-        "issue_counts": {key: len(value) for key, value in grouped.items()},
+        "issue_counts": {key: len(value) for key, value in actionable_groups.items()},
+        "non_action_counts": {key: len(value) for key, value in grouped.items() if key in NON_ACTIONABLE_CLASSES},
         "groups": grouped,
         "actions": actions,
         "symbols": sorted(seen_symbols),
@@ -192,7 +202,7 @@ def _symbol_context(
         readiness_row,
         ("has_technicals", "technical_features_available", "technicals_available"),
     )
-    readiness_has_scorecard = _truthy_first(readiness_row, ("has_scorecard", "scorecard_available"))
+    readiness_has_scorecard = _truthy_first(readiness_row, ("is_scorecard_ready", "has_scorecard", "scorecard_available"))
     return {
         "ticker": symbol,
         "registry_keys": [str(row.get("registry_key") or "") for row in registry_rows if str(row.get("registry_key") or "")],
@@ -370,6 +380,19 @@ def _partial_keep_review_action(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _already_cleaned_action(context: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    return {
+        "issue_class": "already_cleaned",
+        "ticker": context["ticker"],
+        "proposed_action": "no_action",
+        "reason": reason,
+        "registry_keys": context["registry_keys"],
+        "evidence": _evidence(context),
+        "sql": [],
+        "sql_preview": [],
+    }
+
+
 def _evidence(context: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_price_rows": context["source_price_rows"],
@@ -390,6 +413,25 @@ def _evidence(context: dict[str, Any]) -> dict[str, Any]:
 
 def _symbol_tracked(context: dict[str, Any]) -> bool:
     return bool(context["readiness_tracked"] or (context["has_prices"] and context["has_technicals"]))
+
+
+def _all_registry_rows_rejected(context: dict[str, Any]) -> bool:
+    rows = context.get("registry_rows") or []
+    return bool(rows) and all(_clean_text(row.get("status")) == "rejected" for row in rows)
+
+
+def _cleaned_superseded_alias(context: dict[str, Any], *, superseded_by: str) -> bool:
+    if not _all_registry_rows_rejected(context) or context["has_coverage"]:
+        return False
+    if context["has_prices"] or context["has_technicals"] or context["has_scorecard"]:
+        return False
+    expected = _normalize_symbol(superseded_by)
+    for row in context.get("registry_rows") or []:
+        note_value = _normalize_symbol(_notes_value(row.get("notes"), "superseded_by"))
+        reason = _normalize_symbol(row.get("validation_reason"))
+        if note_value == expected or expected in reason:
+            return True
+    return False
 
 
 def _canonical_tracked(

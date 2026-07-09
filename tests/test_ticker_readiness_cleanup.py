@@ -33,6 +33,34 @@ def test_cleanup_plan_classifies_invalid_placeholder() -> None:
     assert any("delete from public.symbol_data_coverage" in sql for sql in actions[0]["sql_preview"])
 
 
+def test_cleanup_plan_marks_cleaned_rejected_placeholder_non_actionable() -> None:
+    plan = build_ticker_readiness_cleanup_plan(
+        registry_frame=pd.DataFrame(
+            [
+                {
+                    "registry_key": "2200963D|us|default",
+                    "input_symbol": "2200963D",
+                    "normalized_symbol": "2200963D",
+                    "status": "rejected",
+                    "validation_status": "rejected",
+                    "promotion_status": "rejected",
+                }
+            ]
+        ),
+        readiness_frame=pd.DataFrame(),
+        prices_frame=pd.DataFrame(columns=["ticker", "date"]),
+        technicals_frame=pd.DataFrame(columns=["ticker", "as_of_date"]),
+        scorecard_frame=pd.DataFrame(columns=["ticker", "as_of_date"]),
+        coverage_frame=pd.DataFrame(columns=["ticker", "market_data_available"]),
+    )
+
+    actions = plan["groups"]["already_cleaned"]
+    assert [action["ticker"] for action in actions] == ["2200963D"]
+    assert actions[0]["proposed_action"] == "no_action"
+    assert actions[0]["sql_preview"] == []
+    assert "already_cleaned" not in plan["issue_counts"]
+
+
 def test_cleanup_plan_classifies_superseded_alias() -> None:
     plan = build_ticker_readiness_cleanup_plan(
         registry_frame=pd.DataFrame(
@@ -59,6 +87,36 @@ def test_cleanup_plan_classifies_superseded_alias() -> None:
     assert actions[0]["superseded_by"] == "0700.HK"
     assert actions[0]["canonical_tracked"] is True
     assert any("superseded_by:0700.HK" in sql for sql in actions[0]["sql_preview"])
+
+
+def test_cleanup_plan_marks_cleaned_superseded_alias_non_actionable() -> None:
+    plan = build_ticker_readiness_cleanup_plan(
+        registry_frame=pd.DataFrame(
+            [
+                {
+                    "registry_key": "700.HK|apac|default",
+                    "input_symbol": "700.HK",
+                    "normalized_symbol": "700.HK",
+                    "status": "rejected",
+                    "validation_status": "rejected",
+                    "promotion_status": "rejected",
+                    "validation_reason": "superseded_by:0700.HK",
+                    "notes": {"superseded_by": "0700.HK"},
+                }
+            ]
+        ),
+        readiness_frame=pd.DataFrame([{"ticker": "0700.HK", "tracked_search_ready": True}]),
+        prices_frame=pd.DataFrame([{"ticker": "0700.HK", "date": "2026-07-08"}]),
+        technicals_frame=pd.DataFrame([{"ticker": "0700.HK", "as_of_date": "2026-07-08"}]),
+        scorecard_frame=pd.DataFrame([{"ticker": "0700.HK", "as_of_date": "2026-07-08"}]),
+        coverage_frame=pd.DataFrame(columns=["ticker", "market_data_available"]),
+    )
+
+    actions = plan["groups"]["already_cleaned"]
+    assert [action["ticker"] for action in actions] == ["700.HK"]
+    assert actions[0]["proposed_action"] == "no_action"
+    assert actions[0]["sql_preview"] == []
+    assert "superseded_alias" not in plan["issue_counts"]
 
 
 def test_cleanup_plan_classifies_rejected_shadow_with_tracked_canonical() -> None:
