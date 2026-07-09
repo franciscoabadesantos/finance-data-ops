@@ -39,6 +39,7 @@ def build_ticker_readiness_cleanup_plan(
     coverage_frame: pd.DataFrame | None,
     superseded_aliases: dict[str, str] | None = None,
     retry_allowlist: set[str] | None = None,
+    repair_allowlist: set[str] | None = None,
     partial_price_row_threshold: int = 30,
 ) -> dict[str, Any]:
     """Classify cleanup candidates and produce proposed actions.
@@ -51,6 +52,7 @@ def build_ticker_readiness_cleanup_plan(
     aliases = {_normalize_symbol(k): _normalize_symbol(v) for k, v in (superseded_aliases or {}).items()}
     aliases.update({k: v for k, v in DEFAULT_SUPERSEDED_ALIASES.items() if k not in aliases})
     retry_symbols = {_normalize_symbol(value) for value in (retry_allowlist or set()) if _normalize_symbol(value)}
+    repair_symbols = {_normalize_symbol(value) for value in (repair_allowlist or set()) if _normalize_symbol(value)}
 
     registry_rows = _registry_rows(registry_frame)
     registry_by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -143,7 +145,7 @@ def build_ticker_readiness_cleanup_plan(
             continue
 
         if context["has_prices"] and not context["has_technicals"]:
-            if _source_evidence_is_repairable(context) or int(context["source_price_rows"]) >= int(partial_price_row_threshold):
+            if symbol in repair_symbols or int(context["source_price_rows"]) >= int(partial_price_row_threshold):
                 actions.append(_repair_action(context, issue_class="repairable_missing_technicals"))
             else:
                 actions.append(_partial_keep_review_action(context))
@@ -403,16 +405,6 @@ def _canonical_tracked(
     return int((price_stats.get(symbol) or {}).get("row_count") or 0) > 0 and int(
         (technical_stats.get(symbol) or {}).get("row_count") or 0
     ) > 0
-
-
-def _source_evidence_is_repairable(context: dict[str, Any]) -> bool:
-    readiness = context["readiness_row"]
-    return bool(
-        context["coverage_fundamentals_available"]
-        or context["coverage_earnings_available"]
-        or _truthy_first(readiness, ("has_fundamentals", "fundamentals_available", "source_fundamentals_available"))
-        or _truthy_first(readiness, ("has_earnings", "earnings_available", "source_earnings_available"))
-    )
 
 
 def _registry_active_validated(row: dict[str, Any]) -> bool:

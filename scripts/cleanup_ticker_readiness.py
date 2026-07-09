@@ -61,6 +61,7 @@ def main() -> None:
         coverage_frame=coverage,
         superseded_aliases=_parse_aliases(args.alias),
         retry_allowlist=_parse_symbol_list(args.retry_allowlist),
+        repair_allowlist=_parse_symbol_list(args.repair_allowlist),
         partial_price_row_threshold=args.partial_price_row_threshold,
     )
     plan["source"] = source
@@ -117,6 +118,11 @@ def _parser() -> argparse.ArgumentParser:
         "--retry-allowlist",
         default="",
         help="Comma-separated active/validated zero-data symbols to leave untouched for retry.",
+    )
+    parser.add_argument(
+        "--repair-allowlist",
+        default="",
+        help="Comma-separated thin source-only symbols to classify as repairable despite the row threshold.",
     )
     parser.add_argument(
         "--partial-price-row-threshold",

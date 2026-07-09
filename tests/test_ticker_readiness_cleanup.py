@@ -149,13 +149,13 @@ def test_cleanup_plan_classifies_partial_and_source_only_repair() -> None:
         readiness_frame=pd.DataFrame(),
         prices_frame=pd.DataFrame(
             [{"ticker": "SPCX", "date": f"2026-07-{day:02d}"} for day in range(1, 17)]
-            + [{"ticker": "TTWO", "date": "2026-07-08"}]
+            + [{"ticker": "TTWO", "date": f"2026-06-{day:02d}"} for day in range(1, 31)]
         ),
         technicals_frame=pd.DataFrame(columns=["ticker", "as_of_date"]),
         scorecard_frame=pd.DataFrame(columns=["ticker", "as_of_date"]),
         coverage_frame=pd.DataFrame(
             [
-                {"ticker": "SPCX", "market_data_available": True, "fundamentals_available": False, "earnings_available": False},
+                {"ticker": "SPCX", "market_data_available": True, "fundamentals_available": True, "earnings_available": True},
                 {"ticker": "TTWO", "market_data_available": True, "fundamentals_available": True, "earnings_available": True},
             ]
         ),
@@ -168,3 +168,19 @@ def test_cleanup_plan_classifies_partial_and_source_only_repair() -> None:
     assert partial[0]["proposed_action"] == "leave_partial_source_only_for_manual_review"
     assert [action["ticker"] for action in repair] == ["TTWO"]
     assert repair[0]["proposed_action"] == "trigger_technical_backfill_then_scorecard_build"
+
+
+def test_cleanup_plan_can_force_thin_source_only_repair_with_allowlist() -> None:
+    plan = build_ticker_readiness_cleanup_plan(
+        registry_frame=pd.DataFrame(),
+        readiness_frame=pd.DataFrame(),
+        prices_frame=pd.DataFrame([{"ticker": "SPCX", "date": f"2026-07-{day:02d}"} for day in range(1, 17)]),
+        technicals_frame=pd.DataFrame(columns=["ticker", "as_of_date"]),
+        scorecard_frame=pd.DataFrame(columns=["ticker", "as_of_date"]),
+        coverage_frame=pd.DataFrame([{"ticker": "SPCX", "market_data_available": True}]),
+        repair_allowlist={"SPCX"},
+        partial_price_row_threshold=100000,
+    )
+
+    repair = plan["groups"]["repairable_missing_technicals"]
+    assert [action["ticker"] for action in repair] == ["SPCX"]
