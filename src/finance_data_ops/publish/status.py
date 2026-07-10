@@ -73,7 +73,7 @@ def replace_symbol_data_coverage_rows(
         application_name="finance-data-ops",
     ) as conn:
         with conn.cursor() as cur:
-            cur.execute("truncate table public.symbol_data_coverage")
+            cur.execute("delete from public.symbol_data_coverage")
             if normalized_rows:
                 columns = _ordered_columns(normalized_rows)
                 column_sql = ", ".join(_quote_ident(column) for column in columns)

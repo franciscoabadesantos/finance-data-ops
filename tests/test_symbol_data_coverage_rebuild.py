@@ -53,6 +53,50 @@ def test_complete_coverage_rebuild_covers_all_materialized_source_symbols_and_dr
     assert summary["market_true_without_prices"] == []
 
 
+def test_complete_coverage_rebuild_suppresses_cleaned_placeholders_and_aliases_without_prices() -> None:
+    rows = build_complete_symbol_data_coverage_rows(
+        prices_frame=pd.DataFrame([{"symbol": "AEM", "price_date": "2026-07-09"}]),
+        quotes_frame=pd.DataFrame(
+            [
+                {"ticker": "2200963D", "updated_at": "2026-07-09T14:00:00+00:00"},
+                {"ticker": "2200964D", "updated_at": "2026-07-09T14:00:00+00:00"},
+                {"ticker": "2670549D", "updated_at": "2026-07-09T14:00:00+00:00"},
+                {"ticker": "700.HK", "updated_at": "2026-07-09T14:00:00+00:00"},
+            ]
+        ),
+        fundamentals_frame=pd.DataFrame(
+            [
+                {"symbol": "2200963D", "period_end": "2026-03-31"},
+                {"symbol": "700.HK", "period_end": "2026-03-31"},
+            ]
+        ),
+        earnings_events_frame=pd.DataFrame(),
+    )
+
+    by_ticker = {row["ticker"]: row for row in rows}
+    assert set(by_ticker) == {"AEM"}
+    assert by_ticker["AEM"]["market_data_available"] is True
+
+
+def test_complete_coverage_rebuild_keeps_placeholder_or_alias_when_prices_exist() -> None:
+    rows = build_complete_symbol_data_coverage_rows(
+        prices_frame=pd.DataFrame(
+            [
+                {"symbol": "2200963D", "price_date": "2026-07-09"},
+                {"symbol": "700.HK", "price_date": "2026-07-09"},
+            ]
+        ),
+        quotes_frame=pd.DataFrame(),
+        fundamentals_frame=pd.DataFrame(),
+        earnings_events_frame=pd.DataFrame(),
+    )
+
+    by_ticker = {row["ticker"]: row for row in rows}
+    assert set(by_ticker) == {"2200963D", "700.HK"}
+    assert by_ticker["2200963D"]["market_data_available"] is True
+    assert by_ticker["700.HK"]["market_data_available"] is True
+
+
 def test_rebuilt_coverage_matches_readiness_price_materialization() -> None:
     coverage_rows = build_complete_symbol_data_coverage_rows(
         prices_frame=pd.DataFrame([{"symbol": "AEM", "price_date": "2026-07-09"}]),

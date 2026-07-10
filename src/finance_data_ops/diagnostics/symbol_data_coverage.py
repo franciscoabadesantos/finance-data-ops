@@ -13,6 +13,8 @@ from typing import Any
 
 import pandas as pd
 
+from finance_data_ops.symbology import is_placeholder_identifier
+
 COVERAGE_COLUMNS = [
     "ticker",
     "market_data_available",
@@ -28,6 +30,7 @@ COVERAGE_COLUMNS = [
 ]
 
 TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
+DEFAULT_SUPERSEDED_ALIASES = {"700.HK": "0700.HK"}
 
 
 def build_complete_symbol_data_coverage_rows(
@@ -62,6 +65,8 @@ def build_complete_symbol_data_coverage_rows(
     rows: list[dict[str, object]] = []
     for symbol in symbols:
         has_price = symbol in price_stats
+        if not has_price and _exclude_non_materialized_diagnostic_symbol(symbol):
+            continue
         has_quote = symbol in quote_stats
         has_fundamentals = symbol in fundamentals_stats
         has_earnings = symbol in earnings_stats
@@ -317,6 +322,10 @@ def _market_status_reason(*, has_price: bool, has_quote: bool) -> tuple[str, str
     if has_quote:
         return "failed_hard", "missing_market_price_daily"
     return "failed_hard", "missing_market_price_and_quote"
+
+
+def _exclude_non_materialized_diagnostic_symbol(symbol: str) -> bool:
+    return bool(is_placeholder_identifier(symbol) or symbol in DEFAULT_SUPERSEDED_ALIASES)
 
 
 def _multi_domain_status_reason(

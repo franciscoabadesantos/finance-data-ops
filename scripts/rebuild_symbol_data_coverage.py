@@ -54,7 +54,7 @@ def main() -> None:
         },
         "summary": summarize_symbol_data_coverage_rebuild(rows=rows, existing_rows=existing_rows),
         "sql_preview": [
-            "truncate table public.symbol_data_coverage;",
+            "delete from public.symbol_data_coverage;",
             f"-- insert {len(rows)} rebuilt diagnostic coverage rows",
         ],
     }
