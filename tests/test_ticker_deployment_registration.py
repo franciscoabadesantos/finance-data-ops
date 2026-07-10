@@ -9,6 +9,7 @@ from flows.prefect_dataops_daily import (
     dataops_ticker_backfill_flow,
     dataops_ticker_onboarding_bulk_flow,
     dataops_ticker_onboarding_flow,
+    dataops_ticker_remove_flow,
     dataops_ticker_validation_flow,
 )
 
@@ -26,6 +27,7 @@ def test_ticker_deployments_registered_with_matching_entrypoints() -> None:
         "ticker-validation": "dataops_ticker_validation_flow",
         "ticker-backfill": "dataops_ticker_backfill_flow",
         "ticker-onboarding": "dataops_ticker_onboarding_flow",
+        "ticker-remove": "dataops_ticker_remove_flow",
         "ticker-onboarding-bulk": "dataops_ticker_onboarding_bulk_flow",
     }
     for dep_name, fn_name in expected.items():
@@ -57,3 +59,4 @@ def test_bulk_flow_default_onboarding_deployment_name_matches_registered() -> No
     ref = sig.parameters["onboarding_deployment_name"].default
     assert ref == f"{dataops_ticker_onboarding_flow.name}/ticker-onboarding"
     assert "ticker-onboarding" in deployments
+    assert "ticker-remove" in deployments

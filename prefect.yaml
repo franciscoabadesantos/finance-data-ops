@@ -241,6 +241,19 @@ deployments:
     schedules: []
     work_pool: *self_host_pool
 
+  - name: ticker-remove
+    tags: [dataops, ticker, onboarding, remove, self-host]
+    description: On-demand ticker lifecycle remove/reject; data-ops owns ticker_registry writes.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_ticker_remove_flow
+    parameters:
+      region: us
+      exchange: null
+      reason: removed_by_request
+      requested_by: null
+      publish_enabled: true
+    schedules: []
+    work_pool: *self_host_pool
+
   - name: ticker-onboarding-bulk
     tags: [dataops, ticker, onboarding, bulk, self-host]
     description: Urgency/bulk onboarding — schedules onboarding runs for a ticker list (Prefect concurrency).

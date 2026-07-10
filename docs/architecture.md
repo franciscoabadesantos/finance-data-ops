@@ -106,10 +106,12 @@ Production scheduler automation is domain-separated to match those entrypoints.
 
 ## Request-driven jobs
 
-Ticker validation/backfill are request-driven jobs executed outside Prefect:
+Ticker lifecycle work is request-driven through Prefect deployments:
 
-- Queueing: Google Cloud Tasks
-- Execution: Cloud Run worker (`services/finance-jobs-worker`)
-- Logic source-of-truth: this repository (`run_single_ticker_validation`, `run_dataops_*`)
+- Onboarding: `dataops_ticker_onboarding/ticker-onboarding`
+- Removal/rejection: `dataops_ticker_remove/ticker-remove`
+- Direct validation/backfill: `ticker-validation` and `ticker-backfill`
 
-The public backend only orchestrates and enqueues; it does not execute validation/backfill logic directly.
+Data Ops owns all `public.ticker_registry` lifecycle writes. The public backend
+triggers Prefect deployments and reads state; it does not enqueue local worker
+ticker jobs or patch registry rows directly.

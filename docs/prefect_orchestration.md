@@ -65,6 +65,7 @@ Orchestration order:
 Tracked universe contract:
 
 - `ticker_registry` is pipeline state for validation/onboarding, not the tracked universe source of truth.
+- Data Ops/Prefect owns all `ticker_registry` lifecycle writes. Backend services trigger Prefect deployments (`ticker-onboarding`, `ticker-remove`, and direct validation/backfill only when explicitly needed) and read state only.
 - Daily tracked symbols come from deployment `symbols`, `DATA_OPS_SYMBOLS_<REGION>`, or `DATA_OPS_SYMBOLS`.
 - The registry universe fallback is disabled by default and requires `DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE=true` for migration-only use.
 

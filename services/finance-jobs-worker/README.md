@@ -1,15 +1,15 @@
 # finance-jobs-worker
 
-Legacy request-driven ticker job worker.
-
 This service is intentionally separate from the public backend API. It executes
-job payloads delivered by Cloud Tasks and calls `finance-data-ops` logic for:
+analysis/admin job payloads and calls `finance-data-ops` logic for:
 
-- ticker validation
-- ticker backfill
 - analyst snapshot job execution (`analysis_job`)
 - admin data-ops rebuild jobs (`analysis_job` with `analysis_type=data_ops_rebuild`)
 - admin series upsert jobs (`analysis_job` with `analysis_type=data_ops_series_upsert`)
+
+Ticker lifecycle jobs are Prefect-only. Backend services should trigger
+`ticker-onboarding`, `ticker-remove`, `ticker-validation`, or `ticker-backfill`
+deployments directly and must not use this worker to mutate `ticker_registry`.
 
 ## Endpoints
 
@@ -18,8 +18,8 @@ job payloads delivered by Cloud Tasks and calls `finance-data-ops` logic for:
 
 ## Security
 
-Prefer Cloud Tasks OIDC + Cloud Run IAM auth. `WORKER_SHARED_TOKEN` is optional
-defense-in-depth for app-layer bearer verification.
+`WORKER_SHARED_TOKEN` is optional defense-in-depth for app-layer bearer
+verification.
 
 ## Required env vars
 
@@ -28,12 +28,6 @@ defense-in-depth for app-layer bearer verification.
 ## Optional env vars
 
 - `FINANCE_DATA_OPS_ROOT` (default: repo root)
-- `CLOUD_TASKS_ENABLED` (default: `true`)
-- `GCP_PROJECT_ID`
-- `GCP_LOCATION` (default: `us-central1`)
-- `GCP_TASKS_QUEUE` (default: `ticker-jobs`)
-- `WORKER_BASE_URL` (used for enqueueing chained backfill jobs)
-- `TASKS_INVOKER_SERVICE_ACCOUNT_EMAIL`
 - `WORKER_SHARED_TOKEN` (optional, if app-layer bearer auth is enabled)
 
 ## Runtime sizing

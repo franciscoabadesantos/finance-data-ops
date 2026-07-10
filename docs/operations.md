@@ -122,13 +122,13 @@ For macro and release calendar domains:
 
 ## Request-driven async jobs
 
-Ticker validation/backfill deployment and cutover (Cloud Tasks + Cloud Run) runbook:
-
-- [`docs/cloud_tasks_cloud_run_deployment.md`](/home/franciscosantos/finance-data-ops/docs/cloud_tasks_cloud_run_deployment.md)
+Ticker lifecycle requests run through Prefect deployments. Backend services should
+trigger `ticker-onboarding`, `ticker-remove`, `ticker-validation`, or
+`ticker-backfill` directly and must not write `public.ticker_registry`.
 
 ## Worker runtime floor
 
-For the shared Cloud Run worker (`finance-jobs-worker`), keep:
+For the shared analysis worker (`finance-jobs-worker`), keep:
 
 - memory: `1Gi`
 - timeout: `300s`
@@ -136,6 +136,6 @@ For the shared Cloud Run worker (`finance-jobs-worker`), keep:
 Operational reason:
 
 - historical earnings region rebuilds OOM-kill the worker at `512Mi`
-- the failure presents as Cloud Tasks retries plus worker shutdowns around
-  batch 3, not as an explicit application error
+- the failure historically presented as worker shutdowns around batch 3, not
+  as an explicit application error
 - `1Gi` resolved the issue and is now the minimum safe production floor

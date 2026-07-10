@@ -16,13 +16,6 @@ class WorkerSettings(BaseSettings):
 
     finance_data_ops_root: str = "../.."
 
-    cloud_tasks_enabled: bool = True
-    gcp_project_id: str | None = None
-    gcp_location: str = "us-central1"
-    gcp_tasks_queue: str = "ticker-jobs"
-    worker_base_url: str | None = None
-    tasks_invoker_service_account_email: str | None = None
-
     default_history_limit: int = 24
     default_backfill_years: int = 5
 
@@ -30,11 +23,6 @@ class WorkerSettings(BaseSettings):
         "database_url",
         "worker_shared_token",
         "finance_data_ops_root",
-        "gcp_project_id",
-        "gcp_location",
-        "gcp_tasks_queue",
-        "worker_base_url",
-        "tasks_invoker_service_account_email",
         mode="before",
     )
     @classmethod

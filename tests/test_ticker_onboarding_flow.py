@@ -12,6 +12,7 @@ from flows.prefect_dataops_daily import (
     dataops_ticker_backfill_flow,
     dataops_ticker_onboarding_bulk_flow,
     dataops_ticker_onboarding_flow,
+    dataops_ticker_remove_flow,
 )
 
 
@@ -58,6 +59,14 @@ def test_onboarding_promotable_triggers_backfill(monkeypatch, tmp_path) -> None:
     assert calls[1][1]["parameters"]["ticker"] == "ANZ.AX"
     assert calls[1][1]["parameters"]["history_limit"] == 100
     assert calls[1][1]["parameters"]["trigger_technical_features"] is True
+    assert calls[0][1]["idempotency_key"] == "ticker-validation:ANZ|apac|default"
+    assert calls[1][1]["idempotency_key"] == "ticker-backfill:ANZ|apac|default:ANZ.AX"
+    registry = read_ticker_registry(cache_root=tmp_path)
+    row = registry.loc[registry["registry_key"] == "ANZ|apac|default"].iloc[-1].to_dict()
+    assert row["status"] == "active"
+    assert row["notes"]["lifecycle_state"] == "ready"
+    assert row["notes"]["validation_flow_run_id"] == "val-run"
+    assert row["notes"]["backfill_flow_run_id"] == "bf-run"
 
 
 def test_onboarding_backfill_failure_fails_the_flow(monkeypatch, tmp_path) -> None:
@@ -416,3 +425,67 @@ def test_bulk_onboarding_schedules_runs_dedupes_and_skips_active(monkeypatch, tm
     assert {name for name, _ in scheduled} == {"dataops_ticker_onboarding/ticker-onboarding"}
     # runs are named with the backend's deterministic convention so /tickers/status can find them
     assert set(run_names) == {"onboard-bbb-us-default", "onboard-ccc-us-default"}
+
+
+def test_ticker_remove_rejects_safe_lifecycle_state(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
+    existing = {
+        "registry_key": "SPCX|us|default",
+        "input_symbol": "SPCX",
+        "normalized_symbol": "SPCX",
+        "region": "us",
+        "exchange": None,
+        "instrument_type": "equity",
+        "status": "pending_validation",
+        "market_supported": False,
+        "fundamentals_supported": False,
+        "earnings_supported": False,
+        "validation_status": "pending_validation",
+        "validation_reason": "pending_validation",
+        "promotion_status": "pending_validation",
+        "notes": {"lifecycle_state": "pending_backfill"},
+    }
+    monkeypatch.setattr("flows.prefect_dataops_daily.fetch_registry_row_by_key", lambda **kwargs: existing)
+
+    result = dataops_ticker_remove_flow.fn(
+        input_symbol="SPCX",
+        region="us",
+        reason="user_cancelled",
+        requested_by="backend",
+        cache_root=str(tmp_path),
+        publish_enabled=False,
+    )
+
+    assert result["status"] == "removed"
+    row = result["registry_row"]
+    assert row["status"] == "rejected"
+    assert row["validation_reason"] == "user_cancelled"
+    assert row["notes"]["lifecycle_state"] == "rejected"
+    assert row["notes"]["remove_requested_by"] == "backend"
+
+
+def test_ticker_remove_blocks_ready_active_rows(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
+    existing = {
+        "registry_key": "AAPL|us|default",
+        "input_symbol": "AAPL",
+        "normalized_symbol": "AAPL",
+        "region": "us",
+        "exchange": None,
+        "status": "active",
+        "validation_status": "validated_full",
+        "promotion_status": "validated_full",
+        "notes": {"lifecycle_state": "ready"},
+    }
+    monkeypatch.setattr("flows.prefect_dataops_daily.fetch_registry_row_by_key", lambda **kwargs: existing)
+
+    result = dataops_ticker_remove_flow.fn(
+        input_symbol="AAPL",
+        region="us",
+        reason="mistake",
+        cache_root=str(tmp_path),
+        publish_enabled=False,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "unsafe_lifecycle_state"

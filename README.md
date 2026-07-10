@@ -70,7 +70,7 @@ See [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example).
 - Do not commit `.env` or concrete worker env files. Use:
   - [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example)
   - [`worker.env.template.yaml`](/home/franciscosantos/finance-data-ops/worker.env.template.yaml)
-- Prefer Cloud Tasks OIDC + Cloud Run IAM authentication; use `WORKER_SHARED_TOKEN` only as optional defense-in-depth.
+- Prefer Prefect deployment auth for ticker lifecycle operations; use `WORKER_SHARED_TOKEN` only for the analysis worker.
 
 ## Manual runs
 
@@ -118,13 +118,14 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
   - `dataops_ticker_backfill` (targeted single-ticker backfill)
   - `dataops_ticker_validation` (on-demand symbol normalization + validation)
   - `dataops_ticker_onboarding` (event-driven validation gate + conditional backfill)
+  - `dataops_ticker_remove` (on-demand lifecycle reject/remove)
   - `dataops_daily` (aggregate source refresh + feature-store handoff)
 - Deployment definitions:
   - [prefect.yaml](/home/franciscosantos/finance-data-ops/prefect.yaml)
-  - Includes source, aggregate, production, and onboarding deployments including `dataops-daily`, `market-daily`, `fundamentals-daily`, `earnings-daily`, `macro-daily`, `release-calendar-daily`, `ticker-validation`, `ticker-onboarding`, and `ticker-backfill`
+  - Includes source, aggregate, production, and onboarding deployments including `dataops-daily`, `market-daily`, `fundamentals-daily`, `earnings-daily`, `macro-daily`, `release-calendar-daily`, `ticker-validation`, `ticker-onboarding`, `ticker-backfill`, and `ticker-remove`
   - Region is handled via deployment parameters/flow logic (`region`) instead of per-region deployments
   - Daily symbol resolution order: deployment `symbols` override -> `DATA_OPS_SYMBOLS_<REGION>` -> `DATA_OPS_SYMBOLS`
-  - `ticker_registry` is pipeline state for onboarding/validation, not the tracked-universe source of truth. The registry fallback is migration-only and requires `DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE=true`.
+  - `ticker_registry` is pipeline state for onboarding/validation, not the tracked-universe source of truth. Data Ops/Prefect owns all `ticker_registry` lifecycle writes; backend services trigger deployments and read state only. The registry fallback is migration-only and requires `DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE=true`.
   - Feature-store handoff is config-driven: `FEATURE_BUILD_DAILY_DEPLOYMENT` defaults to `feature-build-daily/feature-build-daily`; targeted onboarding scorecard builds use `FEATURE_SCORECARD_BUILD_DEPLOYMENT`, defaulting to `scorecard-daily/scorecard-daily`.
   - Cadence strategy (weekday UTC):
     - Aggregate source handoff: `23:10`
@@ -136,6 +137,7 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
     - Ticker onboarding: event-driven only (`dataops.ticker.added`)
     - Ticker backfill: no schedule (invoked only after onboarding promotion)
     - Ticker validation: webhook/API-invoked from ticker onboarding path (no schedule)
+    - Ticker remove: no schedule (backend/operator-triggered Prefect deployment)
 - Prefect bootstrap script:
   - [scripts/prefect_bootstrap.sh](/home/franciscosantos/finance-data-ops/scripts/prefect_bootstrap.sh)
   - Creates `dataops-managed-pool` (Prefect-managed execution), deploys `prefect.yaml`, and applies automation templates

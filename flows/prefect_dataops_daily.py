@@ -48,6 +48,7 @@ from finance_data_ops.settings import (
     load_settings,
 )
 from finance_data_ops.validation.ticker_registry import (
+    build_registry_key,
     build_pending_registry_row,
     fetch_registry_row_by_key,
     is_promotable_registry_row,
@@ -1070,6 +1071,62 @@ def _backend_onboarding_run_name(registry_key: str) -> str:
     return f"onboard-{slug}" if slug else "onboard-unknown"
 
 
+def _parse_registry_notes(raw_notes: object) -> dict[str, Any]:
+    if isinstance(raw_notes, dict):
+        return dict(raw_notes)
+    if raw_notes is None:
+        return {}
+    try:
+        parsed = json.loads(str(raw_notes))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        text = str(raw_notes or "").strip()
+        return {"raw": text} if text else {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _registry_lifecycle_row(
+    row: dict[str, Any],
+    *,
+    lifecycle_state: str,
+    notes: dict[str, Any] | None = None,
+    status: str | None = None,
+    validation_status: str | None = None,
+    promotion_status: str | None = None,
+    validation_reason: str | None = None,
+) -> dict[str, Any]:
+    out = dict(row)
+    merged_notes = _parse_registry_notes(out.get("notes"))
+    merged_notes["lifecycle_state"] = str(lifecycle_state)
+    merged_notes["lifecycle_updated_at"] = datetime.now(UTC).isoformat()
+    if notes:
+        merged_notes.update({key: value for key, value in notes.items() if value is not None})
+    out["notes"] = merged_notes
+    out["updated_at"] = datetime.now(UTC).isoformat()
+    if status is not None:
+        out["status"] = status
+    if validation_status is not None:
+        out["validation_status"] = validation_status
+    if promotion_status is not None:
+        out["promotion_status"] = promotion_status
+    if validation_reason is not None:
+        out["validation_reason"] = validation_reason
+    return out
+
+
+def _persist_registry_row(
+    *,
+    settings: DataOpsSettings,
+    row: dict[str, Any],
+    publish_enabled: bool,
+) -> dict[str, Any]:
+    upsert_ticker_registry_rows(cache_root=settings.cache_root, rows=[row])
+    remote_publish_result: dict[str, Any] = {"status": "skipped"}
+    if bool(publish_enabled) and settings.database_dsn:
+        publisher = PostgresPublisher(database_dsn=settings.database_dsn)
+        remote_publish_result = publish_ticker_registry(publisher=publisher, rows=[row])
+    return remote_publish_result
+
+
 def _run_best_effort_backfill_step(
     step: str,
     fn: Callable[[], dict[str, Any]],
@@ -1381,10 +1438,20 @@ def dataops_ticker_validation_flow(
         instrument_type_hint=_normalize_optional_text(instrument_type_hint),
         history_limit=int(history_limit or 12),
     )
+    selected = result.get("selected", {})
+    registry_row = _registry_lifecycle_row(
+        dict(result["registry_row"]),
+        lifecycle_state="validated" if str(selected.get("validation_status")) != "rejected" else "rejected",
+        notes={
+            "validation_flow": "dataops_ticker_validation",
+            "validation_selected_status": str(selected.get("validation_status") or ""),
+        },
+    )
+    result["registry_row"] = registry_row
 
     upsert_ticker_registry_rows(
         cache_root=settings.cache_root,
-        rows=[result["registry_row"]],
+        rows=[registry_row],
     )
 
     remote_publish_result: dict[str, Any] = {"status": "skipped"}
@@ -1392,12 +1459,11 @@ def dataops_ticker_validation_flow(
         publisher = PostgresPublisher(database_dsn=settings.database_dsn)
         remote_publish_result = publish_ticker_registry(
             publisher=publisher,
-            rows=[result["registry_row"]],
+            rows=[registry_row],
         )
     elif bool(publish_registry):
         logger.info("Ticker registry remote publish skipped: DATA_OPS_DATABASE_URL missing.")
 
-    selected = result.get("selected", {})
     if str(selected.get("validation_status")) == "rejected":
         payload = build_alert_payload(
             severity="warning",
@@ -1460,18 +1526,52 @@ def dataops_ticker_onboarding_flow(
         exchange=normalized_exchange,
         instrument_type=str(normalized_hint or "unknown"),
     )
-    upsert_ticker_registry_rows(
+    registry_key = str(pending_row["registry_key"])
+    onboarding_run_name = _backend_onboarding_run_name(registry_key)
+
+    existing_row = fetch_registry_row_by_key(
+        registry_key=registry_key,
         cache_root=settings.cache_root,
-        rows=[pending_row],
+        database_dsn=settings.database_dsn,
+    )
+    if existing_row and is_promotable_registry_row(existing_row):
+        existing_notes = _parse_registry_notes(existing_row.get("notes"))
+        if str(existing_notes.get("lifecycle_state") or "").strip().lower() == "ready":
+            return {
+                "input_symbol": normalized_input,
+                "promoted_symbol": str(existing_row.get("normalized_symbol") or "").strip().upper(),
+                "region": normalized_region,
+                "exchange": normalized_exchange,
+                "decision": "already_ready",
+                "registry_row": existing_row,
+                "registry_key": registry_key,
+                "onboarding_run_name": onboarding_run_name,
+                "validation_flow_run_id": existing_notes.get("validation_flow_run_id"),
+                "backfill_flow_run_id": existing_notes.get("backfill_flow_run_id"),
+            }
+
+    initial_registry_row = ({**pending_row, **existing_row} if existing_row else pending_row)
+    pending_row = _registry_lifecycle_row(
+        initial_registry_row,
+        lifecycle_state="pending_validation",
+        notes={
+            "onboarding_run_name": onboarding_run_name,
+            "requested_input_symbol": normalized_input,
+            "requested_region": normalized_region,
+            "requested_exchange": normalized_exchange,
+            "requested_history_limit": resolved_history_limit,
+        },
+        status="pending_validation",
+        validation_status="pending_validation",
+        promotion_status="pending_validation",
+        validation_reason="pending_validation",
     )
 
-    pending_publish_result: dict[str, Any] = {"status": "skipped"}
-    if bool(publish_enabled) and settings.database_dsn:
-        publisher = PostgresPublisher(database_dsn=settings.database_dsn)
-        pending_publish_result = publish_ticker_registry(
-            publisher=publisher,
-            rows=[pending_row],
-        )
+    pending_publish_result = _persist_registry_row(
+        settings=settings,
+        row=pending_row,
+        publish_enabled=bool(publish_enabled),
+    )
 
     logger.info(
         "Starting onboarding validation deployment (ticker=%s, region=%s, exchange=%s).",
@@ -1479,6 +1579,16 @@ def dataops_ticker_onboarding_flow(
         normalized_region,
         str(normalized_exchange or "default"),
     )
+    validating_row = _registry_lifecycle_row(
+        pending_row,
+        lifecycle_state="validating",
+        notes={
+            "validation_deployment_name": validation_deployment_name,
+            "validation_flow_run_name": f"onboarding-validate-{normalized_input.lower()}",
+            "validation_idempotency_key": f"ticker-validation:{registry_key}",
+        },
+    )
+    _persist_registry_row(settings=settings, row=validating_row, publish_enabled=bool(publish_enabled))
     validation_run = run_deployment(
         validation_deployment_name,
         parameters={
@@ -1492,6 +1602,7 @@ def dataops_ticker_onboarding_flow(
         timeout=float(deployment_timeout_seconds),
         poll_interval=10,
         flow_run_name=f"onboarding-validate-{normalized_input.lower()}",
+        idempotency_key=f"ticker-validation:{registry_key}",
     )
     validation_state = str(validation_run.state_name or "")
 
@@ -1500,27 +1611,35 @@ def dataops_ticker_onboarding_flow(
         cache_root=settings.cache_root,
         database_dsn=settings.database_dsn,
     )
+    if registry_row:
+        registry_row = {**pending_row, **registry_row}
     if str(validation_state).lower() != "completed":
-        fallback_row = build_pending_registry_row(
-            input_symbol=normalized_input,
-            region=normalized_region,
-            exchange=normalized_exchange,
-            instrument_type=str(normalized_hint or "unknown"),
+        fallback_row = _registry_lifecycle_row(
+            registry_row or validating_row,
+            lifecycle_state="rejected",
+            notes={
+                "validation_flow_run_id": str(validation_run.id),
+                "validation_flow_state": validation_state,
+                "validation_error": f"validation_flow_state_{str(validation_state).lower()}",
+            },
+            status="rejected",
+            validation_status="rejected",
+            promotion_status="rejected",
+            validation_reason=f"validation_flow_state_{str(validation_state).lower()}",
         )
-        fallback_row.update(
-            {
-                "status": "rejected",
-                "validation_status": "rejected",
-                "promotion_status": "rejected",
-                "validation_reason": f"validation_flow_state_{str(validation_state).lower()}",
-                "notes": f"validation_flow_failed state={validation_state}",
-            }
-        )
-        upsert_ticker_registry_rows(cache_root=settings.cache_root, rows=[fallback_row])
-        if bool(publish_enabled) and settings.database_dsn:
-            publisher = PostgresPublisher(database_dsn=settings.database_dsn)
-            publish_ticker_registry(publisher=publisher, rows=[fallback_row])
+        _persist_registry_row(settings=settings, row=fallback_row, publish_enabled=bool(publish_enabled))
         registry_row = fallback_row
+    elif registry_row:
+        registry_row = _registry_lifecycle_row(
+            registry_row,
+            lifecycle_state="pending_backfill" if is_promotable_registry_row(registry_row) else "rejected",
+            notes={
+                "onboarding_run_name": onboarding_run_name,
+                "validation_flow_run_id": str(validation_run.id),
+                "validation_flow_state": validation_state,
+            },
+        )
+        _persist_registry_row(settings=settings, row=registry_row, publish_enabled=bool(publish_enabled))
 
     promotable = is_promotable_registry_row(registry_row)
     if not promotable:
@@ -1547,6 +1666,18 @@ def dataops_ticker_onboarding_flow(
         normalized_input,
         promoted_symbol,
     )
+    backfill_run_name = f"onboarding-backfill-{promoted_symbol.lower()}"
+    backfill_idempotency_key = f"ticker-backfill:{registry_key}:{promoted_symbol}"
+    backfilling_row = _registry_lifecycle_row(
+        registry_row or pending_row,
+        lifecycle_state="backfilling",
+        notes={
+            "backfill_deployment_name": backfill_deployment_name,
+            "backfill_flow_run_name": backfill_run_name,
+            "backfill_idempotency_key": backfill_idempotency_key,
+        },
+    )
+    _persist_registry_row(settings=settings, row=backfilling_row, publish_enabled=bool(publish_enabled))
     backfill_run = run_deployment(
         backfill_deployment_name,
         parameters={
@@ -1561,16 +1692,40 @@ def dataops_ticker_onboarding_flow(
         },
         timeout=float(deployment_timeout_seconds),
         poll_interval=10,
-        flow_run_name=f"onboarding-backfill-{promoted_symbol.lower()}",
+        flow_run_name=backfill_run_name,
+        idempotency_key=backfill_idempotency_key,
     )
     backfill_state = str(backfill_run.state_name or "")
     if backfill_state.strip().lower() != "completed":
+        failed_row = _registry_lifecycle_row(
+            registry_row or pending_row,
+            lifecycle_state="pending_backfill",
+            notes={
+                "backfill_flow_run_id": str(backfill_run.id),
+                "backfill_flow_state": backfill_state,
+                "backfill_error": f"backfill_flow_state_{backfill_state.strip().lower()}",
+            },
+            validation_reason=str((registry_row or {}).get("validation_reason") or "backfill_incomplete"),
+        )
+        _persist_registry_row(settings=settings, row=failed_row, publish_enabled=bool(publish_enabled))
         # Do not report onboarding success when the backfill child failed: the parent run must
         # fail so the registry/status never shows "ready" without data (validation already ran,
         # so the ticker stays validated_full/pending_backfill and is re-triggerable).
         raise RuntimeError(
             f"Onboarding backfill did not complete for {promoted_symbol} (state={backfill_state})."
         )
+    ready_row = _registry_lifecycle_row(
+        registry_row or pending_row,
+        lifecycle_state="ready",
+        notes={
+            "backfill_flow_run_id": str(backfill_run.id),
+            "backfill_flow_state": backfill_state,
+            "ready_at": datetime.now(UTC).isoformat(),
+        },
+        status="active",
+        promotion_status=str((registry_row or {}).get("promotion_status") or "validated_full"),
+    )
+    _persist_registry_row(settings=settings, row=ready_row, publish_enabled=bool(publish_enabled))
     return {
         "input_symbol": normalized_input,
         "promoted_symbol": promoted_symbol,
@@ -1580,9 +1735,108 @@ def dataops_ticker_onboarding_flow(
         "validation_flow_run_id": str(validation_run.id),
         "validation_state": validation_state,
         "decision": "promoted",
-        "registry_row": registry_row,
+        "registry_row": ready_row,
+        "registry_key": registry_key,
+        "onboarding_run_name": onboarding_run_name,
         "backfill_flow_run_id": str(backfill_run.id),
         "backfill_state": backfill_state,
+    }
+
+
+@flow(
+    name="dataops_ticker_remove",
+    retries=0,
+    log_prints=True,
+)
+def dataops_ticker_remove_flow(
+    *,
+    input_symbol: str,
+    region: str | None = None,
+    exchange: str | None = None,
+    reason: str = "removed_by_request",
+    requested_by: str | None = None,
+    cache_root: str | None = None,
+    publish_enabled: bool = True,
+) -> dict[str, Any]:
+    settings = load_settings(cache_root=cache_root)
+    logger = get_run_logger()
+    normalized_input = _normalize_ticker(input_symbol)
+    normalized_region = str(region or "us").strip().lower()
+    normalized_exchange = _normalize_optional_text(exchange)
+    registry_key = build_registry_key(
+        input_symbol=normalized_input,
+        region=normalized_region,
+        exchange=normalized_exchange,
+    )
+    row = fetch_registry_row_by_key(
+        registry_key=registry_key,
+        cache_root=settings.cache_root,
+        database_dsn=settings.database_dsn,
+    )
+    if row is None:
+        logger.info("Ticker remove skipped: registry row not found (registry_key=%s).", registry_key)
+        return {
+            "status": "skipped",
+            "reason": "registry_row_not_found",
+            "registry_key": registry_key,
+            "input_symbol": normalized_input,
+            "region": normalized_region,
+            "exchange": normalized_exchange,
+        }
+
+    notes = _parse_registry_notes(row.get("notes"))
+    lifecycle_state = str(notes.get("lifecycle_state") or row.get("status") or "").strip().lower()
+    allowed_states = {
+        "pending_validation",
+        "validating",
+        "validated",
+        "pending_backfill",
+        "backfilling",
+        "partial",
+        "review",
+        "rejected",
+    }
+    current_status = str(row.get("status") or "").strip().lower()
+    if lifecycle_state not in allowed_states and current_status == "active":
+        return {
+            "status": "blocked",
+            "reason": "unsafe_lifecycle_state",
+            "registry_key": registry_key,
+            "lifecycle_state": lifecycle_state,
+            "current_status": current_status,
+            "allowed_states": sorted(allowed_states),
+        }
+
+    removal_reason = str(reason or "").strip() or "removed_by_request"
+    rejected_row = _registry_lifecycle_row(
+        row,
+        lifecycle_state="rejected",
+        notes={
+            "remove_reason": removal_reason,
+            "remove_requested_by": str(requested_by or "").strip() or None,
+            "remove_requested_at": datetime.now(UTC).isoformat(),
+            "previous_lifecycle_state": lifecycle_state,
+            "prefect_run_cancellation": "not_attempted",
+        },
+        status="rejected",
+        validation_status="rejected",
+        promotion_status="rejected",
+        validation_reason=removal_reason,
+    )
+    publish_result = _persist_registry_row(
+        settings=settings,
+        row=rejected_row,
+        publish_enabled=bool(publish_enabled),
+    )
+    return {
+        "status": "removed",
+        "registry_key": registry_key,
+        "input_symbol": normalized_input,
+        "region": normalized_region,
+        "exchange": normalized_exchange,
+        "previous_lifecycle_state": lifecycle_state,
+        "registry_row": rejected_row,
+        "registry_publish": publish_result,
     }
 
 
@@ -1698,6 +1952,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
             "ticker-backfill",
             "ticker-validation",
             "ticker-onboarding",
+            "ticker-remove",
         ],
         help="Domain flow to execute.",
     )
@@ -1709,6 +1964,8 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         default=None,
         help="Single ticker symbol input for ticker-validation flow.",
     )
+    parser.add_argument("--reason", type=str, default="removed_by_request", help="Ticker-remove reason.")
+    parser.add_argument("--requested-by", type=str, default=None, help="Ticker-remove requester/audit identity.")
     parser.add_argument("--region", type=str, default=None, help="Region key (us, eu, apac).")
     parser.add_argument("--exchange", type=str, default=None, help="Optional exchange code (for example: ASX).")
     parser.add_argument(
@@ -1843,7 +2100,7 @@ def main() -> None:
                 cache_root=args.cache_root,
                 publish_registry=not bool(args.no_publish),
             )
-        else:
+        elif args.domain == "ticker-onboarding":
             result = dataops_ticker_onboarding_flow(
                 input_symbol=str(args.input_symbol or args.ticker or "").strip(),
                 region=str(args.region or "").strip() or None,
@@ -1856,6 +2113,16 @@ def main() -> None:
                 publish_enabled=not bool(args.no_publish),
                 trigger_technical_features=not bool(args.no_feature_build_trigger),
                 trigger_scorecard_build=not bool(args.no_feature_build_trigger),
+            )
+        else:
+            result = dataops_ticker_remove_flow(
+                input_symbol=str(args.input_symbol or args.ticker or "").strip(),
+                region=str(args.region or "").strip() or None,
+                exchange=args.exchange,
+                reason=args.reason,
+                requested_by=args.requested_by,
+                cache_root=args.cache_root,
+                publish_enabled=not bool(args.no_publish),
             )
     print(json.dumps(result, indent=2, default=str))
 
