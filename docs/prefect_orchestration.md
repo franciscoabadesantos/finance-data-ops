@@ -16,6 +16,11 @@ Wrapped domains:
 - `dataops_earnings_daily`
 - `dataops_macro_daily`
 - `dataops_release_calendar_daily`
+- `dataops_ticker_validation`
+- `dataops_ticker_backfill`
+- `dataops_ticker_onboarding`
+- `dataops_ticker_onboarding_bulk`
+- `dataops_ticker_remove`
 
 ## Deployments
 
@@ -31,6 +36,11 @@ Base deployments:
 - `earnings-daily`
 - `macro-daily`
 - `release-calendar-daily`
+- `ticker-validation`
+- `ticker-backfill`
+- `ticker-onboarding`
+- `ticker-onboarding-bulk`
+- `ticker-remove`
 
 Cadence strategy (weekday UTC):
 
@@ -65,11 +75,12 @@ Orchestration order:
 Tracked universe contract:
 
 - `ticker_registry` is pipeline state for validation/onboarding, not the tracked universe source of truth.
-- Data Ops/Prefect owns all `ticker_registry` lifecycle writes. Backend services trigger Prefect deployments (`ticker-onboarding`, `ticker-remove`, and direct validation/backfill only when explicitly needed) and read state only.
+- Data Ops/Prefect owns all `ticker_registry` lifecycle writes. Backend services trigger Prefect deployments and read state only.
+- Supported ticker lifecycle deployments are `ticker-onboarding`, `ticker-remove`, `ticker-validation`, and `ticker-backfill`. They are Prefect-only async paths.
 - Daily tracked symbols come from deployment `symbols`, `DATA_OPS_SYMBOLS_<REGION>`, or `DATA_OPS_SYMBOLS`.
 - The registry universe fallback is disabled by default and requires `DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE=true` for migration-only use.
 
-Request-driven ticker validation/backfill are deployed without schedules and are invoked by onboarding/backend paths.
+Request-driven ticker lifecycle deployments have no schedules. Onboarding normally invokes validation and backfill as child deployment runs; direct validation and backfill deployment runs are operator escape hatches.
 
 ## Publish safety gates
 

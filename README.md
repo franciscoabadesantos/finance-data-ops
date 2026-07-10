@@ -92,7 +92,7 @@ Earnings:
 python scripts/run_earnings_daily.py --no-publish
 ```
 
-Ticker validation:
+Ticker validation (operator direct flow; backend lifecycle requests use Prefect deployments):
 
 ```bash
 python scripts/run_ticker_validation.py ANZ --region apac --instrument-type-hint equity --no-publish
@@ -136,7 +136,7 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
     - Release calendar: `05:00`, `15:00`
     - Ticker onboarding: event-driven only (`dataops.ticker.added`)
     - Ticker backfill: no schedule (invoked only after onboarding promotion)
-    - Ticker validation: webhook/API-invoked from ticker onboarding path (no schedule)
+    - Ticker validation: no schedule (invoked by Prefect onboarding or explicit operator deployment run)
     - Ticker remove: no schedule (backend/operator-triggered Prefect deployment)
 - Prefect bootstrap script:
   - [scripts/prefect_bootstrap.sh](/home/franciscosantos/finance-data-ops/scripts/prefect_bootstrap.sh)

@@ -1,35 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-import hashlib
-import json
 from typing import Any
 
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def parse_notes(raw: object) -> dict[str, Any]:
-    if raw is None:
-        return {}
-    if isinstance(raw, dict):
-        return dict(raw)
-    text = str(raw).strip()
-    if not text:
-        return {}
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:
-        return {}
-    return {}
-
-
-def payload_hash(payload: dict[str, Any]) -> str:
-    payload_json = json.dumps(payload, sort_keys=True, default=str)
-    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
 
 
 class WorkerRegistryStore:
@@ -122,21 +98,6 @@ class WorkerRegistryStore:
             with conn.cursor() as cur:
                 cur.execute(query, list(_adapt_values(row[column] for column in columns)))
 
-    def get_by_key(self, registry_key: str) -> dict[str, Any] | None:
-        if self._uses_postgres:
-            return self._fetch_one("ticker_registry", "registry_key", str(registry_key).strip())
-        response = (
-            self.client.table("ticker_registry")
-            .select("*")
-            .eq("registry_key", str(registry_key).strip())
-            .limit(1)
-            .execute()
-        )
-        data = response.data or []
-        if not data:
-            return None
-        return dict(data[0])
-
     def get_analysis_job(self, job_id: str) -> dict[str, Any] | None:
         if self._uses_postgres:
             return self._fetch_one("analysis_jobs", "job_id", str(job_id).strip())
@@ -197,20 +158,6 @@ class WorkerRegistryStore:
             self.client.table("analysis_results").update(row).eq("job_id", str(job_id).strip()).execute()
         else:
             self.client.table("analysis_results").insert(row).execute()
-
-    def patch_row(self, registry_key: str, patch: dict[str, Any]) -> dict[str, Any]:
-        update_payload = dict(patch)
-        update_payload["updated_at"] = now_iso()
-        if self._uses_postgres:
-            row = self._update_by("ticker_registry", "registry_key", registry_key, update_payload)
-            if row is None:
-                raise RuntimeError("ticker_registry row missing after update.")
-            return row
-        self.client.table("ticker_registry").update(update_payload).eq("registry_key", registry_key).execute()
-        row = self.get_by_key(registry_key)
-        if row is None:
-            raise RuntimeError("ticker_registry row missing after update.")
-        return row
 
     def resolve_registry_row(self, *, ticker: str, region: str, exchange: str | None) -> dict[str, Any] | None:
         if self._uses_postgres:
@@ -360,68 +307,6 @@ class WorkerRegistryStore:
             if rows:
                 return rows
         return []
-
-    def merge_notes(self, registry_key: str, patch: dict[str, Any]) -> dict[str, Any]:
-        row = self.get_by_key(registry_key)
-        if row is None:
-            raise RuntimeError("ticker_registry row not found.")
-        notes = parse_notes(row.get("notes"))
-        notes.update(patch)
-        return self.patch_row(registry_key, {"notes": notes})
-
-    def reject(self, registry_key: str, reason: str) -> dict[str, Any]:
-        return self.patch_row(
-            registry_key,
-            {
-                "status": "rejected",
-                "validation_status": "rejected",
-                "promotion_status": "rejected",
-                "validation_reason": str(reason),
-                "last_validated_at": now_iso(),
-            },
-        )
-
-    def record_async_job_run(
-        self,
-        *,
-        job_id: str,
-        job_type: str,
-        registry_key: str | None,
-        idempotency_key: str,
-        status: str,
-        attempt: int,
-        payload: dict[str, Any],
-        started_at: str | None = None,
-        finished_at: str | None = None,
-        error_message: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        row = {
-            "job_id": str(job_id),
-            "job_type": str(job_type),
-            "registry_key": str(registry_key or ""),
-            "idempotency_key": str(idempotency_key),
-            "status": str(status),
-            "attempt": int(attempt),
-            "payload_hash": payload_hash(payload),
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "error_message": error_message,
-            "metadata": metadata or {},
-            "updated_at": now_iso(),
-        }
-        if self._uses_postgres:
-            try:
-                self._upsert("async_job_runs", row, conflict_columns=["job_id"])
-            except Exception:
-                return
-            return
-        try:
-            self.client.table("async_job_runs").upsert(row, on_conflict="job_id").execute()
-        except Exception:
-            # Keep job execution resilient when audit table migration is not present yet.
-            return
-
 
 def _validate_identifier(value: str) -> None:
     if not value or not value.replace("_", "a").isalnum() or value[0].isdigit():

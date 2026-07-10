@@ -14,7 +14,7 @@ deployments directly and must not use this worker to mutate `ticker_registry`.
 ## Endpoints
 
 - `GET /health`
-- `POST /jobs/execute`
+- `POST /jobs/execute` (`analysis_job` only)
 
 ## Security
 

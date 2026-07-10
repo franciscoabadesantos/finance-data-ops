@@ -131,7 +131,7 @@ Compatibility note:
 - `data_source_runs` (run trail for refresh + publish + orchestration)
 - `data_asset_status` (freshness/coverage per owned asset)
 - `symbol_data_coverage` (ticker coverage state)
-- `ticker_registry` (symbol normalization + validation registry)
+- `ticker_registry` (ticker lifecycle registry; Data Ops/Prefect owns writes)
 
 Macro/release asset keys in `data_asset_status` are required:
 

@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 
 from app.config import get_settings
 from app.executors import JobExecutor
@@ -57,24 +57,16 @@ def health() -> dict[str, str]:
 
 
 @app.post("/jobs/execute", response_model=None)
-def execute_job(
-    payload: ExecuteJobRequest,
-    x_cloudtasks_taskname: str | None = Header(default=None),
-    x_cloudtasks_taskretrycount: str | None = Header(default=None),
-) -> Any:
+def execute_job(payload: ExecuteJobRequest) -> Any:
     executor: JobExecutor = app.state.executor
-    task_name = str(x_cloudtasks_taskname or "").strip() or None
-    task_retry_count = int(str(x_cloudtasks_taskretrycount or "0").strip() or "0")
-    attempt = max(task_retry_count + 1, 1)
-    job_id = (task_name.split("/")[-1] if task_name else f"job-{uuid4().hex[:12]}")
+    job_id = f"analysis-worker-{uuid4().hex[:12]}"
 
     try:
-        result = executor.execute(payload, job_id=job_id, attempt=attempt, task_name=task_name)
+        result = executor.execute(payload, job_id=job_id, attempt=1, task_name=None)
         return {
             "ok": True,
             "job_id": job_id,
             "job_type": payload.job_type,
-            "registry_key": payload.registry_key,
             "analysis_job_id": payload.job_id,
             "result": result,
         }

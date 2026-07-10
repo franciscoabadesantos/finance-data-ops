@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from typing import Any
 
 import pandas as pd
@@ -167,6 +168,12 @@ def _coerce_notes(value: Any) -> dict[str, Any]:
     raw = value.strip()
     if not raw or raw.upper() in {"NONE", "NULL", "NAN"}:
         return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        return {str(key): inner for key, inner in parsed.items()}
     if "=" not in raw:
         return {"raw": raw}
 

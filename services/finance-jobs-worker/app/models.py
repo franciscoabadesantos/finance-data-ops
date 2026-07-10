@@ -18,19 +18,12 @@ AnalysisType = Literal[
 
 class ExecuteJobRequest(BaseModel):
     job_type: JobType
-    registry_key: str | None = Field(default=None, min_length=3)
     job_id: str | None = Field(default=None, min_length=3)
     analysis_type: AnalysisType | None = None
     job_params: dict[str, Any] | None = None
     ticker: str = Field(..., min_length=1)
     region: str | None = Field(default="us")
     exchange: str | None = None
-    instrument_type_hint: str | None = None
-    history_limit: int | None = 24
-    start: str | None = None
-    end: str | None = None
-    requested_at: str | None = None
-    idempotency_key: str | None = None
 
     @field_validator("ticker")
     @classmethod
@@ -71,8 +64,3 @@ class ExecuteJobRequest(BaseModel):
                     "analysis_type must be one of: ticker_snapshot, coverage_report, ticker_signal_v1, data_ops_rebuild, data_ops_series_upsert"
                 )
         return self
-
-    def resolved_idempotency_key(self) -> str:
-        if self.idempotency_key and str(self.idempotency_key).strip():
-            return str(self.idempotency_key).strip()
-        return f"analysis:{self.job_id}"

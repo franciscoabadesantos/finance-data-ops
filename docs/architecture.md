@@ -110,8 +110,8 @@ Ticker lifecycle work is request-driven through Prefect deployments:
 
 - Onboarding: `dataops_ticker_onboarding/ticker-onboarding`
 - Removal/rejection: `dataops_ticker_remove/ticker-remove`
-- Direct validation/backfill: `ticker-validation` and `ticker-backfill`
+- Validation: `dataops_ticker_validation/ticker-validation`
+- Backfill: `dataops_ticker_backfill/ticker-backfill`
 
 Data Ops owns all `public.ticker_registry` lifecycle writes. The public backend
-triggers Prefect deployments and reads state; it does not enqueue local worker
-ticker jobs or patch registry rows directly.
+triggers Prefect deployments and reads state.

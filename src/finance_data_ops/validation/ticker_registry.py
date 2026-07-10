@@ -51,6 +51,7 @@ def read_ticker_registry(*, cache_root: str | Path) -> pd.DataFrame:
     for col in TICKER_REGISTRY_COLUMNS:
         if col not in frame.columns:
             frame[col] = None
+    frame["notes"] = frame["notes"].map(_deserialize_notes_from_storage)
     return frame[TICKER_REGISTRY_COLUMNS].copy()
 
 
@@ -78,6 +79,7 @@ def upsert_ticker_registry_rows(*, cache_root: str | Path, rows: list[dict[str, 
     frame["currency"] = frame["currency"].astype(str).str.upper().replace({"NONE": "", "NULL": ""})
     frame["last_validated_at"] = frame["last_validated_at"].fillna(now_iso)
     frame["updated_at"] = frame["updated_at"].fillna(now_iso)
+    frame["notes"] = frame["notes"].map(_serialize_notes_for_storage)
 
     frame = frame[TICKER_REGISTRY_COLUMNS]
     return write_parquet_table(
@@ -171,3 +173,51 @@ def is_promotable_registry_row(row: dict[str, Any] | None) -> bool:
     promotion = str(row.get("promotion_status") or "").strip().lower()
     symbol = str(row.get("normalized_symbol") or "").strip().upper()
     return status == "active" and promotion in PROMOTABLE_STATUSES and symbol not in {"", "NONE", "NULL", "NAN"}
+
+
+def _serialize_notes_for_storage(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw or raw.upper() in {"NONE", "NULL", "NAN"}:
+            return ""
+        parsed = _parse_json_object(raw)
+        if parsed is not None:
+            return _canonical_json(parsed)
+        return raw
+    if isinstance(value, dict):
+        return _canonical_json({str(key): inner for key, inner in value.items()})
+    return _canonical_json({"value": value})
+
+
+def _deserialize_notes_from_storage(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw or raw.upper() in {"NONE", "NULL", "NAN"}:
+            return ""
+        parsed = _parse_json_object(raw)
+        return parsed if parsed is not None else raw
+    return value
+
+
+def _parse_json_object(value: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return dict(parsed) if isinstance(parsed, dict) else None
+
+
+def _canonical_json(value: dict[str, Any]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)

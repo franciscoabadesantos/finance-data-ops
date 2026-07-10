@@ -2,11 +2,12 @@
 
 ## Ownership
 
-- `ticker_registry` is onboarding/request pipeline state only. `active`, `validated_market_only`, and `validated_full` do not mean product-ready or tracked.
+- `ticker_registry` is onboarding/request pipeline state only. Data Ops/Prefect owns its lifecycle writes through `ticker-onboarding`, `ticker-remove`, `ticker-validation`, and `ticker-backfill`; backend services read it and trigger deployments only.
+- `active`, `validated_market_only`, and `validated_full` do not mean product-ready or tracked.
 - `symbol_data_coverage` is a diagnostic operational table. It can be rebuilt from current materialized source tables and must not be the sole source of truth for tracked search.
 - Source tables such as `source_cache.market_price_daily` prove materialized source availability.
 - Feature-store derived tables prove feature readiness. The canonical product-readiness DB object should live in feature-store because it depends on derived feature tables such as technicals and scorecards.
-- Backend reads and orchestrates; it must not mutate or own readiness.
+- Backend reads and orchestrates through Prefect deployment runs; it must not mutate readiness or `ticker_registry`.
 
 ## Data Ops Side
 

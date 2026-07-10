@@ -136,7 +136,6 @@ def test_worker_rejects_prefect_owned_ticker_job_types() -> None:
     with pytest.raises(ValueError, match="analysis_job"):
         ExecuteJobRequest(
             job_type="ticker_backfill",  # type: ignore[arg-type]
-            registry_key="AAPL|us|default",
             ticker="AAPL",
             region="us",
         )

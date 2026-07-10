@@ -66,6 +66,14 @@ def test_ticker_registry_payload_coerces_notes_to_jsonb_object() -> None:
                 "exchange": "NMS",
                 "notes": "",
             },
+            {
+                "registry_key": "GSAT|us|default",
+                "input_symbol": "GSAT",
+                "normalized_symbol": "GSAT",
+                "region": "us",
+                "exchange": None,
+                "notes": '{"lifecycle_state":"pending_validation","onboarding_run_name":"onboard-gsat-us-default"}',
+            },
         ]
     )
 
@@ -79,6 +87,10 @@ def test_ticker_registry_payload_coerces_notes_to_jsonb_object() -> None:
     }
     assert payload[1]["notes"] == {"raw": "manual review"}
     assert payload[2]["notes"] == {}
+    assert payload[3]["notes"] == {
+        "lifecycle_state": "pending_validation",
+        "onboarding_run_name": "onboard-gsat-us-default",
+    }
 
 
 def test_entity_attributes_payload_normalizes_country_and_recomputes_region() -> None:
