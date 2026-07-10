@@ -59,8 +59,10 @@ def test_onboarding_promotable_triggers_backfill(monkeypatch, tmp_path) -> None:
     assert calls[1][1]["parameters"]["ticker"] == "ANZ.AX"
     assert calls[1][1]["parameters"]["history_limit"] == 100
     assert calls[1][1]["parameters"]["trigger_technical_features"] is True
-    assert calls[0][1]["idempotency_key"] == "ticker-validation:ANZ|apac|default"
-    assert calls[1][1]["idempotency_key"] == "ticker-backfill:ANZ|apac|default:ANZ.AX"
+    assert str(calls[0][1]["idempotency_key"]).startswith("ticker-validation:ANZ|apac|default:")
+    assert calls[0][1]["idempotency_key"] != "ticker-validation:ANZ|apac|default"
+    assert str(calls[1][1]["idempotency_key"]).startswith("ticker-backfill:ANZ|apac|default:ANZ.AX:")
+    assert calls[1][1]["idempotency_key"] != "ticker-backfill:ANZ|apac|default:ANZ.AX"
     registry = read_ticker_registry(cache_root=tmp_path)
     row = registry.loc[registry["registry_key"] == "ANZ|apac|default"].iloc[-1].to_dict()
     assert row["status"] == "active"
@@ -103,6 +105,107 @@ def test_onboarding_backfill_failure_fails_the_flow(monkeypatch, tmp_path) -> No
     assert row["validation_reason"] == "backfill_flow_state_failed"
     assert row["notes"]["lifecycle_state"] == "pending_backfill"
     assert row["notes"]["backfill_flow_run_id"] == "bf-run"
+
+
+def test_onboarding_retry_uses_existing_promotable_row_when_completed_validation_is_reused(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+    fetch_count = 0
+    existing_promotable = {
+        "registry_key": "GSAT|us|default",
+        "input_symbol": "GSAT",
+        "normalized_symbol": "GSAT",
+        "region": "us",
+        "exchange": None,
+        "instrument_type": "equity",
+        "status": "active",
+        "market_supported": True,
+        "fundamentals_supported": True,
+        "earnings_supported": True,
+        "validation_status": "validated_full",
+        "validation_reason": "all_domains_supported",
+        "promotion_status": "validated_full",
+        "notes": {"lifecycle_state": "pending_backfill", "validation_flow_run_id": "old-val-run"},
+    }
+    monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
+
+    def _fake_run_deployment(name: str, **kwargs):
+        calls.append((name, dict(kwargs)))
+        if "ticker_validation" in name:
+            return FakeDeploymentRun(id="old-val-run", state_name="Completed")
+        return FakeDeploymentRun(id="bf-run", state_name="Completed")
+
+    def _fake_fetch(**kwargs):
+        nonlocal fetch_count
+        fetch_count += 1
+        if fetch_count == 1:
+            return dict(existing_promotable)
+        registry = read_ticker_registry(cache_root=kwargs["cache_root"])
+        matches = registry.loc[registry["registry_key"] == "GSAT|us|default"]
+        return matches.iloc[-1].to_dict() if not matches.empty else None
+
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_deployment", _fake_run_deployment)
+    monkeypatch.setattr("flows.prefect_dataops_daily.fetch_registry_row_by_key", _fake_fetch)
+
+    result = dataops_ticker_onboarding_flow.fn(
+        input_symbol="GSAT",
+        region="us",
+        cache_root=str(tmp_path),
+        publish_enabled=False,
+    )
+
+    assert result["decision"] == "promoted"
+    assert result["promoted_symbol"] == "GSAT"
+    assert [name for name, _ in calls] == [
+        "dataops_ticker_validation/ticker-validation",
+        "dataops_ticker_backfill/ticker-backfill",
+    ]
+    assert str(calls[0][1]["idempotency_key"]).startswith("ticker-validation:GSAT|us|default:")
+    assert calls[0][1]["idempotency_key"] != "ticker-validation:GSAT|us|default"
+    assert str(calls[1][1]["idempotency_key"]).startswith("ticker-backfill:GSAT|us|default:GSAT:")
+    registry = read_ticker_registry(cache_root=tmp_path)
+    row = registry.loc[registry["registry_key"] == "GSAT|us|default"].iloc[-1].to_dict()
+    assert row["status"] == "active"
+    assert row["promotion_status"] == "validated_full"
+    assert row["validation_reason"] == "all_domains_supported"
+    assert row["notes"]["lifecycle_state"] == "ready"
+    assert row["notes"]["validation_flow_run_id"] == "old-val-run"
+    assert row["notes"]["backfill_flow_run_id"] == "bf-run"
+
+
+def test_onboarding_completed_validation_without_registry_update_fails_truthfully(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
+    monkeypatch.setattr(
+        "flows.prefect_dataops_daily.run_deployment",
+        lambda *args, **kwargs: FakeDeploymentRun(id="val-run", state_name="Completed"),
+    )
+
+    def _fake_fetch(**kwargs):
+        registry = read_ticker_registry(cache_root=kwargs["cache_root"])
+        matches = registry.loc[registry["registry_key"] == "GSAT|us|default"]
+        return matches.iloc[-1].to_dict() if not matches.empty else None
+
+    monkeypatch.setattr("flows.prefect_dataops_daily.fetch_registry_row_by_key", _fake_fetch)
+
+    with pytest.raises(RuntimeError, match="remained pending_validation"):
+        dataops_ticker_onboarding_flow.fn(
+            input_symbol="GSAT",
+            region="us",
+            cache_root=str(tmp_path),
+            publish_enabled=False,
+        )
+
+    registry = read_ticker_registry(cache_root=tmp_path)
+    row = registry.loc[registry["registry_key"] == "GSAT|us|default"].iloc[-1].to_dict()
+    assert row["status"] == "pending_validation"
+    assert row["validation_reason"] == "validation_completed_without_registry_update"
+    assert row["notes"]["lifecycle_state"] == "validation_incomplete"
+    assert row["notes"]["validation_flow_run_id"] == "val-run"
 
 
 def test_onboarding_rejected_does_not_trigger_backfill(monkeypatch, tmp_path) -> None:

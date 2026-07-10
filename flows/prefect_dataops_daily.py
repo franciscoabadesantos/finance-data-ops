@@ -1071,6 +1071,10 @@ def _backend_onboarding_run_name(registry_key: str) -> str:
     return f"onboard-{slug}" if slug else "onboard-unknown"
 
 
+def _onboarding_attempt_id() -> str:
+    return uuid4().hex[:12]
+
+
 def _parse_registry_notes(raw_notes: object) -> dict[str, Any]:
     if isinstance(raw_notes, dict):
         return dict(raw_notes)
@@ -1125,6 +1129,17 @@ def _persist_registry_row(
         publisher = PostgresPublisher(database_dsn=settings.database_dsn)
         remote_publish_result = publish_ticker_registry(publisher=publisher, rows=[row])
     return remote_publish_result
+
+
+def _is_unresolved_pending_validation_row(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    return (
+        str(row.get("status") or "").strip().lower() == "pending_validation"
+        and str(row.get("validation_status") or "").strip().lower() == "pending_validation"
+        and str(row.get("promotion_status") or "").strip().lower() == "pending_validation"
+        and str(row.get("validation_reason") or "").strip().lower() == "pending_validation"
+    )
 
 
 def _run_best_effort_backfill_step(
@@ -1528,12 +1543,14 @@ def dataops_ticker_onboarding_flow(
     )
     registry_key = str(pending_row["registry_key"])
     onboarding_run_name = _backend_onboarding_run_name(registry_key)
+    onboarding_attempt_id = _onboarding_attempt_id()
 
     existing_row = fetch_registry_row_by_key(
         registry_key=registry_key,
         cache_root=settings.cache_root,
         database_dsn=settings.database_dsn,
     )
+    existing_promotable_row = dict(existing_row) if existing_row and is_promotable_registry_row(existing_row) else None
     if existing_row and is_promotable_registry_row(existing_row):
         existing_notes = _parse_registry_notes(existing_row.get("notes"))
         if str(existing_notes.get("lifecycle_state") or "").strip().lower() == "ready":
@@ -1560,6 +1577,7 @@ def dataops_ticker_onboarding_flow(
             "requested_region": normalized_region,
             "requested_exchange": normalized_exchange,
             "requested_history_limit": resolved_history_limit,
+            "onboarding_attempt_id": onboarding_attempt_id,
         },
         status="pending_validation",
         validation_status="pending_validation",
@@ -1579,13 +1597,14 @@ def dataops_ticker_onboarding_flow(
         normalized_region,
         str(normalized_exchange or "default"),
     )
+    validation_idempotency_key = f"ticker-validation:{registry_key}:{onboarding_attempt_id}"
     validating_row = _registry_lifecycle_row(
         pending_row,
         lifecycle_state="validating",
         notes={
             "validation_deployment_name": validation_deployment_name,
             "validation_flow_run_name": f"onboarding-validate-{normalized_input.lower()}",
-            "validation_idempotency_key": f"ticker-validation:{registry_key}",
+            "validation_idempotency_key": validation_idempotency_key,
         },
     )
     _persist_registry_row(settings=settings, row=validating_row, publish_enabled=bool(publish_enabled))
@@ -1602,7 +1621,7 @@ def dataops_ticker_onboarding_flow(
         timeout=float(deployment_timeout_seconds),
         poll_interval=10,
         flow_run_name=f"onboarding-validate-{normalized_input.lower()}",
-        idempotency_key=f"ticker-validation:{registry_key}",
+        idempotency_key=validation_idempotency_key,
     )
     validation_state = str(validation_run.state_name or "")
 
@@ -1632,6 +1651,32 @@ def dataops_ticker_onboarding_flow(
         registry_row = fallback_row
     elif registry_row:
         validation_promotable = is_promotable_registry_row(registry_row)
+        if not validation_promotable and existing_promotable_row and _is_unresolved_pending_validation_row(registry_row):
+            logger.info(
+                "Validation child completed but registry remained pending; using confirmed pre-run promotable row (registry_key=%s).",
+                registry_key,
+            )
+            registry_row = {**pending_row, **existing_promotable_row}
+            validation_promotable = True
+        if not validation_promotable and _is_unresolved_pending_validation_row(registry_row):
+            unresolved_row = _registry_lifecycle_row(
+                registry_row,
+                lifecycle_state="validation_incomplete",
+                notes={
+                    "onboarding_run_name": onboarding_run_name,
+                    "validation_flow_run_id": str(validation_run.id),
+                    "validation_flow_state": validation_state,
+                    "validation_error": "validation_completed_without_registry_update",
+                },
+                status="pending_validation",
+                validation_status="pending_validation",
+                promotion_status="pending_validation",
+                validation_reason="validation_completed_without_registry_update",
+            )
+            _persist_registry_row(settings=settings, row=unresolved_row, publish_enabled=bool(publish_enabled))
+            raise RuntimeError(
+                f"Onboarding validation completed for {normalized_input}, but ticker_registry remained pending_validation."
+            )
         registry_row = _registry_lifecycle_row(
             registry_row,
             lifecycle_state="pending_backfill" if validation_promotable else "rejected",
@@ -1672,7 +1717,7 @@ def dataops_ticker_onboarding_flow(
         promoted_symbol,
     )
     backfill_run_name = f"onboarding-backfill-{promoted_symbol.lower()}"
-    backfill_idempotency_key = f"ticker-backfill:{registry_key}:{promoted_symbol}"
+    backfill_idempotency_key = f"ticker-backfill:{registry_key}:{promoted_symbol}:{onboarding_attempt_id}"
     backfilling_row = _registry_lifecycle_row(
         registry_row or pending_row,
         lifecycle_state="backfilling",
