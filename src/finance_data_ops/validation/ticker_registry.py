@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,22 @@ TICKER_REGISTRY_COLUMNS = [
 ]
 
 PROMOTABLE_STATUSES = {"validated_market_only", "validated_full"}
+BOOLEAN_COLUMNS = ["market_supported", "fundamentals_supported", "earnings_supported"]
+TEXT_COLUMNS = [
+    "registry_key",
+    "input_symbol",
+    "normalized_symbol",
+    "region",
+    "exchange",
+    "exchange_mic",
+    "currency",
+    "instrument_type",
+    "status",
+    "validation_status",
+    "validation_reason",
+    "promotion_status",
+]
+TIMESTAMP_COLUMNS = [col for col in TICKER_REGISTRY_COLUMNS if col.endswith("_at")]
 
 
 def build_registry_key(*, input_symbol: str, region: str | None, exchange: str | None) -> str:
@@ -66,22 +82,8 @@ def upsert_ticker_registry_rows(*, cache_root: str | Path, rows: list[dict[str, 
             dedupe_subset=["registry_key"],
         )
 
-    frame = pd.DataFrame(rows)
     now_iso = datetime.now(UTC).isoformat()
-    for col in TICKER_REGISTRY_COLUMNS:
-        if col not in frame.columns:
-            frame[col] = None
-    frame["input_symbol"] = frame["input_symbol"].astype(str).str.upper()
-    frame["normalized_symbol"] = frame["normalized_symbol"].astype(str).str.upper()
-    frame["region"] = frame["region"].astype(str).str.lower().replace({"none": "", "null": ""})
-    frame["exchange"] = frame["exchange"].astype(str).str.upper().replace({"NONE": "", "NULL": ""})
-    frame["exchange_mic"] = frame["exchange_mic"].astype(str).str.upper().replace({"NONE": "", "NULL": ""})
-    frame["currency"] = frame["currency"].astype(str).str.upper().replace({"NONE": "", "NULL": ""})
-    frame["last_validated_at"] = frame["last_validated_at"].fillna(now_iso)
-    frame["updated_at"] = frame["updated_at"].fillna(now_iso)
-    frame["notes"] = frame["notes"].map(_serialize_notes_for_storage)
-
-    frame = frame[TICKER_REGISTRY_COLUMNS]
+    frame = _normalize_registry_frame_for_storage(pd.DataFrame(rows), now_iso=now_iso)
     return write_parquet_table(
         TICKER_REGISTRY_TABLE,
         frame,
@@ -89,6 +91,31 @@ def upsert_ticker_registry_rows(*, cache_root: str | Path, rows: list[dict[str, 
         mode="append",
         dedupe_subset=["registry_key"],
     )
+
+
+def _normalize_registry_frame_for_storage(frame: pd.DataFrame, *, now_iso: str) -> pd.DataFrame:
+    frame = frame.copy()
+    for col in TICKER_REGISTRY_COLUMNS:
+        if col not in frame.columns:
+            frame[col] = None
+
+    for col in TEXT_COLUMNS:
+        upper = col in {
+            "input_symbol",
+            "normalized_symbol",
+            "exchange",
+            "exchange_mic",
+            "currency",
+        }
+        lower = col == "region"
+        frame[col] = frame[col].map(lambda value: _serialize_text_for_storage(value, upper=upper, lower=lower))
+    for col in BOOLEAN_COLUMNS:
+        frame[col] = frame[col].map(_serialize_bool_for_storage).astype(bool)
+    for col in TIMESTAMP_COLUMNS:
+        frame[col] = frame[col].map(lambda value: _serialize_timestamp_for_storage(value, default=now_iso))
+    frame["notes"] = frame["notes"].map(_serialize_notes_for_storage)
+
+    return frame[TICKER_REGISTRY_COLUMNS].copy()
 
 
 def build_pending_registry_row(
@@ -175,10 +202,63 @@ def is_promotable_registry_row(row: dict[str, Any] | None) -> bool:
     return status == "active" and promotion in PROMOTABLE_STATUSES and symbol not in {"", "NONE", "NULL", "NAN"}
 
 
-def _serialize_notes_for_storage(value: Any) -> str:
-    if value is None:
+def _serialize_text_for_storage(value: Any, *, upper: bool = False, lower: bool = False) -> str:
+    if _is_missing(value):
         return ""
-    if isinstance(value, float) and pd.isna(value):
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    text = str(value).strip()
+    if text.upper() in {"NONE", "NULL", "NAN", "NAT"}:
+        return ""
+    if upper:
+        return text.upper()
+    if lower:
+        return text.lower()
+    return text
+
+
+def _serialize_bool_for_storage(value: Any) -> bool:
+    if _is_missing(value):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
+
+
+def _serialize_timestamp_for_storage(value: Any, *, default: str) -> str:
+    if _is_missing(value):
+        return default
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, pd.Timestamp):
+        timestamp = value
+    elif isinstance(value, datetime):
+        timestamp = pd.Timestamp(value)
+    elif isinstance(value, date):
+        timestamp = pd.Timestamp(value)
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw or raw.upper() in {"NONE", "NULL", "NAN", "NAT"}:
+            return default
+        timestamp = pd.to_datetime(raw, utc=True, errors="coerce")
+        if pd.isna(timestamp):
+            return raw
+    else:
+        timestamp = pd.to_datetime(value, utc=True, errors="coerce")
+        if pd.isna(timestamp):
+            return str(value)
+
+    if pd.isna(timestamp):
+        return default
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.tz_localize(UTC)
+    else:
+        timestamp = timestamp.tz_convert(UTC)
+    return timestamp.isoformat()
+
+
+def _serialize_notes_for_storage(value: Any) -> str:
+    if _is_missing(value):
         return ""
     if isinstance(value, bytes):
         value = value.decode("utf-8", errors="replace")
@@ -186,12 +266,14 @@ def _serialize_notes_for_storage(value: Any) -> str:
         raw = value.strip()
         if not raw or raw.upper() in {"NONE", "NULL", "NAN"}:
             return ""
-        parsed = _parse_json_object(raw)
+        parsed = _parse_json_value(raw)
         if parsed is not None:
             return _canonical_json(parsed)
         return raw
     if isinstance(value, dict):
         return _canonical_json({str(key): inner for key, inner in value.items()})
+    if isinstance(value, (list, tuple)):
+        return _canonical_json(list(value))
     return _canonical_json({"value": value})
 
 
@@ -212,12 +294,31 @@ def _deserialize_notes_from_storage(value: Any) -> Any:
 
 
 def _parse_json_object(value: str) -> dict[str, Any] | None:
+    parsed = _parse_json_value(value)
+    return dict(parsed) if isinstance(parsed, dict) else None
+
+
+def _parse_json_value(value: str) -> dict[str, Any] | list[Any] | None:
     try:
         parsed = json.loads(value)
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
-    return dict(parsed) if isinstance(parsed, dict) else None
+    if isinstance(parsed, dict):
+        return dict(parsed)
+    if isinstance(parsed, list):
+        return list(parsed)
+    return None
 
 
-def _canonical_json(value: dict[str, Any]) -> str:
+def _canonical_json(value: dict[str, Any] | list[Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if value is pd.NA or value is pd.NaT:
+        return True
+    if isinstance(value, float):
+        return bool(pd.isna(value))
+    return False

@@ -1613,6 +1613,7 @@ def dataops_ticker_onboarding_flow(
     )
     if registry_row:
         registry_row = {**pending_row, **registry_row}
+    validation_promotable = False
     if str(validation_state).lower() != "completed":
         fallback_row = _registry_lifecycle_row(
             registry_row or validating_row,
@@ -1630,18 +1631,22 @@ def dataops_ticker_onboarding_flow(
         _persist_registry_row(settings=settings, row=fallback_row, publish_enabled=bool(publish_enabled))
         registry_row = fallback_row
     elif registry_row:
+        validation_promotable = is_promotable_registry_row(registry_row)
         registry_row = _registry_lifecycle_row(
             registry_row,
-            lifecycle_state="pending_backfill" if is_promotable_registry_row(registry_row) else "rejected",
+            lifecycle_state="pending_backfill" if validation_promotable else "rejected",
             notes={
                 "onboarding_run_name": onboarding_run_name,
                 "validation_flow_run_id": str(validation_run.id),
                 "validation_flow_state": validation_state,
             },
+            status="pending_backfill" if validation_promotable else "rejected",
+            promotion_status=str(registry_row.get("promotion_status") or "validated_full")
+            if validation_promotable
+            else "rejected",
         )
         _persist_registry_row(settings=settings, row=registry_row, publish_enabled=bool(publish_enabled))
-
-    promotable = is_promotable_registry_row(registry_row)
+    promotable = bool(validation_promotable)
     if not promotable:
         logger.info(
             "Ticker onboarding rejected (ticker=%s, reason=%s).",
@@ -1676,6 +1681,7 @@ def dataops_ticker_onboarding_flow(
             "backfill_flow_run_name": backfill_run_name,
             "backfill_idempotency_key": backfill_idempotency_key,
         },
+        status="backfilling",
     )
     _persist_registry_row(settings=settings, row=backfilling_row, publish_enabled=bool(publish_enabled))
     backfill_run = run_deployment(
@@ -1705,7 +1711,8 @@ def dataops_ticker_onboarding_flow(
                 "backfill_flow_state": backfill_state,
                 "backfill_error": f"backfill_flow_state_{backfill_state.strip().lower()}",
             },
-            validation_reason=str((registry_row or {}).get("validation_reason") or "backfill_incomplete"),
+            status="pending_backfill",
+            validation_reason=f"backfill_flow_state_{backfill_state.strip().lower()}",
         )
         _persist_registry_row(settings=settings, row=failed_row, publish_enabled=bool(publish_enabled))
         # Do not report onboarding success when the backfill child failed: the parent run must

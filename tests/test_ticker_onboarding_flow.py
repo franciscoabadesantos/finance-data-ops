@@ -96,6 +96,13 @@ def test_onboarding_backfill_failure_fails_the_flow(monkeypatch, tmp_path) -> No
             cache_root=str(tmp_path),
             publish_enabled=False,
         )
+    registry = read_ticker_registry(cache_root=tmp_path)
+    row = registry.loc[registry["registry_key"] == "CELH|us|default"].iloc[-1].to_dict()
+    assert row["status"] == "pending_backfill"
+    assert row["promotion_status"] == "validated_full"
+    assert row["validation_reason"] == "backfill_flow_state_failed"
+    assert row["notes"]["lifecycle_state"] == "pending_backfill"
+    assert row["notes"]["backfill_flow_run_id"] == "bf-run"
 
 
 def test_onboarding_rejected_does_not_trigger_backfill(monkeypatch, tmp_path) -> None:
