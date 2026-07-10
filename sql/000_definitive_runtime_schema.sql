@@ -376,6 +376,10 @@ create index idx_etf_holding_onboarding_identity_onboardable
 create index idx_etf_holding_onboarding_identity_source
   on public.etf_holding_onboarding_identity (source_symbol, source_country);
 
+grant select, insert, update, delete
+  on public.etf_holding_onboarding_identity
+  to finance_data_ops_worker;
+
 create table public.etf_themes (
   etf_ticker text primary key,
   theme text not null,

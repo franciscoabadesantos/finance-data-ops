@@ -96,6 +96,35 @@ _YAHOO_SUFFIX_BY_EXCHANGE = {
 
 _US_EXCHANGES = {"", "AMEX", "ASE", "NASDAQ", "NMS", "NYQ", "NYSE", "PCX", "US"}
 
+_EXCHANGE_ALIASES = {
+    "XNAS": "NASDAQ",
+    "NASDAQ": "NASDAQ",
+    "NMS": "NASDAQ",
+    "XNYS": "NYSE",
+    "NYSE": "NYSE",
+    "NYQ": "NYSE",
+    "ARCX": "NYSEARCA",
+    "PCX": "NYSEARCA",
+    "XASE": "AMEX",
+    "ASE": "AMEX",
+    "AMEX": "AMEX",
+    "XCPH": "CPH",
+    "CPH": "CPH",
+    "CSE": "CPH",
+    "OMXCOP": "CPH",
+    "XHKG": "HKEX",
+    "HKEX": "HKEX",
+    "XTKS": "TSE",
+    "JPX": "TSE",
+    "TSE": "TSE",
+    "XTAI": "TWSE",
+    "TWSE": "TWSE",
+    "XSHG": "SHG",
+    "SHG": "SHG",
+    "XSHE": "SHE",
+    "SHE": "SHE",
+}
+
 
 def build_holding_onboarding_identities(
     *,
@@ -183,40 +212,62 @@ def resolve_holding_onboarding_identity(
     if not raw_symbol:
         return _not_onboardable(base, "missing_source_symbol", source="source_identity", confidence=0.0)
 
-    entity_match = _match_existing_identity(raw_symbol, country, entity_attributes)
+    known = _KNOWN_PROVIDER_SYMBOLS_BY_SOURCE.get((raw_symbol, country))
+    by_exchange = _resolve_by_exchange(raw_symbol, exchange or exchange_mic)
+    normalized = normalize_listing_symbol(raw_symbol)
+    qualified = normalized if "." in normalized else ""
+    by_country = normalize_symbol_with_country(raw_symbol, country)
+    by_country = by_country if by_country and by_country != normalized else ""
+    adr = normalized if raw_symbol in ADR_HOME_COUNTRY_BY_SYMBOL else ""
+    suffix = _YAHOO_SUFFIX_BY_COUNTRY.get(country)
+    by_suffix = (
+        normalize_listing_symbol(f"{raw_symbol}{suffix}")
+        if suffix and _safe_non_us_alpha_suffix_candidate(raw_symbol, country)
+        else ""
+    )
+    preferred_symbols = [known, by_exchange, qualified, by_country, adr, by_suffix]
+
+    entity_match = _match_existing_identity(
+        raw_symbol,
+        country,
+        exchange or exchange_mic,
+        entity_attributes,
+        preferred_symbols=preferred_symbols,
+    )
     if entity_match:
         symbol = _text(entity_match.get("provider_symbol") or entity_match.get("normalized_symbol") or entity_match.get("entity_id"), upper=True)
         if symbol:
             return _onboardable(base, symbol, source="entity_attributes_static", confidence=0.95, entity=entity_match)
 
-    registry_match = _match_existing_identity(raw_symbol, country, ticker_registry)
+    registry_match = _match_existing_identity(
+        raw_symbol,
+        country,
+        exchange or exchange_mic,
+        ticker_registry,
+        preferred_symbols=preferred_symbols,
+    )
     if registry_match:
         symbol = _text(registry_match.get("provider_symbol") or registry_match.get("normalized_symbol") or registry_match.get("input_symbol"), upper=True)
         if symbol:
             return _onboardable(base, symbol, source="ticker_registry", confidence=0.92, entity=registry_match)
 
-    known = _KNOWN_PROVIDER_SYMBOLS_BY_SOURCE.get((raw_symbol, country))
     if known:
         return _onboardable(base, known, source="known_mapping", confidence=0.99)
 
-    by_exchange = _resolve_by_exchange(raw_symbol, exchange or exchange_mic)
     if by_exchange:
         return _onboardable(base, by_exchange, source="source_exchange", confidence=0.86)
 
-    normalized = normalize_listing_symbol(raw_symbol)
-    if "." in normalized:
+    if qualified:
         return _onboardable(base, normalized, source="provider_symbol_already_qualified", confidence=0.90)
 
-    by_country = normalize_symbol_with_country(raw_symbol, country)
-    if by_country and by_country != normalized:
+    if by_country:
         return _onboardable(base, by_country, source="source_country_numeric_mapping", confidence=0.84)
 
-    if raw_symbol in ADR_HOME_COUNTRY_BY_SYMBOL:
+    if adr:
         return _onboardable(base, normalized, source="known_adr_listing", confidence=0.88)
 
-    suffix = _YAHOO_SUFFIX_BY_COUNTRY.get(country)
-    if suffix and _safe_non_us_alpha_suffix_candidate(raw_symbol, country):
-        return _onboardable(base, normalize_listing_symbol(f"{raw_symbol}{suffix}"), source="source_country_suffix_mapping", confidence=0.78)
+    if by_suffix:
+        return _onboardable(base, by_suffix, source="source_country_suffix_mapping", confidence=0.78)
 
     if _is_us_bare_symbol(raw_symbol, country=country, exchange=exchange):
         return _onboardable(base, normalized, source="us_bare_symbol", confidence=0.75)
@@ -340,20 +391,73 @@ def _exchange_for_provider_symbol(symbol: str) -> str:
 def _match_existing_identity(
     source_symbol: str,
     source_country: str,
+    source_exchange: str,
     rows_by_symbol: dict[str, dict[str, Any]] | None,
+    *,
+    preferred_symbols: list[str] | None = None,
 ) -> dict[str, Any] | None:
     if not rows_by_symbol:
         return None
-    candidates = [
-        source_symbol,
-        normalize_symbol_with_country(source_symbol, source_country),
-        normalize_listing_symbol(source_symbol),
-    ]
+    candidates = _unique_symbols(
+        [
+            *(preferred_symbols or []),
+            source_symbol,
+            normalize_symbol_with_country(source_symbol, source_country),
+            normalize_listing_symbol(source_symbol),
+        ]
+    )
     for candidate in candidates:
         row = rows_by_symbol.get(_text(candidate, upper=True))
-        if row:
+        if row and _row_matches_source_identity(row, source_country=source_country, source_exchange=source_exchange):
             return row
     return None
+
+
+def _row_matches_source_identity(row: dict[str, Any], *, source_country: str, source_exchange: str) -> bool:
+    row_countries = {
+        normalize_country(row.get("country")),
+        normalize_country(row.get("home_country")),
+        normalize_country(row.get("source_country")),
+        normalize_country(row.get("listing_country")),
+        _country_for_provider_symbol(
+            _text(row.get("provider_symbol") or row.get("normalized_symbol") or row.get("entity_id") or row.get("input_symbol"), upper=True)
+        ),
+    }
+    row_countries.discard("")
+    if source_country and row_countries and source_country not in row_countries:
+        return False
+
+    row_exchanges = {
+        _exchange_alias(row.get("exchange")),
+        _exchange_alias(row.get("source_exchange")),
+        _exchange_alias(row.get("listing_exchange")),
+        _exchange_alias(row.get("exchange_mic")),
+        _exchange_alias(row.get("source_exchange_mic")),
+        _exchange_alias(row.get("listing_mic")),
+    }
+    row_exchanges.discard("")
+    source_exchange_alias = _exchange_alias(source_exchange)
+    if source_exchange_alias and row_exchanges and source_exchange_alias not in row_exchanges:
+        return False
+    return True
+
+
+def _unique_symbols(values: list[str | None]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        symbol = _text(value, upper=True)
+        if symbol and symbol not in seen:
+            out.append(symbol)
+            seen.add(symbol)
+    return out
+
+
+def _exchange_alias(value: Any) -> str:
+    token = _text(value, upper=True)
+    if not token:
+        return ""
+    return _EXCHANGE_ALIASES.get(token, token)
 
 
 def _entity_attributes_by_symbol(frame: pd.DataFrame | None) -> dict[str, dict[str, Any]]:

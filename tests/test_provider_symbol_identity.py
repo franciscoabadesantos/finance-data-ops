@@ -25,6 +25,40 @@ def test_vestas_source_symbol_resolves_to_copenhagen_provider_symbol() -> None:
     assert identity["resolution_source"] == "known_mapping"
 
 
+def test_vestas_ignores_stale_us_entity_attribute_exact_match() -> None:
+    entity_attributes = {
+        "VWS": {
+            "entity_id": "VWS",
+            "normalized_symbol": "VWS",
+            "provider_symbol": "VWS",
+            "country": "US",
+            "region": "US",
+            "exchange": "XNYS",
+        },
+        "VWS.CO": {
+            "entity_id": "VWS.CO",
+            "normalized_symbol": "VWS.CO",
+            "provider_symbol": "VWS.CO",
+            "country": "DK",
+            "region": "EU",
+            "exchange": "CPH",
+        },
+    }
+
+    identity = resolve_holding_onboarding_identity(
+        source_symbol="VWS",
+        source_name="VESTAS WIND SYSTEMS",
+        source_country="DK",
+        entity_attributes=entity_attributes,
+    )
+
+    assert identity["provider_symbol"] == "VWS.CO"
+    assert identity["onboard_symbol"] == "VWS.CO"
+    assert identity["onboard_region"] == "eu"
+    assert identity["is_onboardable"] is True
+    assert identity["resolution_source"] == "entity_attributes_static"
+
+
 def test_existing_provider_symbols_and_us_bare_symbols_remain_onboardable() -> None:
     jp = resolve_holding_onboarding_identity(source_symbol="9766.T", source_country="JP")
     us = resolve_holding_onboarding_identity(source_symbol="ALK", source_country="US")
