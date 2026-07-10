@@ -135,7 +135,7 @@ Compatibility note:
 
 - `data_source_runs` (run trail for refresh + publish + orchestration)
 - `data_asset_status` (freshness/coverage per owned asset)
-- `symbol_data_coverage` (ticker coverage state)
+- `symbol_data_coverage` (diagnostic ticker coverage state rebuilt from materialized source rows)
 - `ticker_registry` (ticker lifecycle registry; Data Ops/Prefect owns writes)
 - `etf_holding_onboarding_identity` (provider onboarding identity read model)
 

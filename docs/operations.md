@@ -118,7 +118,8 @@ Look for:
   - `macro_daily`
   - `economic_release_calendar`
   - existing market/fundamentals/earnings assets
-- `symbol_data_coverage` rows remain populated for symbol-scoped domains
+- `symbol_data_coverage` is complete after a diagnostic rebuild, with one row per symbol
+  currently materialized in source market/fundamentals/earnings tables
 
 ## Runtime source-of-truth policy
 
@@ -127,6 +128,21 @@ For macro and release calendar domains:
 - canonical source: `finance-data-ops` tables (`macro_*`, `economic_release_calendar`)
 - migration fallback only: legacy `Finance` read logic (feature-flag controlled)
 - `Finance/configs/release_calendars/*` is not part of post-cutover runtime logic
+
+## Diagnostic Coverage Rebuild
+
+`symbol_data_coverage` is diagnostic only. Rebuild it from current materialized source rows when
+coverage counts drift from readiness:
+
+```bash
+python scripts/rebuild_symbol_data_coverage.py --source postgres --summary
+python scripts/rebuild_symbol_data_coverage.py --source postgres --apply --summary
+```
+
+The rebuild replaces `public.symbol_data_coverage` with rows derived from
+`source_cache.market_price_daily`, `source_cache.fundamentals`, `source_cache.earnings`, and
+`public.market_quotes`. `market_data_available=true` requires materialized price rows; quote-only
+symbols can appear for diagnostics but do not claim market coverage.
 
 ## Request-driven async jobs
 

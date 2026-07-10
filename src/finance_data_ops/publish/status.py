@@ -7,10 +7,15 @@ canonical tracked-universe or product-readiness contract.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from finance_data_ops.publish.client import Publisher
+from finance_data_ops.publish.client import (
+    Publisher,
+    _adapt_postgres_value,
+    _ordered_columns,
+    _quote_ident,
+    to_json_safe,
+)
 
 SYMBOL_DATA_COVERAGE_SEMANTICS = "diagnostic"
 
@@ -42,6 +47,42 @@ def publish_status_surfaces(
         "data_asset_status": asset_result,
         "symbol_data_coverage": coverage_result,
     }
+
+
+def replace_symbol_data_coverage_rows(
+    *,
+    database_dsn: str,
+    rows: list[dict[str, Any]],
+    timeout_seconds: int = 30,
+) -> dict[str, Any]:
+    """Transactionally replace diagnostic symbol coverage with a full rebuild."""
+
+    dsn = str(database_dsn or "").strip()
+    if not dsn:
+        raise ValueError("DATA_OPS_DATABASE_URL is required to replace symbol_data_coverage.")
+    try:
+        import psycopg
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("psycopg[binary] is required for Postgres coverage publishing.") from exc
+
+    normalized_rows = to_json_safe(rows)
+    with psycopg.connect(
+        dsn,
+        autocommit=False,
+        connect_timeout=int(timeout_seconds),
+        application_name="finance-data-ops",
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute("truncate table public.symbol_data_coverage")
+            if normalized_rows:
+                columns = _ordered_columns(normalized_rows)
+                column_sql = ", ".join(_quote_ident(column) for column in columns)
+                placeholders = ", ".join(["%s"] * len(columns))
+                query = f"insert into public.symbol_data_coverage ({column_sql}) values ({placeholders})"
+                values = [[_adapt_postgres_value(row.get(column)) for column in columns] for row in normalized_rows]
+                cur.executemany(query, values)
+        conn.commit()
+    return {"table": "symbol_data_coverage", "status": "replaced", "rows": len(normalized_rows), "status_code": 200}
 
 
 def fetch_symbol_data_coverage_rows(

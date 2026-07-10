@@ -7,9 +7,10 @@ from typing import Any
 import pandas as pd
 
 from finance_data_ops.derived.market_stats import compute_ticker_market_stats
+from finance_data_ops.diagnostics.symbol_data_coverage import read_complete_symbol_data_coverage_rows_from_postgres
 from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.product_metrics import publish_product_metrics
-from finance_data_ops.publish.status import publish_status_surfaces
+from finance_data_ops.publish.status import publish_status_surfaces, replace_symbol_data_coverage_rows
 from finance_data_ops.rebuild.policies import DomainPolicy
 
 
@@ -35,12 +36,21 @@ def finalize_rebuild(
 
     status_rows = _build_asset_status_rows(client=client, domain=domain, policy=policy)
     coverage_rows = _build_symbol_coverage_rows(client=client, symbols=touched_symbols) if policy.rebuild_coverage else []
+    coverage_replace_result: dict[str, Any] | None = None
+    if policy.rebuild_coverage and getattr(publisher, "database_dsn", ""):
+        coverage_rows = read_complete_symbol_data_coverage_rows_from_postgres(database_dsn=publisher.database_dsn)
+        coverage_replace_result = replace_symbol_data_coverage_rows(
+            database_dsn=publisher.database_dsn,
+            rows=coverage_rows,
+        )
     status_result = publish_status_surfaces(
         publisher=publisher,
         data_source_runs=[],
         data_asset_status=status_rows,
-        symbol_data_coverage=coverage_rows,
+        symbol_data_coverage=[] if coverage_replace_result else coverage_rows,
     )
+    if coverage_replace_result is not None:
+        status_result["symbol_data_coverage"] = coverage_replace_result
     return {
         "derived_results": derived_results,
         "rpc_results": rpc_results,

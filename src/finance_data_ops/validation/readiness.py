@@ -14,7 +14,7 @@ from typing import Any
 
 import pandas as pd
 
-from finance_data_ops.validation.coverage import build_symbol_coverage_rows
+from finance_data_ops.diagnostics.symbol_data_coverage import build_complete_symbol_data_coverage_rows
 
 PLACEHOLDER_SYMBOL_PATTERN = re.compile(r"^\d{6,}[A-Z]$")
 VALIDATED_PROMOTION_STATUSES = frozenset({"validated_market_only", "validated_full"})
@@ -183,14 +183,8 @@ def rebuild_diagnostic_symbol_data_coverage_rows(
     as_of_date: str | None = None,
 ) -> list[dict[str, object]]:
     """Deterministically rebuild diagnostic coverage rows from current materialized inputs."""
-    symbols = required_symbols or sorted(
-        _symbols(prices_frame)
-        | _symbols(quotes_frame)
-        | _symbols(fundamentals_frame)
-        | _symbols(earnings_events_frame)
-    )
-    return build_symbol_coverage_rows(
-        required_symbols=symbols,
+    return build_complete_symbol_data_coverage_rows(
+        required_symbols=required_symbols,
         prices_frame=prices_frame,
         quotes_frame=quotes_frame if quotes_frame is not None else pd.DataFrame(),
         fundamentals_frame=fundamentals_frame,
@@ -351,15 +345,6 @@ def _symbol_column(frame: pd.DataFrame | None) -> str | None:
         if candidate in frame.columns:
             return candidate
     return None
-
-
-def _symbols(frame: pd.DataFrame | None) -> set[str]:
-    if frame is None or frame.empty:
-        return set()
-    symbol_col = _symbol_column(frame)
-    if symbol_col is None:
-        return set()
-    return {_normalize_symbol(value) for value in frame[symbol_col].tolist() if _normalize_symbol(value)}
 
 
 def _normalize_symbol(value: object) -> str:
