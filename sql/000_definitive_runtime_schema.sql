@@ -344,6 +344,38 @@ create table public.etf_holdings (
 create index idx_etf_holdings_ticker_weight
   on public.etf_holdings (etf_ticker, as_of desc, weight desc);
 
+create table public.etf_holding_onboarding_identity (
+  etf_ticker text not null,
+  theme text,
+  source_symbol text not null,
+  source_name text,
+  source_country text,
+  source_exchange text,
+  source_exchange_mic text,
+  source_isin text,
+  source_figi text,
+  source_cusip text,
+  canonical_entity_id text,
+  normalized_entity_symbol text,
+  provider text not null default 'yahoo',
+  provider_symbol text,
+  onboard_symbol text,
+  onboard_region text,
+  onboard_exchange text,
+  is_onboardable boolean not null default false,
+  not_onboardable_reason text,
+  resolution_source text not null,
+  resolution_confidence double precision not null default 0,
+  primary key (etf_ticker, source_symbol, source_country)
+);
+
+create index idx_etf_holding_onboarding_identity_onboardable
+  on public.etf_holding_onboarding_identity (is_onboardable, onboard_symbol)
+  where is_onboardable = true;
+
+create index idx_etf_holding_onboarding_identity_source
+  on public.etf_holding_onboarding_identity (source_symbol, source_country);
+
 create table public.etf_themes (
   etf_ticker text primary key,
   theme text not null,

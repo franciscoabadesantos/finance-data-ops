@@ -627,6 +627,10 @@ def test_theme_etf_refresh_replaces_older_cached_snapshot(tmp_path) -> None:
     }
     assert by_etf["ARKX"] == [{"holding_symbol": "RKLB", "as_of": "2026-07-02"}]
     assert by_etf["SMH"] == [{"holding_symbol": "NVDA", "as_of": "2026-01-02"}]
+    identity = read_parquet_table("etf_holding_onboarding_identity", cache_root=tmp_path, required=True)
+    identity_by_symbol = {row["source_symbol"]: row for row in identity.to_dict(orient="records")}
+    assert identity_by_symbol["RKLB"]["onboard_symbol"] == "RKLB"
+    assert identity_by_symbol["RKLB"]["is_onboardable"] is True
 
 
 def test_theme_etf_write_deactivates_stale_theme_and_removes_old_holdings(tmp_path) -> None:

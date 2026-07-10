@@ -216,6 +216,24 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
                 }
             ]
         ),
+        etf_holding_onboarding_identity=pd.DataFrame(
+            [
+                {
+                    "etf_ticker": "ICLN",
+                    "theme": "clean_energy",
+                    "source_symbol": "VWS",
+                    "source_name": "VESTAS WIND SYSTEMS",
+                    "source_country": "DK",
+                    "provider": "yahoo",
+                    "provider_symbol": "VWS.CO",
+                    "onboard_symbol": "VWS.CO",
+                    "onboard_region": "eu",
+                    "is_onboardable": True,
+                    "resolution_source": "known_mapping",
+                    "resolution_confidence": 0.99,
+                }
+            ]
+        ),
         etf_sector_weights=pd.DataFrame(
             [
                 {
@@ -236,6 +254,7 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
     assert conflicts["market_fundamentals_v2"] == "ticker,period,period_end,metric"
     assert conflicts["ticker_profile"] == "ticker"
     assert conflicts["etf_holdings"] == "etf_ticker,holding_symbol,as_of"
+    assert conflicts["etf_holding_onboarding_identity"] == "etf_ticker,source_symbol,source_country"
     assert conflicts["etf_sector_weights"] == "etf_ticker,sector,as_of"
 
     assert conflicts["ticker_fundamental_point_in_time"] == "ticker,metric"
@@ -262,6 +281,13 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
     holding_row = next(call for call in publisher.upserts if call["table"] == "etf_holdings")["rows"][0]
     assert holding_row["holding_symbol"] == "AAPL"
     assert holding_row["weight"] == 0.071
+
+    identity_row = next(call for call in publisher.upserts if call["table"] == "etf_holding_onboarding_identity")[
+        "rows"
+    ][0]
+    assert identity_row["source_symbol"] == "VWS"
+    assert identity_row["onboard_symbol"] == "VWS.CO"
+    assert identity_row["is_onboardable"] is True
 
     sector_row = next(call for call in publisher.upserts if call["table"] == "etf_sector_weights")["rows"][0]
     assert sector_row["sector"] == "technology"

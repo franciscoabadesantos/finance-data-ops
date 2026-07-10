@@ -78,6 +78,11 @@ def run_dataops_fundamentals_daily(
     cached_fundamentals = read_parquet_table("market_fundamentals_v2", cache_root=settings.cache_root, required=False)
     cached_ticker_profile = read_parquet_table("ticker_profile", cache_root=settings.cache_root, required=False)
     cached_etf_holdings = read_parquet_table("etf_holdings", cache_root=settings.cache_root, required=False)
+    cached_etf_holding_onboarding_identity = read_parquet_table(
+        "etf_holding_onboarding_identity",
+        cache_root=settings.cache_root,
+        required=False,
+    )
     cached_etf_themes = read_parquet_table("etf_themes", cache_root=settings.cache_root, required=False)
     cached_etf_sector_weights = read_parquet_table(
         "etf_sector_weights",
@@ -149,6 +154,7 @@ def run_dataops_fundamentals_daily(
                 fundamentals_summary=fundamentals_summary,
                 ticker_profile=cached_ticker_profile,
                 etf_holdings=cached_etf_holdings,
+                etf_holding_onboarding_identity=cached_etf_holding_onboarding_identity,
                 etf_themes=cached_etf_themes,
                 etf_sector_weights=cached_etf_sector_weights,
                 refresh_materialized_view=bool(publish_enabled),
@@ -265,6 +271,7 @@ def run_dataops_fundamentals_daily(
             "ticker_fundamental_summary": int(len(fundamentals_summary.index)),
             "ticker_profile": int(len(cached_ticker_profile.index)),
             "etf_holdings": int(len(cached_etf_holdings.index)),
+            "etf_holding_onboarding_identity": int(len(cached_etf_holding_onboarding_identity.index)),
             "etf_themes": int(len(cached_etf_themes.index)),
             "etf_sector_weights": int(len(cached_etf_sector_weights.index)),
         },
@@ -309,6 +316,7 @@ def _publish_fundamentals_and_theme_surfaces(
     fundamentals_summary: pd.DataFrame,
     ticker_profile: pd.DataFrame,
     etf_holdings: pd.DataFrame,
+    etf_holding_onboarding_identity: pd.DataFrame,
     etf_themes: pd.DataFrame,
     etf_sector_weights: pd.DataFrame,
     refresh_materialized_view: bool,
@@ -319,6 +327,7 @@ def _publish_fundamentals_and_theme_surfaces(
         fundamentals_summary=fundamentals_summary,
         ticker_profile=ticker_profile,
         etf_holdings=etf_holdings,
+        etf_holding_onboarding_identity=etf_holding_onboarding_identity,
         etf_sector_weights=etf_sector_weights,
         refresh_materialized_view=refresh_materialized_view,
     )

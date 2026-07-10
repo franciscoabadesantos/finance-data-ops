@@ -13,6 +13,7 @@ import pandas as pd
 import requests
 
 from finance_data_ops.geography import country_from_source_or_symbol, normalize_country
+from finance_data_ops.identity.provider_symbols import build_holding_onboarding_identities
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.symbology import is_placeholder_identifier, normalize_listing_symbol, normalize_symbol_with_country
 from finance_data_ops.theme_etfs.config import THEME_ETFS, ThemeETF
@@ -278,6 +279,22 @@ def write_theme_etf_outputs(
         )
         paths["etf_themes"] = str(path)
         paths["etf_themes_rows"] = int(len(themes_to_write.index))
+    if not holdings.empty:
+        identity = build_holding_onboarding_identities(
+            holdings=holdings,
+            etf_themes=themes_to_write,
+            entity_attributes=read_parquet_table("entity_attributes_static", cache_root=cache_root, required=False),
+            ticker_registry=read_parquet_table("ticker_registry", cache_root=cache_root, required=False),
+        )
+        path = write_parquet_table(
+            "etf_holding_onboarding_identity",
+            identity,
+            cache_root=cache_root,
+            mode="replace",
+            dedupe_subset=["etf_ticker", "source_symbol", "source_country"],
+        )
+        paths["etf_holding_onboarding_identity"] = str(path)
+        paths["etf_holding_onboarding_identity_rows"] = int(len(identity.index))
     return paths
 
 

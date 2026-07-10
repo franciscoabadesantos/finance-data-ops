@@ -43,6 +43,7 @@ Historical numbered SQL files remain in the repo for older-instance archaeology,
 - `ticker_fundamental_point_in_time` (current non-fiscal snapshot per `(ticker, metric)`)
 - `mv_latest_fundamentals` (latest per `(ticker, metric)`)
 - `ticker_fundamental_summary` (frontend snapshot)
+- `etf_holding_onboarding_identity` (Data Ops-owned provider-symbol read model for ETF/frontier onboarding)
 
 `market_fundamentals_v2` is for fiscal statement history. Point-in-time vendor metrics such as
 `market_cap`, `trailing_pe`, `dividend_yield`, and `beta` belong in
@@ -52,6 +53,10 @@ the current snapshot instead of accumulating one row per ingestion date.
 `market_cap` is currently also present in market quote surfaces for quote/header/network consumers.
 See [`docs/market_cap_contract.md`](/home/franciscosantos/finance-data-ops/docs/market_cap_contract.md)
 for the compatibility contract and future cleanup path.
+
+`etf_holding_onboarding_identity` preserves ETF/source identity separately from provider onboarding
+identity. Backend/frontier services should read `onboard_symbol` only when `is_onboardable=true`;
+country/exchange suffix resolution is owned by `finance_data_ops.identity`.
 
 ## Earnings surfaces
 
@@ -132,6 +137,7 @@ Compatibility note:
 - `data_asset_status` (freshness/coverage per owned asset)
 - `symbol_data_coverage` (ticker coverage state)
 - `ticker_registry` (ticker lifecycle registry; Data Ops/Prefect owns writes)
+- `etf_holding_onboarding_identity` (provider onboarding identity read model)
 
 Macro/release asset keys in `data_asset_status` are required:
 

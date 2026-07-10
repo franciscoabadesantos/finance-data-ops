@@ -6,6 +6,8 @@ from typing import Any
 
 import pandas as pd
 
+from finance_data_ops.identity.provider_symbols import ONBOARDING_IDENTITY_COLUMNS
+
 from finance_data_ops.publish.client import Publisher
 
 
@@ -268,6 +270,26 @@ def build_etf_holdings_payload(holdings_frame: pd.DataFrame) -> list[dict[str, A
     ].to_dict(orient="records")
 
 
+def build_etf_holding_onboarding_identity_payload(identity_frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if identity_frame.empty:
+        return []
+    frame = identity_frame.copy()
+    for col in ONBOARDING_IDENTITY_COLUMNS:
+        if col not in frame.columns:
+            frame[col] = False if col == "is_onboardable" else ""
+    payload = frame[ONBOARDING_IDENTITY_COLUMNS].copy()
+    for col in ONBOARDING_IDENTITY_COLUMNS:
+        if col == "is_onboardable":
+            payload[col] = payload[col].fillna(False).astype(bool)
+        elif col == "resolution_confidence":
+            payload[col] = pd.to_numeric(payload[col], errors="coerce").fillna(0.0).astype(float)
+        else:
+            payload[col] = _normalize_string_series(payload[col])
+    payload = payload.dropna(subset=["etf_ticker", "source_symbol"])
+    payload = payload.drop_duplicates(subset=["etf_ticker", "source_symbol", "source_country"], keep="last")
+    return payload[ONBOARDING_IDENTITY_COLUMNS].to_dict(orient="records")
+
+
 def build_etf_sector_weights_payload(sector_weights_frame: pd.DataFrame) -> list[dict[str, Any]]:
     if sector_weights_frame.empty:
         return []
@@ -504,6 +526,7 @@ def publish_fundamentals_surfaces(
     fundamentals_summary: pd.DataFrame,
     ticker_profile: pd.DataFrame | None = None,
     etf_holdings: pd.DataFrame | None = None,
+    etf_holding_onboarding_identity: pd.DataFrame | None = None,
     etf_sector_weights: pd.DataFrame | None = None,
     refresh_materialized_view: bool = True,
 ) -> dict[str, Any]:
@@ -513,6 +536,7 @@ def publish_fundamentals_surfaces(
     summary_rows = build_ticker_fundamental_summary_payload(fundamentals_summary)
     profile_rows = build_ticker_profile_payload(_frame_or_empty(ticker_profile))
     holding_rows = build_etf_holdings_payload(_frame_or_empty(etf_holdings))
+    identity_rows = build_etf_holding_onboarding_identity_payload(_frame_or_empty(etf_holding_onboarding_identity))
     sector_weight_rows = build_etf_sector_weights_payload(_frame_or_empty(etf_sector_weights))
 
     history_result = publisher.upsert(
@@ -551,6 +575,13 @@ def publish_fundamentals_surfaces(
             holding_rows,
             on_conflict="etf_ticker,holding_symbol,as_of",
         )
+    identity_result: dict[str, Any] | None = None
+    if identity_rows:
+        identity_result = publisher.upsert(
+            "etf_holding_onboarding_identity",
+            identity_rows,
+            on_conflict="etf_ticker,source_symbol,source_country",
+        )
     sector_weights_result: dict[str, Any] | None = None
     if sector_weight_rows:
         sector_weights_result = publisher.upsert(
@@ -569,6 +600,7 @@ def publish_fundamentals_surfaces(
         "ticker_fundamental_summary": summary_result,
         "ticker_profile": profile_result,
         "etf_holdings": holdings_result,
+        "etf_holding_onboarding_identity": identity_result,
         "etf_sector_weights": sector_weights_result,
         "mv_latest_fundamentals": rpc_result,
     }

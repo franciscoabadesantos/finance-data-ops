@@ -84,6 +84,11 @@ Release timing semantics:
 - `data_asset_status`
 - `symbol_data_coverage`
 - `ticker_registry`
+- `etf_holding_onboarding_identity`
+
+Data Ops owns provider symbology for frontier/onboarding candidates. Backend services consume
+`etf_holding_onboarding_identity` as a read model and pass through `onboard_symbol`; suffix and listing
+venue rules live in `finance_data_ops.identity`.
 
 ## Runtime source-of-truth contract
 

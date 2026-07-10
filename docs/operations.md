@@ -49,6 +49,14 @@ python scripts/run_entity_attributes_static_backfill.py --write-cache --publish
 This re-publishes `feature_store.entity_attributes_static` from the cached entity attributes table after applying the
 canonical symbol normalization, ISO-2 `normalize_country`, `region_for_country`, and `home_country` mapping.
 
+Provider symbol ownership:
+
+- Data Ops owns provider/onboarding symbol resolution for ETF/frontier identities.
+- Backend/frontier services should consume `public.etf_holding_onboarding_identity` and submit `onboard_symbol`
+  only when `is_onboardable=true`.
+- Raw holdings symbols that cannot be resolved confidently remain `is_onboardable=false` with a
+  `not_onboardable_reason`; backend must not add country/exchange suffixes.
+
 Apply `sql/017_symbology_country_home_country.sql` before publishing the country/home-country backfill.
 
 Foreign ETF holding symbol/name repair:
