@@ -1685,7 +1685,7 @@ def dataops_ticker_onboarding_flow(
                 "validation_flow_run_id": str(validation_run.id),
                 "validation_flow_state": validation_state,
             },
-            status="pending_backfill" if validation_promotable else "rejected",
+            status="active" if validation_promotable else "rejected",
             promotion_status=str(registry_row.get("promotion_status") or "validated_full")
             if validation_promotable
             else "rejected",
@@ -1726,7 +1726,7 @@ def dataops_ticker_onboarding_flow(
             "backfill_flow_run_name": backfill_run_name,
             "backfill_idempotency_key": backfill_idempotency_key,
         },
-        status="backfilling",
+        status="active",
     )
     _persist_registry_row(settings=settings, row=backfilling_row, publish_enabled=bool(publish_enabled))
     backfill_run = run_deployment(
@@ -1756,7 +1756,7 @@ def dataops_ticker_onboarding_flow(
                 "backfill_flow_state": backfill_state,
                 "backfill_error": f"backfill_flow_state_{backfill_state.strip().lower()}",
             },
-            status="pending_backfill",
+            status="active",
             validation_reason=f"backfill_flow_state_{backfill_state.strip().lower()}",
         )
         _persist_registry_row(settings=settings, row=failed_row, publish_enabled=bool(publish_enabled))

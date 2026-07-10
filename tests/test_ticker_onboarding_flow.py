@@ -16,6 +16,9 @@ from flows.prefect_dataops_daily import (
 )
 
 
+LIVE_TICKER_REGISTRY_STATUS_VALUES = {"pending_validation", "active", "rejected"}
+
+
 @dataclass
 class FakeDeploymentRun:
     id: str
@@ -100,11 +103,12 @@ def test_onboarding_backfill_failure_fails_the_flow(monkeypatch, tmp_path) -> No
         )
     registry = read_ticker_registry(cache_root=tmp_path)
     row = registry.loc[registry["registry_key"] == "CELH|us|default"].iloc[-1].to_dict()
-    assert row["status"] == "pending_backfill"
+    assert row["status"] == "active"
     assert row["promotion_status"] == "validated_full"
     assert row["validation_reason"] == "backfill_flow_state_failed"
     assert row["notes"]["lifecycle_state"] == "pending_backfill"
     assert row["notes"]["backfill_flow_run_id"] == "bf-run"
+    assert set(registry["status"]).issubset(LIVE_TICKER_REGISTRY_STATUS_VALUES)
 
 
 def test_onboarding_retry_uses_existing_promotable_row_when_completed_validation_is_reused(
@@ -173,6 +177,7 @@ def test_onboarding_retry_uses_existing_promotable_row_when_completed_validation
     assert row["notes"]["lifecycle_state"] == "ready"
     assert row["notes"]["validation_flow_run_id"] == "old-val-run"
     assert row["notes"]["backfill_flow_run_id"] == "bf-run"
+    assert set(registry["status"]).issubset(LIVE_TICKER_REGISTRY_STATUS_VALUES)
 
 
 def test_onboarding_completed_validation_without_registry_update_fails_truthfully(
