@@ -85,6 +85,63 @@ def test_gap_aware_window_detects_catch_up_for_trailing_gap(tmp_path) -> None:
     assert plan.end_date == "2026-04-17"
 
 
+def test_gap_aware_window_detects_stale_symbol_when_other_symbol_is_recent(tmp_path) -> None:
+    write_parquet_table(
+        "source_cache.market_price_daily",
+        pd.DataFrame(
+            [
+                {
+                    "symbol": "SPY",
+                    "price_date": "2026-04-16",
+                    "close": 100.0,
+                    "provider": "fake",
+                    "ingested_at": datetime(2026, 4, 18, 6, 0, tzinfo=UTC),
+                },
+                {
+                    "symbol": "AAPL",
+                    "price_date": "2026-04-17",
+                    "close": 200.0,
+                    "provider": "fake",
+                    "ingested_at": datetime(2026, 4, 18, 6, 0, tzinfo=UTC),
+                },
+            ]
+        ),
+        cache_root=tmp_path,
+        mode="replace",
+        dedupe_subset=["symbol", "price_date"],
+    )
+
+    table_level = resolve_gap_aware_window(
+        domain="market",
+        table_name="source_cache.market_price_daily",
+        date_column="price_date",
+        cadence="business",
+        lookback_days=1,
+        explicit_start=None,
+        explicit_end="2026-04-17",
+        safety_overlap_days=0,
+        cache_root=tmp_path,
+    )
+    universe_level = resolve_gap_aware_window(
+        domain="market",
+        table_name="source_cache.market_price_daily",
+        date_column="price_date",
+        cadence="business",
+        lookback_days=1,
+        explicit_start=None,
+        explicit_end="2026-04-17",
+        safety_overlap_days=0,
+        cache_root=tmp_path,
+        symbols=["SPY", "AAPL"],
+    )
+
+    assert table_level.gap_exists is False
+    assert universe_level.gap_exists is True
+    assert universe_level.stale_symbols_count == 2
+    assert universe_level.missing_symbol_dates_count == 2
+    assert universe_level.earliest_missing_date == "2026-04-16"
+
+
 def test_release_watermark_execution_returns_catch_up_when_stale(tmp_path) -> None:
     write_parquet_table(
         "economic_release_calendar",

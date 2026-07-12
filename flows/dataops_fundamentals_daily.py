@@ -53,6 +53,9 @@ def run_dataops_fundamentals_daily(
     raise_on_failed_hard: bool = True,
     refresh_theme_etfs: bool = False,
     theme_etf_refresh_fn: ThemeETFRefreshFn | None = None,
+    universe_source: str = "explicit_symbols",
+    universe_scope: str = "run_subset",
+    universe_selection_reason: str | None = None,
 ) -> dict[str, Any]:
     flow_started_at = datetime.now(UTC)
     flow_run_id = f"run_dataops_fundamentals_daily_{uuid4().hex[:12]}"
@@ -123,8 +126,11 @@ def run_dataops_fundamentals_daily(
         fundamentals_summary=fundamentals_summary,
         refresh_run=fundamentals_run,
         flow_run_id=flow_run_id,
+        universe_source=universe_source,
+        universe_scope=universe_scope,
+        universe_selection_reason=universe_selection_reason,
     )
-    run_rows = [_refresh_run_to_row(fundamentals_run)]
+    run_rows = [_refresh_run_to_row(fundamentals_run, scope=universe_scope)]
 
     publisher_impl: Publisher
     if publish_enabled:
@@ -199,13 +205,16 @@ def run_dataops_fundamentals_daily(
             run_id=flow_run_id,
             job_name="dataops_fundamentals_daily",
             source_type="orchestration",
-            scope="symbol_universe",
+            scope=universe_scope,
             flow_started_at=flow_started_at,
             status=orchestration_status,
             context={
                 "symbols": normalized_symbols,
                 "symbols_succeeded": symbols_succeeded,
                 "symbols_failed": symbols_failed,
+                "universe_source": universe_source,
+                "universe_scope": universe_scope,
+                "selection_reason": universe_selection_reason,
             },
         )
     )
@@ -334,6 +343,9 @@ def _build_asset_status_rows(
     fundamentals_summary: pd.DataFrame,
     refresh_run: RefreshRunResult,
     flow_run_id: str,
+    universe_source: str = "explicit_symbols",
+    universe_scope: str = "run_subset",
+    universe_selection_reason: str | None = None,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
     fundamentals_last = _frame_datetime_max(fundamentals_frame, "period_end")
@@ -350,7 +362,7 @@ def _build_asset_status_rows(
     now_iso = now.isoformat()
     return [
         {
-            "asset_key": "source_cache.fundamentals",
+            "asset_key": _scoped_asset_key("source_cache.fundamentals", universe_scope),
             "asset_type": "fundamentals",
             "provider": provider,
             "last_success_at": _last_success_timestamp(fundamentals_last, fundamentals_state),
@@ -361,6 +373,9 @@ def _build_asset_status_rows(
                 rows_written=int(len(fundamentals_frame.index)),
                 run_id=refresh_run.run_id,
                 errors=refresh_run.error_messages,
+                universe_source=universe_source,
+                universe_scope=universe_scope,
+                selection_reason=universe_selection_reason,
             ),
             "updated_at": now_iso,
         },
@@ -409,7 +424,7 @@ def _count_items(value: Any) -> int:
         return 0
 
 
-def _refresh_run_to_row(result: RefreshRunResult) -> dict[str, Any]:
+def _refresh_run_to_row(result: RefreshRunResult, *, scope: str = "run_subset") -> dict[str, Any]:
     failure_classification = (
         str(result.status)
         if str(result.status).strip().lower() in {"failed_hard", "failed_retrying"}
@@ -421,7 +436,7 @@ def _refresh_run_to_row(result: RefreshRunResult) -> dict[str, Any]:
         "run_id": result.run_id,
         "job_name": result.asset_name,
         "source_type": "refresh",
-        "scope": "symbol_universe",
+        "scope": scope,
         "status": result.status,
         "started_at": result.started_at,
         "finished_at": result.ended_at,
@@ -551,10 +566,33 @@ def _last_success_timestamp(value: Any, freshness_state: str) -> str | None:
     return pd.Timestamp(value).isoformat()
 
 
-def _asset_reason(*, rows_written: int, run_id: str, errors: list[str]) -> str:
+def _scoped_asset_key(base_key: str, scope: str) -> str:
+    normalized_scope = str(scope or "").strip().lower()
+    if normalized_scope in {"", "global"}:
+        return base_key
+    return f"{base_key}:{normalized_scope}"
+
+
+def _asset_reason(
+    *,
+    rows_written: int,
+    run_id: str,
+    errors: list[str],
+    universe_source: str = "explicit_symbols",
+    universe_scope: str = "run_subset",
+    selection_reason: str | None = None,
+) -> str:
+    parts = [
+        f"rows={rows_written}",
+        f"run_id={run_id}",
+        f"universe_source={str(universe_source or 'unknown')}",
+        f"scope={str(universe_scope or 'run_subset')}",
+    ]
+    if selection_reason:
+        parts.append(f"selection={selection_reason}")
     if errors:
-        return f"rows={rows_written}; run_id={run_id}; errors={'; '.join(errors)}"
-    return f"rows={rows_written}; run_id={run_id}"
+        parts.append(f"errors={'; '.join(errors)}")
+    return "; ".join(parts)
 
 
 def _latest_period_date(frame: pd.DataFrame) -> str | None:
@@ -630,7 +668,7 @@ def main() -> None:
     settings = load_settings(cache_root=args.cache_root)
     symbols = _parse_symbols(args.symbols) if args.symbols else list(settings.default_symbols)
     if not symbols:
-        raise ValueError("No symbols configured. Set --symbols or DATA_OPS_SYMBOLS.")
+        raise ValueError("No symbols configured. Set --symbols or DATA_OPS_SYMBOLS_OVERRIDE.")
 
     summary = run_dataops_fundamentals_daily(
         symbols=symbols,

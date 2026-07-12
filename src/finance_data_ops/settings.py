@@ -34,7 +34,6 @@ class DataOpsSettings:
     alert_webhook_url: str
     feature_build_daily_deployment: str = DEFAULT_FEATURE_BUILD_DAILY_DEPLOYMENT
     feature_scorecard_build_deployment: str = DEFAULT_FEATURE_SCORECARD_BUILD_DEPLOYMENT
-    allow_ticker_registry_universe: bool = False
 
     def require_database(self) -> None:
         if not self.database_dsn:
@@ -68,7 +67,7 @@ def load_settings(
         or env_map.get("PG_DSN")
         or ""
     ).strip()
-    default_symbols = _parse_symbols_env(env_map.get("DATA_OPS_SYMBOLS"))
+    default_symbols = _parse_symbols_env(env_map.get("DATA_OPS_SYMBOLS_OVERRIDE"))
     default_lookback_days = _parse_positive_int(env_map.get("DATA_OPS_LOOKBACK_DAYS"), fallback=400)
     default_max_attempts = _parse_positive_int(env_map.get("DATA_OPS_MAX_ATTEMPTS"), fallback=3)
     symbol_batch_size = _parse_positive_int(env_map.get("DATA_OPS_SYMBOL_BATCH_SIZE"), fallback=100)
@@ -79,7 +78,6 @@ def load_settings(
     feature_scorecard_build_deployment = str(
         env_map.get("FEATURE_SCORECARD_BUILD_DEPLOYMENT") or DEFAULT_FEATURE_SCORECARD_BUILD_DEPLOYMENT
     ).strip()
-    allow_ticker_registry_universe = _parse_bool(env_map.get("DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE"))
 
     return DataOpsSettings(
         repo_root=repo_root,
@@ -92,7 +90,6 @@ def load_settings(
         alert_webhook_url=alert_webhook_url,
         feature_build_daily_deployment=feature_build_daily_deployment,
         feature_scorecard_build_deployment=feature_scorecard_build_deployment,
-        allow_ticker_registry_universe=allow_ticker_registry_universe,
     )
 
 
@@ -110,16 +107,3 @@ def _parse_positive_int(raw: str | int | None, *, fallback: int) -> int:
     except (TypeError, ValueError):
         pass
     return int(fallback)
-
-
-def _parse_bool(raw: str | bool | None, *, fallback: bool = False) -> bool:
-    if isinstance(raw, bool):
-        return raw
-    if raw is None:
-        return bool(fallback)
-    token = str(raw).strip().lower()
-    if token in {"1", "true", "yes", "y", "on"}:
-        return True
-    if token in {"0", "false", "no", "n", "off"}:
-        return False
-    return bool(fallback)

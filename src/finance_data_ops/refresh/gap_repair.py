@@ -31,6 +31,9 @@ class RecurringExecutionPlan:
     canonical_source: str
     table_name: str
     date_column: str
+    symbols_expected_count: int = 0
+    stale_symbols_count: int = 0
+    missing_symbol_dates_count: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,6 +51,8 @@ def resolve_gap_aware_window(
     safety_overlap_days: int,
     cache_root: str | Path,
     database_dsn: str = "",
+    symbols: list[str] | tuple[str, ...] | None = None,
+    symbol_column: str = "symbol",
     **_legacy_kwargs: Any,
 ) -> RecurringExecutionPlan:
     target_end = _parse_date_or_today(explicit_end)
@@ -61,15 +66,32 @@ def resolve_gap_aware_window(
             f"Invalid window: start ({baseline_start.isoformat()}) is after end ({target_end.isoformat()})."
         )
 
-    available_dates, source = _load_canonical_dates(
-        table_name=table_name,
-        date_column=date_column,
-        start_date=baseline_start,
-        end_date=target_end,
-        cache_root=cache_root,
-        database_dsn=database_dsn,
-    )
-    latest_complete = max(available_dates) if available_dates else None
+    expected_symbols = _normalize_symbols(symbols)
+    if expected_symbols:
+        dates_by_symbol, source = _load_canonical_dates_by_symbol(
+            table_name=table_name,
+            date_column=date_column,
+            symbol_column=symbol_column,
+            symbols=expected_symbols,
+            start_date=baseline_start,
+            end_date=target_end,
+            cache_root=cache_root,
+            database_dsn=database_dsn,
+        )
+        available_dates = set().union(*dates_by_symbol.values()) if dates_by_symbol else set()
+        latest_by_symbol = {symbol: (max(values) if values else None) for symbol, values in dates_by_symbol.items()}
+        complete_latest_values = [value for value in latest_by_symbol.values() if value is not None]
+        latest_complete = min(complete_latest_values) if len(complete_latest_values) == len(expected_symbols) else None
+    else:
+        available_dates, source = _load_canonical_dates(
+            table_name=table_name,
+            date_column=date_column,
+            start_date=baseline_start,
+            end_date=target_end,
+            cache_root=cache_root,
+            database_dsn=database_dsn,
+        )
+        latest_complete = max(available_dates) if available_dates else None
 
     if explicit_start:
         return RecurringExecutionPlan(
@@ -86,10 +108,22 @@ def resolve_gap_aware_window(
             canonical_source=source,
             table_name=table_name,
             date_column=date_column,
+            symbols_expected_count=len(expected_symbols),
         )
 
     expected_dates = _expected_dates(start_date=baseline_start, end_date=target_end, cadence=cadence)
-    missing_dates = sorted(expected_dates.difference(available_dates))
+    if expected_symbols:
+        missing_by_symbol = {
+            symbol: sorted(expected_dates.difference(dates_by_symbol.get(symbol, set())))
+            for symbol in expected_symbols
+        }
+        missing_dates = sorted({value for values in missing_by_symbol.values() for value in values})
+        stale_symbols_count = sum(1 for values in missing_by_symbol.values() if values)
+        missing_symbol_dates_count = sum(len(values) for values in missing_by_symbol.values())
+    else:
+        missing_dates = sorted(expected_dates.difference(available_dates))
+        stale_symbols_count = 0
+        missing_symbol_dates_count = 0
     overlap_days = max(int(safety_overlap_days), 0)
 
     if missing_dates:
@@ -119,6 +153,9 @@ def resolve_gap_aware_window(
         canonical_source=source,
         table_name=table_name,
         date_column=date_column,
+        symbols_expected_count=len(expected_symbols),
+        stale_symbols_count=int(stale_symbols_count),
+        missing_symbol_dates_count=int(missing_symbol_dates_count),
     )
 
 
@@ -209,6 +246,39 @@ def _load_canonical_dates(
     ), "parquet"
 
 
+def _load_canonical_dates_by_symbol(
+    *,
+    table_name: str,
+    date_column: str,
+    symbol_column: str,
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    cache_root: str | Path,
+    database_dsn: str,
+) -> tuple[dict[str, set[date]], str]:
+    remote_dates = _fetch_dates_by_symbol_from_postgres(
+        table_name=table_name,
+        date_column=date_column,
+        symbol_column=symbol_column,
+        symbols=symbols,
+        start_date=start_date,
+        end_date=end_date,
+        database_dsn=database_dsn,
+    )
+    if remote_dates is not None:
+        return remote_dates, "postgres"
+    return _fetch_dates_by_symbol_from_parquet(
+        table_name=table_name,
+        date_column=date_column,
+        symbol_column=symbol_column,
+        symbols=symbols,
+        start_date=start_date,
+        end_date=end_date,
+        cache_root=cache_root,
+    ), "parquet"
+
+
 def _fetch_dates_from_postgres(
     *,
     table_name: str,
@@ -219,6 +289,46 @@ def _fetch_dates_from_postgres(
 ) -> set[date] | None:
     dsn = str(database_dsn).strip()
     if not dsn:
+        return None
+
+
+def _fetch_dates_by_symbol_from_postgres(
+    *,
+    table_name: str,
+    date_column: str,
+    symbol_column: str,
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    database_dsn: str,
+) -> dict[str, set[date]] | None:
+    dsn = str(database_dsn).strip()
+    if not dsn:
+        return None
+    try:
+        import psycopg
+    except ImportError:
+        return None
+    try:
+        schema_name, relation_name = _parse_relation_name(table_name)
+        _validate_identifier(date_column)
+        _validate_identifier(symbol_column)
+        query = (
+            f'select "{symbol_column}", "{date_column}" from "{schema_name}"."{relation_name}" '
+            f'where "{symbol_column}" = any(%s) and "{date_column}" is not null '
+            f'and "{date_column}" >= %s and "{date_column}" <= %s'
+        )
+        out: dict[str, set[date]] = {symbol: set() for symbol in symbols}
+        with psycopg.connect(dsn, connect_timeout=30) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (symbols, start_date, end_date))
+                for symbol_value, date_value in cur.fetchall():
+                    symbol = str(symbol_value or "").strip().upper()
+                    parsed = _to_date(date_value)
+                    if symbol in out and parsed is not None and start_date <= parsed <= end_date:
+                        out[symbol].add(parsed)
+        return out
+    except Exception:
         return None
     try:
         import psycopg
@@ -284,6 +394,32 @@ def _fetch_dates_from_parquet(
     return out
 
 
+def _fetch_dates_by_symbol_from_parquet(
+    *,
+    table_name: str,
+    date_column: str,
+    symbol_column: str,
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    cache_root: str | Path,
+) -> dict[str, set[date]]:
+    frame = read_parquet_table(table_name, cache_root=cache_root, required=False)
+    out: dict[str, set[date]] = {symbol: set() for symbol in symbols}
+    if frame.empty or date_column not in frame.columns or symbol_column not in frame.columns:
+        return out
+    safe = frame[[symbol_column, date_column]].copy()
+    safe[symbol_column] = safe[symbol_column].astype(str).str.strip().str.upper()
+    safe[date_column] = pd.to_datetime(safe[date_column], errors="coerce", utc=True)
+    mask = safe[symbol_column].isin(symbols) & safe[date_column].notna()
+    for row in safe.loc[mask].itertuples(index=False):
+        symbol = str(getattr(row, symbol_column)).strip().upper()
+        parsed = pd.Timestamp(getattr(row, date_column)).date()
+        if symbol in out and start_date <= parsed <= end_date:
+            out[symbol].add(parsed)
+    return out
+
+
 def _expected_dates(*, start_date: date, end_date: date, cadence: Cadence) -> set[date]:
     if end_date < start_date:
         return set()
@@ -299,6 +435,18 @@ def _to_date(raw: Any) -> date | None:
     if pd.isna(parsed):
         return None
     return pd.Timestamp(parsed).date()
+
+
+def _normalize_symbols(raw: list[str] | tuple[str, ...] | None) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in raw or []:
+        symbol = str(value).strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        out.append(symbol)
+    return out
 
 
 def _parse_date(raw: str) -> date:

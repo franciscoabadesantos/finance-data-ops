@@ -90,10 +90,20 @@ python scripts/check_macro_parity.py --start-date 2020-01-01 --end-date 2026-04-
 python scripts/check_release_calendar_parity.py --start-date 2020-01-01 --end-date 2026-04-13
 ```
 
+Market history repair:
+
+```bash
+python scripts/run_market_history_repair.py --region all --min-rows 500 --lookback-days 3650 --dry-run
+python scripts/run_market_history_repair.py --region all --min-rows 500 --lookback-days 3650 --chunk-size 50
+```
+
+The repair command resolves its universe from `ticker_registry` unless `--symbols` or `DATA_OPS_SYMBOLS_OVERRIDE*`
+is provided. It writes idempotently to `source_cache.market_price_daily`, scopes status as `run_subset`, and does not
+trigger relationship-map or feature-store rebuilds.
+
 ## Required environment
 
 - `DATA_OPS_DATABASE_URL`
-- `DATA_OPS_SYMBOLS`
 
 Optional:
 
@@ -102,10 +112,10 @@ Optional:
 - `DATA_OPS_SYMBOL_BATCH_SIZE`
 - `DATA_OPS_CACHE_ROOT`
 - `DATA_OPS_ALERT_WEBHOOK_URL`
-- `DATA_OPS_SYMBOLS_US` / `DATA_OPS_SYMBOLS_EU` / `DATA_OPS_SYMBOLS_APAC`
+- `DATA_OPS_SYMBOLS_OVERRIDE` for manual/local source-refresh subsets
+- `DATA_OPS_SYMBOLS_OVERRIDE_US` / `DATA_OPS_SYMBOLS_OVERRIDE_EU` / `DATA_OPS_SYMBOLS_OVERRIDE_APAC` for region-specific manual/local subsets
 - `FEATURE_BUILD_DAILY_DEPLOYMENT` (default `feature-build-daily/feature-build-daily`)
 - `FEATURE_SCORECARD_BUILD_DEPLOYMENT` (default `scorecard-daily/scorecard-daily`; targeted onboarding scorecard build)
-- `DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE` (default `false`; migration-only fallback)
 
 ## Healthy run checks
 
@@ -122,6 +132,12 @@ Look for:
   currently materialized in source market/fundamentals/earnings tables
 
 ## Runtime source-of-truth policy
+
+- Scheduled source refresh universes come from active, promoted, market-supported `ticker_registry` rows.
+- `feature_store.ticker_readiness` remains the product/search tracked universe.
+- Prefect `symbols` parameters are manual one-off subsets and always win.
+- `DATA_OPS_SYMBOLS_OVERRIDE*` variables are emergency/local subset overrides, not the production universe.
+- Region schedules exist because US, EU, and APAC market-close times differ.
 
 For macro and release calendar domains:
 

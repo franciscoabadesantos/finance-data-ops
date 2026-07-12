@@ -126,6 +126,9 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     assert price_row["adj_close"] == 100.5
 
     asset_status_upsert = next(call for call in publisher.upserts if call["table"] == "data_asset_status")
+    asset_keys = {row["asset_key"] for row in asset_status_upsert["rows"]}
+    assert "source_cache.market_price_daily" not in asset_keys
+    assert "source_cache.market_price_daily:run_subset" in asset_keys
     pipeline_row = next(row for row in asset_status_upsert["rows"] if row["asset_key"] == "data_ops_publish_pipeline")
     assert pipeline_row["freshness_status"] == "fresh"
     assert pipeline_row["coverage_status"] == "fresh"

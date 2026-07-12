@@ -1,4 +1,4 @@
-"""Registry-driven symbol universe builders with safe env fallbacks."""
+"""Registry-driven symbol universe builders."""
 
 from __future__ import annotations
 

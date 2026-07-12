@@ -53,6 +53,9 @@ def run_dataops_market_daily(
     max_attempts: int = 3,
     raise_on_failed_hard: bool = True,
     symbol_batch_size: int | None = None,
+    universe_source: str = "explicit_symbols",
+    universe_scope: str = "run_subset",
+    universe_selection_reason: str | None = None,
 ) -> dict[str, Any]:
     flow_started_at = datetime.now(UTC)
     flow_run_id = f"run_dataops_market_daily_{uuid4().hex[:12]}"
@@ -127,10 +130,13 @@ def run_dataops_market_daily(
         quotes_run=quotes_run,
         trading_calendar_frame=cached_trading_calendar,
         symbols=normalized_symbols,
+        universe_source=universe_source,
+        universe_scope=universe_scope,
+        universe_selection_reason=universe_selection_reason,
     )
     run_rows = [
-        _refresh_run_to_row(prices_run),
-        _refresh_run_to_row(quotes_run),
+        _refresh_run_to_row(prices_run, scope=universe_scope),
+        _refresh_run_to_row(quotes_run, scope=universe_scope),
     ]
 
     publisher_impl: Publisher
@@ -200,7 +206,7 @@ def run_dataops_market_daily(
             run_id=flow_run_id,
             job_name="dataops_market_daily",
             source_type="orchestration",
-            scope=f"{start}:{end}",
+            scope=universe_scope,
             flow_started_at=flow_started_at,
             status=orchestration_status,
             context={
@@ -209,6 +215,9 @@ def run_dataops_market_daily(
                 "symbols_failed": symbols_failed,
                 "start": start,
                 "end": end,
+                "universe_source": universe_source,
+                "universe_scope": universe_scope,
+                "selection_reason": universe_selection_reason,
             },
         )
     )
@@ -313,7 +322,7 @@ def _count_items(value: Any) -> int:
         return 0
 
 
-def _refresh_run_to_row(result: RefreshRunResult) -> dict[str, Any]:
+def _refresh_run_to_row(result: RefreshRunResult, *, scope: str = "run_subset") -> dict[str, Any]:
     failure_classification = (
         str(result.status)
         if str(result.status).strip().lower() in {"failed_hard", "failed_retrying"}
@@ -325,7 +334,7 @@ def _refresh_run_to_row(result: RefreshRunResult) -> dict[str, Any]:
         "run_id": result.run_id,
         "job_name": result.asset_name,
         "source_type": "refresh",
-        "scope": "symbol_universe",
+        "scope": scope,
         "status": result.status,
         "started_at": result.started_at,
         "finished_at": result.ended_at,
@@ -384,6 +393,9 @@ def _build_asset_status_rows(
     quotes_run: RefreshRunResult,
     trading_calendar_frame: pd.DataFrame | None = None,
     symbols: list[str] | None = None,
+    universe_source: str = "explicit_symbols",
+    universe_scope: str = "run_subset",
+    universe_selection_reason: str | None = None,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
     prices_last = _frame_datetime_max(prices_frame, "date")
@@ -415,7 +427,7 @@ def _build_asset_status_rows(
     now_iso = now.isoformat()
     return [
         {
-            "asset_key": "source_cache.market_price_daily",
+            "asset_key": _scoped_asset_key("source_cache.market_price_daily", universe_scope),
             "asset_type": "market_data",
             "provider": prices_provider,
             "last_success_at": _last_success_timestamp(prices_last, price_state),
@@ -426,11 +438,14 @@ def _build_asset_status_rows(
                 rows_written=int(len(prices_frame.index)),
                 run_id=prices_run.run_id,
                 errors=prices_run.error_messages,
+                universe_source=universe_source,
+                universe_scope=universe_scope,
+                selection_reason=universe_selection_reason,
             ),
             "updated_at": now_iso,
         },
         {
-            "asset_key": "latest_quotes_provider_check",
+            "asset_key": _scoped_asset_key("latest_quotes_provider_check", universe_scope),
             "asset_type": "market_data",
             "provider": quotes_provider,
             "last_success_at": _last_success_timestamp(quotes_last, quote_state),
@@ -441,6 +456,9 @@ def _build_asset_status_rows(
                 rows_written=int(len(quotes_frame.index)),
                 run_id=quotes_run.run_id,
                 errors=quotes_run.error_messages,
+                universe_source=universe_source,
+                universe_scope=universe_scope,
+                selection_reason=universe_selection_reason,
             ),
             "updated_at": now_iso,
         },
@@ -622,10 +640,33 @@ def _last_success_timestamp(value: Any, freshness_state: str) -> str | None:
     return pd.Timestamp(value).isoformat()
 
 
-def _asset_reason(*, rows_written: int, run_id: str, errors: list[str]) -> str:
+def _scoped_asset_key(base_key: str, scope: str) -> str:
+    normalized_scope = str(scope or "").strip().lower()
+    if normalized_scope in {"", "global"}:
+        return base_key
+    return f"{base_key}:{normalized_scope}"
+
+
+def _asset_reason(
+    *,
+    rows_written: int,
+    run_id: str,
+    errors: list[str],
+    universe_source: str = "explicit_symbols",
+    universe_scope: str = "run_subset",
+    selection_reason: str | None = None,
+) -> str:
+    parts = [
+        f"rows={rows_written}",
+        f"run_id={run_id}",
+        f"universe_source={str(universe_source or 'unknown')}",
+        f"scope={str(universe_scope or 'run_subset')}",
+    ]
+    if selection_reason:
+        parts.append(f"selection={selection_reason}")
     if errors:
-        return f"rows={rows_written}; run_id={run_id}; errors={'; '.join(errors)}"
-    return f"rows={rows_written}; run_id={run_id}"
+        parts.append(f"errors={'; '.join(errors)}")
+    return "; ".join(parts)
 
 
 def _orchestration_run_status(*, overall_state: str, has_publish_failures: bool) -> str:
@@ -745,7 +786,7 @@ def main() -> None:
 
     symbols = _parse_symbols(args.symbols) if args.symbols else list(settings.default_symbols)
     if not symbols:
-        raise ValueError("No symbols configured. Set --symbols or DATA_OPS_SYMBOLS.")
+        raise ValueError("No symbols configured. Set --symbols or DATA_OPS_SYMBOLS_OVERRIDE.")
 
     end_ts = pd.Timestamp(args.end).date() if args.end else datetime.now(UTC).date()
     if args.start:

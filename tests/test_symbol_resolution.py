@@ -1,90 +1,113 @@
 from __future__ import annotations
 
+import pytest
+
 from finance_data_ops.settings import load_settings
-from finance_data_ops.validation.symbol_resolution import resolve_symbols
+from finance_data_ops.validation.symbol_resolution import normalize_refresh_region, resolve_source_refresh_universe
 
 
-def test_resolve_symbols_prefers_region_env_over_registry_by_default(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("DATA_OPS_CACHE_ROOT", str(tmp_path))
-    monkeypatch.setenv("DATA_OPS_SYMBOLS_US", "ENV1,ENV2")
-    settings = load_settings(env={"DATA_OPS_SYMBOLS": "DEF1,DEF2"}, cache_root=tmp_path)
+REGISTRY_ROWS = [
+    {
+        "normalized_symbol": "AAPL",
+        "region": "us",
+        "status": "active",
+        "promotion_status": "validated_full",
+        "market_supported": True,
+    },
+    {
+        "normalized_symbol": "NOVO-B.CO",
+        "region": "dk",
+        "status": "active",
+        "promotion_status": "validated_market_only",
+        "market_supported": True,
+    },
+    {
+        "normalized_symbol": "7203.T",
+        "region": "jp",
+        "status": "active",
+        "promotion_status": "validated_full",
+        "market_supported": True,
+    },
+    {
+        "normalized_symbol": "BHP.AX",
+        "region": "au",
+        "status": "active",
+        "promotion_status": "validated_full",
+        "market_supported": True,
+    },
+    {
+        "normalized_symbol": "PENDING",
+        "region": "us",
+        "status": "pending_validation",
+        "promotion_status": "pending_validation",
+        "market_supported": True,
+    },
+    {
+        "normalized_symbol": "NOPE",
+        "region": "us",
+        "status": "active",
+        "promotion_status": "validated_full",
+        "market_supported": False,
+    },
+]
 
-    monkeypatch.setattr(
-        "finance_data_ops.validation.symbol_resolution.load_validated_symbols",
-        lambda *args, **kwargs: ["REG1", "REG2"],
-    )
 
-    resolved = resolve_symbols(
-        symbols=None,
+def test_explicit_symbols_override_everything(tmp_path) -> None:
+    settings = load_settings(cache_root=tmp_path)
+
+    universe = resolve_source_refresh_universe(
+        symbols=["spy", "qqq"],
         region="us",
         settings=settings,
-        env={"DATA_OPS_SYMBOLS_US": "ENV1,ENV2"},
-    )
-    assert resolved == ["ENV1", "ENV2"]
-
-
-def test_resolve_symbols_can_opt_into_registry_migration_fallback(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("DATA_OPS_CACHE_ROOT", str(tmp_path))
-    settings = load_settings(env={"DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE": "true"}, cache_root=tmp_path)
-
-    monkeypatch.setattr(
-        "finance_data_ops.validation.symbol_resolution.load_validated_symbols",
-        lambda *args, **kwargs: ["REG1", "REG2"],
+        env={"DATA_OPS_SYMBOLS_OVERRIDE_US": "ENV1,ENV2"},
+        registry_rows=REGISTRY_ROWS,
     )
 
-    resolved = resolve_symbols(
+    assert universe.symbols == ["SPY", "QQQ"]
+    assert universe.source == "explicit_symbols"
+    assert universe.scope == "run_subset"
+
+
+def test_env_override_wins_before_registry(tmp_path) -> None:
+    settings = load_settings(cache_root=tmp_path)
+
+    universe = resolve_source_refresh_universe(
         symbols=None,
-        region="us",
+        region="eu",
         settings=settings,
-        env={},
-    )
-    assert resolved == ["REG1", "REG2"]
-
-
-def test_resolve_symbols_fallbacks_when_region_env_empty(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("DATA_OPS_CACHE_ROOT", str(tmp_path))
-    settings = load_settings(env={"DATA_OPS_SYMBOLS": "DEF1,DEF2"}, cache_root=tmp_path)
-
-    monkeypatch.setattr(
-        "finance_data_ops.validation.symbol_resolution.load_validated_symbols",
-        lambda *args, **kwargs: [],
+        env={"DATA_OPS_SYMBOLS_OVERRIDE_EU": "SAP.DE,ASML.AS"},
+        registry_rows=REGISTRY_ROWS,
     )
 
-    by_region = resolve_symbols(
-        symbols=None,
-        region="us",
-        settings=settings,
-        env={"DATA_OPS_SYMBOLS_US": "ENV1,ENV2"},
-    )
-    assert by_region == ["ENV1", "ENV2"]
-
-    by_default = resolve_symbols(
-        symbols=None,
-        region="apac",
-        settings=settings,
-        env={},
-    )
-    assert by_default == ["DEF1", "DEF2"]
+    assert universe.symbols == ["SAP.DE", "ASML.AS"]
+    assert universe.source == "env_override"
+    assert universe.scope == "run_subset"
 
 
-def test_resolve_symbols_all_combines_regions_without_duplicates(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("DATA_OPS_CACHE_ROOT", str(tmp_path))
-    settings = load_settings(env={"DATA_OPS_SYMBOLS": "DEF1,DEF2"}, cache_root=tmp_path)
+def test_registry_universe_by_schedule_region(tmp_path) -> None:
+    settings = load_settings(cache_root=tmp_path)
 
-    monkeypatch.setattr(
-        "finance_data_ops.validation.symbol_resolution.load_validated_symbols",
-        lambda *args, **kwargs: [],
-    )
+    us = resolve_source_refresh_universe(symbols=None, region="us", settings=settings, registry_rows=REGISTRY_ROWS)
+    eu = resolve_source_refresh_universe(symbols=None, region="eu", settings=settings, registry_rows=REGISTRY_ROWS)
+    apac = resolve_source_refresh_universe(symbols=None, region="apac", settings=settings, registry_rows=REGISTRY_ROWS)
 
-    resolved = resolve_symbols(
-        symbols=None,
-        region="all",
-        settings=settings,
-        env={
-            "DATA_OPS_SYMBOLS_US": "AAPL,VGK",
-            "DATA_OPS_SYMBOLS_EU": "SAP.DE,ASML.AS,VGK",
-            "DATA_OPS_SYMBOLS_APAC": "TSM,ASML.AS",
-        },
-    )
+    assert us.symbols == ["AAPL"]
+    assert us.source == "ticker_registry"
+    assert us.scope == "region:us"
+    assert eu.symbols == ["NOVO-B.CO"]
+    assert eu.scope == "region:eu"
+    assert apac.symbols == ["7203.T", "BHP.AX"]
+    assert apac.scope == "region:apac"
 
-    assert resolved == ["AAPL", "VGK", "SAP.DE", "ASML.AS", "TSM"]
+
+def test_non_canonical_registry_regions_map_to_schedule_regions() -> None:
+    assert normalize_refresh_region("dk") == "eu"
+    assert normalize_refresh_region("jp") == "apac"
+    assert normalize_refresh_region("au") == "apac"
+
+
+def test_registry_read_failure_without_override_is_clear(tmp_path) -> None:
+    settings = load_settings(cache_root=tmp_path)
+
+    with pytest.raises(RuntimeError, match="DATA_OPS_DATABASE_URL"):
+        resolve_source_refresh_universe(symbols=None, region="us", settings=settings, env={})

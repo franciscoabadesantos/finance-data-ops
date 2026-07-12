@@ -74,11 +74,13 @@ Orchestration order:
 
 Tracked universe contract:
 
-- `ticker_registry` is pipeline state for validation/onboarding, not the tracked universe source of truth.
+- Scheduled source refresh symbols come from active, promoted, market-supported `ticker_registry` rows.
+- `feature_store.ticker_readiness` is the product/search tracked universe source of truth.
 - Data Ops/Prefect owns all `ticker_registry` lifecycle writes. Backend services trigger Prefect deployments and read state only.
 - Supported ticker lifecycle deployments are `ticker-onboarding`, `ticker-remove`, `ticker-validation`, and `ticker-backfill`. They are Prefect-only async paths.
-- Daily tracked symbols come from deployment `symbols`, `DATA_OPS_SYMBOLS_<REGION>`, or `DATA_OPS_SYMBOLS`.
-- The registry universe fallback is disabled by default and requires `DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE=true` for migration-only use.
+- Deployment `symbols` parameters are manual one-off subsets and always win.
+- `DATA_OPS_SYMBOLS_OVERRIDE*` variables are emergency/local subset overrides, not the production universe.
+- Region schedules remain separate because US, EU, and APAC market-close times differ.
 
 Request-driven ticker lifecycle deployments have no schedules. Onboarding normally invokes validation and backfill as child deployment runs; direct validation and backfill deployment runs are operator escape hatches.
 

@@ -99,7 +99,8 @@ def test_smoke_earnings_refresh_publish_status(tmp_path) -> None:
 
     asset_status_upsert = next(call for call in publisher.upserts if call["table"] == "data_asset_status")
     asset_keys = {row["asset_key"] for row in asset_status_upsert["rows"]}
-    assert "source_cache.earnings" in asset_keys
+    assert "source_cache.earnings" not in asset_keys
+    assert "source_cache.earnings:run_subset" in asset_keys
     assert "earnings_events" not in asset_keys
     assert "earnings_history" not in asset_keys
     assert "next_earnings" not in asset_keys
@@ -134,7 +135,7 @@ def test_build_asset_status_rows_handles_empty_frames() -> None:
     )
 
     assert len(rows) == 1
-    assert rows[0]["asset_key"] == "source_cache.earnings"
+    assert rows[0]["asset_key"] == "source_cache.earnings:run_subset"
     assert rows[0]["freshness_status"] == "failed_hard"
 
 

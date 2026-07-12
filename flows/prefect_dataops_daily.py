@@ -54,7 +54,7 @@ from finance_data_ops.validation.ticker_registry import (
     is_promotable_registry_row,
     upsert_ticker_registry_rows,
 )
-from finance_data_ops.validation.symbol_resolution import resolve_symbols
+from finance_data_ops.validation.symbol_resolution import SourceRefreshUniverse, resolve_source_refresh_universe
 from finance_data_ops.validation.ticker_validation import run_single_ticker_validation
 DEFAULT_TICKER_BACKFILL_START_DATE = "1900-01-01"
 DEFAULT_TICKER_EARNINGS_HISTORY_LIMIT = 100
@@ -122,13 +122,13 @@ FEATURE_BUILD_WATERMARK_REQUIREMENTS: tuple[FeatureBuildWatermarkRequirement, ..
 )
 
 
-def _resolve_symbols(
+def _resolve_source_universe(
     *,
     symbols: str | list[str] | None,
     region: str | None,
     settings: DataOpsSettings,
-) -> list[str]:
-    return resolve_symbols(
+) -> SourceRefreshUniverse:
+    return resolve_source_refresh_universe(
         symbols=symbols,
         region=region,
         settings=settings,
@@ -612,11 +612,8 @@ def dataops_market_daily_flow(
     allow_unhealthy: bool = False,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
-    resolved_symbols = _resolve_symbols(symbols=symbols, region=region, settings=settings)
-    if not resolved_symbols:
-        raise ValueError(
-            "No symbols configured. Pass `symbols` or set DATA_OPS_SYMBOLS / DATA_OPS_SYMBOLS_<REGION>."
-        )
+    universe = _resolve_source_universe(symbols=symbols, region=region, settings=settings)
+    resolved_symbols = universe.symbols
 
     execution_plan = resolve_gap_aware_window(
         domain="market",
@@ -629,16 +626,19 @@ def dataops_market_daily_flow(
         safety_overlap_days=2,
         cache_root=settings.cache_root,
         database_dsn=settings.database_dsn,
+        symbols=resolved_symbols,
     )
     resolved_start, resolved_end = execution_plan.start_date, execution_plan.end_date
 
     logger = get_run_logger()
     logger.info(
         (
-            "Running market flow (region=%s, symbols=%s, start=%s, end=%s, mode=%s, "
-            "latest_complete=%s, gap_exists=%s)."
+            "Running market flow (region=%s, universe_source=%s, scope=%s, symbols=%s, start=%s, end=%s, "
+            "mode=%s, latest_complete=%s, gap_exists=%s)."
         ),
-        str(region or "default"),
+        universe.region,
+        universe.source,
+        universe.scope,
         len(resolved_symbols),
         resolved_start,
         resolved_end,
@@ -656,8 +656,12 @@ def dataops_market_daily_flow(
         max_attempts=int(max_attempts or settings.default_max_attempts),
         raise_on_failed_hard=not bool(allow_unhealthy),
         symbol_batch_size=symbol_batch_size,
+        universe_source=universe.source,
+        universe_scope=universe.scope,
+        universe_selection_reason=universe.selection_reason,
     )
     summary["execution"] = execution_plan.as_dict()
+    summary["universe"] = universe.as_dict()
     return summary
 
 
@@ -678,11 +682,8 @@ def dataops_fundamentals_daily_flow(
     refresh_theme_etfs: bool = True,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
-    resolved_symbols = _resolve_symbols(symbols=symbols, region=region, settings=settings)
-    if not resolved_symbols:
-        raise ValueError(
-            "No symbols configured. Pass `symbols` or set DATA_OPS_SYMBOLS / DATA_OPS_SYMBOLS_<REGION>."
-        )
+    universe = _resolve_source_universe(symbols=symbols, region=region, settings=settings)
+    resolved_symbols = universe.symbols
 
     logger = get_run_logger()
     execution_plan = resolve_watermark_execution(
@@ -697,8 +698,10 @@ def dataops_fundamentals_daily_flow(
         database_dsn=settings.database_dsn,
     )
     logger.info(
-        "Running fundamentals flow (region=%s, symbols=%s, mode=%s, latest_complete=%s, gap_exists=%s).",
-        str(region or "default"),
+        "Running fundamentals flow (region=%s, universe_source=%s, scope=%s, symbols=%s, mode=%s, latest_complete=%s, gap_exists=%s).",
+        universe.region,
+        universe.source,
+        universe.scope,
         len(resolved_symbols),
         execution_plan.mode,
         execution_plan.latest_complete_canonical_date,
@@ -712,8 +715,12 @@ def dataops_fundamentals_daily_flow(
         max_attempts=int(max_attempts or settings.default_max_attempts),
         refresh_theme_etfs=bool(refresh_theme_etfs),
         raise_on_failed_hard=not bool(allow_unhealthy),
+        universe_source=universe.source,
+        universe_scope=universe.scope,
+        universe_selection_reason=universe.selection_reason,
     )
     summary["execution"] = execution_plan.as_dict()
+    summary["universe"] = universe.as_dict()
 
     # Exchange trading calendars ride along with fundamentals-daily (runs once per day)
     # instead of owning a separate Prefect deployment (free-tier 5-deployment limit).
@@ -749,11 +756,8 @@ def dataops_earnings_daily_flow(
     allow_unhealthy: bool = False,
 ) -> dict[str, Any]:
     settings = load_settings(cache_root=cache_root)
-    resolved_symbols = _resolve_symbols(symbols=symbols, region=region, settings=settings)
-    if not resolved_symbols:
-        raise ValueError(
-            "No symbols configured. Pass `symbols` or set DATA_OPS_SYMBOLS / DATA_OPS_SYMBOLS_<REGION>."
-        )
+    universe = _resolve_source_universe(symbols=symbols, region=region, settings=settings)
+    resolved_symbols = universe.symbols
 
     execution_plan = resolve_watermark_execution(
         domain="earnings",
@@ -783,10 +787,12 @@ def dataops_earnings_daily_flow(
     logger = get_run_logger()
     logger.info(
         (
-            "Running earnings flow (region=%s, symbols=%s, history_limit=%s, mode=%s, "
-            "latest_complete=%s, gap_exists=%s)."
+            "Running earnings flow (region=%s, universe_source=%s, scope=%s, symbols=%s, history_limit=%s, "
+            "mode=%s, latest_complete=%s, gap_exists=%s)."
         ),
-        str(region or "default"),
+        universe.region,
+        universe.source,
+        universe.scope,
         len(resolved_symbols),
         int(resolved_history_limit),
         execution_plan.mode,
@@ -801,9 +807,13 @@ def dataops_earnings_daily_flow(
         max_attempts=int(max_attempts or settings.default_max_attempts),
         history_limit=int(resolved_history_limit),
         raise_on_failed_hard=not bool(allow_unhealthy),
+        universe_source=universe.source,
+        universe_scope=universe.scope,
+        universe_selection_reason=universe.selection_reason,
     )
     summary["execution"] = execution_plan.as_dict()
     summary["execution"]["resolved_history_limit"] = int(resolved_history_limit)
+    summary["universe"] = universe.as_dict()
     return summary
 
 
