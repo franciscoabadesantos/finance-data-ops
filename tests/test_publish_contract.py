@@ -50,8 +50,6 @@ def test_publish_contract_writes_expected_tables() -> None:
     publish_prices_surfaces(
         publisher=publisher,
         market_price_daily=prices,
-        market_quotes=quotes,
-        refresh_materialized_view=True,
     )
     publish_status_surfaces(
         publisher=publisher,
@@ -137,8 +135,6 @@ def test_publish_rows_are_json_safe_before_upsert() -> None:
     publish_prices_surfaces(
         publisher=publisher,
         market_price_daily=prices,
-        market_quotes=pd.DataFrame(),
-        refresh_materialized_view=False,
     )
 
     price_call = next(call for call in publisher.upserts if call["table"] == "source_cache.market_price_daily")

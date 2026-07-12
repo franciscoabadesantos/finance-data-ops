@@ -55,8 +55,6 @@ def load_fundamentals_chunk(
         publish_result = publish_fundamentals_surfaces(
             publisher=publisher,
             fundamentals_history=filtered_frame,
-            fundamentals_summary=summary_frame,
-            refresh_materialized_view=False,
         )
     symbol_breakdown = _build_symbol_breakdown(
         tickers=tickers,

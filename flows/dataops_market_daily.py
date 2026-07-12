@@ -151,8 +151,6 @@ def run_dataops_market_daily(
             lambda: publish_prices_surfaces(
                 publisher=publisher_impl,
                 market_price_daily=cached_prices,
-                market_quotes=cached_quotes,
-                refresh_materialized_view=bool(publish_enabled),
             ),
             failures=publish_failures,
         )

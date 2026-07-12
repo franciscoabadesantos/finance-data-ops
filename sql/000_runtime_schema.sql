@@ -1,130 +1,161 @@
--- Definitive runtime baseline for fresh Supabase projects.
+-- Definitive runtime baseline for fresh projects.
 -- Apply this to an empty project instead of replaying historical migrations.
+-- This file is intentionally non-destructive: it creates current runtime
+-- schemas and seed data, but does not drop existing objects or data.
+--
+-- Retired public product surfaces are intentionally absent. Existing DB cleanup
+-- is handled only by the explicit legacy-public-product retirement script.
 
-create table public.market_price_daily (
-  ticker text not null,
-  symbol text generated always as (ticker) stored,
-  date date not null,
-  as_of_date date generated always as ("date") stored,
+create extension if not exists pgcrypto;
+
+create schema if not exists source_cache;
+create schema if not exists feature_store;
+
+create table if not exists source_cache.market_price_daily (
+  symbol text not null,
+  price_date date not null,
   open double precision,
   high double precision,
   low double precision,
   close double precision not null,
-  volume double precision,
-  source text,
-  fetched_at timestamptz not null default now(),
-  created_at timestamptz not null default now(),
-  primary key (ticker, date)
+  adj_close double precision,
+  volume bigint,
+  source_updated_at timestamptz,
+  ingested_at timestamptz not null default now(),
+  primary key (symbol, price_date)
 );
 
-create index idx_market_price_daily_date
-  on public.market_price_daily (date desc);
+create index if not exists idx_source_cache_market_price_daily_date
+  on source_cache.market_price_daily (price_date desc);
 
-create index idx_market_price_daily_symbol_date
-  on public.market_price_daily (symbol, date desc);
-
-
-create table public.market_quotes (
-  ticker text primary key,
-  symbol text generated always as (ticker) stored,
-  name text,
-  sector text,
-  industry text,
-  price double precision,
-  change double precision,
-  change_percent double precision,
-  market_cap_text text,
+create table if not exists source_cache.fundamentals (
+  symbol text not null,
+  report_date date not null,
+  metric text not null,
+  value double precision,
+  value_text text,
+  period_end date not null,
+  period_type text not null,
+  fiscal_year integer,
+  fiscal_quarter text,
+  currency text not null default 'USD',
   source text,
-  fetched_at timestamptz not null default now(),
-  created_at timestamptz not null default now(),
+  source_updated_at timestamptz,
+  ingested_at timestamptz not null default now(),
+  primary key (symbol, metric, period_end, period_type, report_date)
+);
+
+create index if not exists idx_source_cache_fundamentals_period_end
+  on source_cache.fundamentals (period_end desc);
+
+create index if not exists idx_source_cache_fundamentals_symbol_metric
+  on source_cache.fundamentals (symbol, metric, period_end desc);
+
+create table if not exists source_cache.earnings (
+  symbol text not null,
+  report_date date not null,
+  earnings_date date not null,
+  fiscal_period text not null,
+  earnings_time text,
+  actual_eps double precision,
+  estimate_eps double precision,
+  surprise_eps double precision,
+  actual_revenue double precision,
+  estimate_revenue double precision,
+  surprise_revenue double precision,
+  currency text not null default 'USD',
+  source text,
+  source_updated_at timestamptz,
+  ingested_at timestamptz not null default now(),
+  primary key (symbol, report_date, earnings_date, fiscal_period)
+);
+
+create index if not exists idx_source_cache_earnings_date
+  on source_cache.earnings (earnings_date desc);
+
+create table if not exists source_cache.macro_daily (
+  as_of_date date not null,
+  series_key text not null,
+  value double precision,
+  source_updated_at timestamptz,
+  alignment_mode text,
+  is_stale boolean not null default false,
+  staleness_bdays integer,
+  ingested_at timestamptz not null default now(),
+  primary key (as_of_date, series_key)
+);
+
+create index if not exists idx_source_cache_macro_daily_series_date
+  on source_cache.macro_daily (series_key, as_of_date desc);
+
+create table if not exists source_cache.calendars (
+  exchange_mic text not null,
+  session_date date not null,
+  is_trading_day boolean not null default true,
+  is_half_day boolean not null default false,
+  currency text,
+  source text,
+  source_updated_at timestamptz,
+  ingested_at timestamptz not null default now(),
+  primary key (exchange_mic, session_date)
+);
+
+create table if not exists feature_store.entity_attributes_static (
+  entity_id text primary key,
+  name text,
+  country text,
+  home_country text,
+  region text,
+  exchange text,
+  exchange_mic text,
+  currency text,
+  sector text,
   updated_at timestamptz not null default now()
 );
 
-create index idx_market_quotes_updated_at
-  on public.market_quotes (updated_at desc);
-
-
-create table public.market_quotes_history (
-  ticker text not null,
-  symbol text generated always as (ticker) stored,
-  fetched_at timestamptz not null,
-  price double precision,
-  change double precision,
-  change_percent double precision,
-  market_cap double precision,
-  source text,
-  primary key (ticker, fetched_at)
+create table if not exists feature_store.technical_features_daily (
+  symbol text not null,
+  as_of_date date not null,
+  features jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now(),
+  primary key (symbol, as_of_date)
 );
 
-create index idx_market_quotes_history_fetched_at
-  on public.market_quotes_history (fetched_at desc);
-
-
-create materialized view public.mv_latest_prices as
-select
-  q.ticker,
-  q.symbol,
-  q.name,
-  q.sector,
-  q.industry,
-  q.price,
-  q.change,
-  q.change_percent,
-  q.market_cap_text,
-  q.source,
-  q.fetched_at,
-  q.created_at,
-  q.updated_at,
-  latest_daily.date as latest_price_date,
-  latest_daily.as_of_date,
-  latest_daily.close as latest_close
-from public.market_quotes q
-left join lateral (
-  select
-    d.date,
-    d.as_of_date,
-    d.close
-  from public.market_price_daily d
-  where d.ticker = q.ticker
-  order by d.date desc, d.created_at desc
-  limit 1
-) latest_daily on true;
-
-create unique index idx_mv_latest_prices_ticker
-  on public.mv_latest_prices (ticker);
-
-
-create or replace function public.refresh_mv_latest_prices()
-returns void
-language plpgsql
-security definer
-as $$
-begin
-  refresh materialized view public.mv_latest_prices;
-end;
-$$;
-
-
-create table public.ticker_market_stats_snapshot (
-  ticker text primary key,
+create table if not exists feature_store.scorecard_daily (
+  symbol text not null,
   as_of_date date not null,
+  scorecard jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now(),
+  primary key (symbol, as_of_date)
+);
+
+create table if not exists feature_store.ticker_page_summary (
+  symbol text primary key,
+  as_of_date date,
   last_price double precision,
   return_1d_pct double precision,
   return_1m_pct double precision,
   return_3m_pct double precision,
   return_1y_pct double precision,
-  vol_30d_pct double precision,
   drawdown_1y_pct double precision,
-  dist_from_52w_high_pct double precision,
-  dist_from_52w_low_pct double precision,
+  summary_json jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
 );
 
-create index idx_ticker_market_stats_snapshot_as_of_date
-  on public.ticker_market_stats_snapshot (as_of_date desc);
+create table if not exists feature_store.ticker_readiness (
+  symbol text primary key,
+  readiness_status text not null,
+  market_data_available boolean not null default false,
+  fundamentals_available boolean not null default false,
+  earnings_available boolean not null default false,
+  technical_features_available boolean not null default false,
+  scorecard_available boolean not null default false,
+  ticker_page_summary_available boolean not null default false,
+  reason text,
+  updated_at timestamptz not null default now()
+);
 
-
-create table public.data_source_runs (
+create table if not exists public.data_source_runs (
   run_id text primary key,
   job_name text not null,
   source_type text not null,
@@ -143,14 +174,13 @@ create table public.data_source_runs (
   created_at timestamptz not null default now()
 );
 
-create index idx_data_source_runs_started_at
+create index if not exists idx_data_source_runs_started_at
   on public.data_source_runs (started_at desc);
 
-create index idx_data_source_runs_status_started_at
+create index if not exists idx_data_source_runs_status_started_at
   on public.data_source_runs (status, started_at desc);
 
-
-create table public.data_asset_status (
+create table if not exists public.data_asset_status (
   asset_key text primary key,
   asset_type text not null,
   provider text,
@@ -162,11 +192,10 @@ create table public.data_asset_status (
   updated_at timestamptz not null default now()
 );
 
-create index idx_data_asset_status_updated_at
+create index if not exists idx_data_asset_status_updated_at
   on public.data_asset_status (updated_at desc);
 
-
-create table public.symbol_data_coverage (
+create table if not exists public.symbol_data_coverage (
   ticker text primary key,
   market_data_available boolean not null default false,
   fundamentals_available boolean not null default false,
@@ -180,163 +209,117 @@ create table public.symbol_data_coverage (
   updated_at timestamptz not null default now()
 );
 
-create index idx_symbol_data_coverage_status_updated
+create index if not exists idx_symbol_data_coverage_status_updated
   on public.symbol_data_coverage (coverage_status, updated_at desc);
 
-
-create table public.market_fundamentals_v2 (
-  ticker text not null,
-  period text not null,
-  period_end date not null,
-  metric text not null,
-  value double precision not null,
-  value_text text,
+create table if not exists public.ticker_profile (
+  ticker text primary key,
+  description text,
+  long_business_summary text,
+  etf_category text,
+  fund_family text,
+  expense_ratio double precision,
+  inception_date date,
+  legal_type text,
+  beta double precision,
+  beta_3y double precision,
   source text,
   fetched_at timestamptz not null default now(),
-  primary key (ticker, period, period_end, metric)
-);
-
-create index idx_market_fundamentals_v2_period_end
-  on public.market_fundamentals_v2 (period_end desc);
-
-create index idx_market_fundamentals_v2_metric
-  on public.market_fundamentals_v2 (metric, period_end desc);
-
-
-create materialized view public.mv_latest_fundamentals as
-select
-  ranked.ticker,
-  ranked.period,
-  ranked.period_end,
-  ranked.metric,
-  ranked.value,
-  ranked.value_text,
-  ranked.source,
-  ranked.fetched_at
-from (
-  select
-    f.*,
-    row_number() over (
-      partition by f.ticker, f.metric
-      order by f.period_end desc, f.fetched_at desc, f.period desc
-    ) as row_num
-  from public.market_fundamentals_v2 f
-) ranked
-where ranked.row_num = 1;
-
-create unique index idx_mv_latest_fundamentals_ticker_metric
-  on public.mv_latest_fundamentals (ticker, metric);
-
-
-create or replace function public.refresh_mv_latest_fundamentals()
-returns void
-language plpgsql
-security definer
-as $$
-begin
-  refresh materialized view public.mv_latest_fundamentals;
-end;
-$$;
-
-
-create table public.ticker_fundamental_summary (
-  ticker text primary key,
-  latest_revenue double precision,
-  latest_eps double precision,
-  trailing_pe double precision,
-  market_cap double precision,
-  revenue_growth_yoy double precision,
-  earnings_growth_yoy double precision,
-  latest_period_end date,
-  source text,
   updated_at timestamptz not null default now()
 );
 
+create index if not exists idx_ticker_profile_updated_at
+  on public.ticker_profile (updated_at desc);
 
-create table public.market_earnings_events (
-  ticker text not null,
-  earnings_date date not null,
-  earnings_time text,
-  fiscal_period text,
-  estimate_eps double precision,
-  estimate_revenue double precision,
+create table if not exists public.etf_holdings (
+  etf_ticker text not null,
+  holding_symbol text not null,
+  holding_name text,
+  holding_country text,
+  weight double precision,
+  as_of date not null,
   source text,
   fetched_at timestamptz not null default now(),
-  created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  primary key (ticker, earnings_date)
+  primary key (etf_ticker, holding_symbol, as_of)
 );
 
-create index idx_market_earnings_events_date
-  on public.market_earnings_events (earnings_date desc);
+create index if not exists idx_etf_holdings_ticker_weight
+  on public.etf_holdings (etf_ticker, as_of desc, weight desc);
 
+create table if not exists public.etf_holding_onboarding_identity (
+  etf_ticker text not null,
+  theme text,
+  source_symbol text not null,
+  source_name text,
+  source_country text,
+  source_exchange text,
+  source_exchange_mic text,
+  source_isin text,
+  source_figi text,
+  source_cusip text,
+  canonical_entity_id text,
+  normalized_entity_symbol text,
+  provider text not null default 'yahoo',
+  provider_symbol text,
+  onboard_symbol text,
+  onboard_region text,
+  onboard_exchange text,
+  is_onboardable boolean not null default false,
+  not_onboardable_reason text,
+  resolution_source text not null,
+  resolution_confidence double precision not null default 0,
+  primary key (etf_ticker, source_symbol, source_country)
+);
 
-create table public.market_earnings_history (
-  ticker text not null,
-  earnings_date date not null,
-  fiscal_period text,
-  actual_eps double precision,
-  estimate_eps double precision,
-  surprise_eps double precision,
-  actual_revenue double precision,
-  estimate_revenue double precision,
-  surprise_revenue double precision,
+create index if not exists idx_etf_holding_onboarding_identity_onboardable
+  on public.etf_holding_onboarding_identity (is_onboardable, onboard_symbol)
+  where is_onboardable = true;
+
+create index if not exists idx_etf_holding_onboarding_identity_source
+  on public.etf_holding_onboarding_identity (source_symbol, source_country);
+
+create table if not exists public.etf_themes (
+  etf_ticker text primary key,
+  theme text not null,
+  wave integer not null check (wave in (1, 2)),
+  issuer text,
+  source_type text not null,
+  source_ref text,
+  holdings_count integer,
+  holdings_as_of date,
+  holdings_source_depth text not null default 'unknown',
+  holdings_shallow boolean not null default false,
+  active boolean not null default true,
+  fetched_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_etf_themes_theme_wave
+  on public.etf_themes (theme, wave, active);
+
+create table if not exists public.etf_sector_weights (
+  etf_ticker text not null,
+  sector text not null,
+  weight double precision,
+  as_of date not null,
   source text,
   fetched_at timestamptz not null default now(),
-  created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  primary key (ticker, earnings_date)
+  primary key (etf_ticker, sector, as_of)
 );
 
-create index idx_market_earnings_history_date
-  on public.market_earnings_history (earnings_date desc);
+create index if not exists idx_etf_sector_weights_ticker_weight
+  on public.etf_sector_weights (etf_ticker, as_of desc, weight desc);
 
-
-create materialized view public.mv_next_earnings as
-select
-  ranked.ticker,
-  ranked.earnings_date,
-  ranked.earnings_time,
-  ranked.fiscal_period,
-  ranked.estimate_eps,
-  ranked.estimate_revenue,
-  ranked.source,
-  ranked.fetched_at,
-  ranked.created_at,
-  ranked.updated_at
-from (
-  select
-    e.*,
-    row_number() over (
-      partition by e.ticker
-      order by e.earnings_date asc, e.updated_at desc, e.fetched_at desc
-    ) as row_num
-  from public.market_earnings_events e
-  where e.earnings_date >= current_date
-) ranked
-where ranked.row_num = 1;
-
-create unique index idx_mv_next_earnings_ticker
-  on public.mv_next_earnings (ticker);
-
-
-create or replace function public.refresh_mv_next_earnings()
-returns void
-language plpgsql
-security definer
-as $$
-begin
-  refresh materialized view public.mv_next_earnings;
-end;
-$$;
-
-
-create table public.ticker_registry (
+create table if not exists public.ticker_registry (
   registry_key text primary key,
   input_symbol text not null,
   normalized_symbol text,
   region text not null default 'us',
   exchange text,
+  exchange_mic text,
+  currency text,
   instrument_type text not null default 'unknown',
   status text not null default 'pending_validation',
   market_supported boolean not null default false,
@@ -354,14 +337,24 @@ create table public.ticker_registry (
   check (promotion_status in ('pending_validation', 'validated_market_only', 'validated_full', 'rejected'))
 );
 
-create index idx_ticker_registry_region_status
+create index if not exists idx_ticker_registry_region_status
   on public.ticker_registry (region, validation_status, promotion_status);
 
-create unique index idx_ticker_registry_input_scope
+create unique index if not exists idx_ticker_registry_input_scope
   on public.ticker_registry (input_symbol, region, coalesce(exchange, ''));
 
+create table if not exists public.exchange_trading_calendar (
+  exchange_mic text not null,
+  session_date date not null,
+  is_half_day boolean not null default false,
+  ingested_at timestamptz not null default now(),
+  primary key (exchange_mic, session_date)
+);
 
-create table public.macro_series_catalog (
+create index if not exists idx_exchange_trading_calendar_mic_date
+  on public.exchange_trading_calendar (exchange_mic, session_date);
+
+create table if not exists public.macro_series_catalog (
   series_key text primary key,
   source_provider text not null,
   source_code text not null,
@@ -376,11 +369,10 @@ create table public.macro_series_catalog (
   check (frequency in ('daily', 'weekly', 'monthly'))
 );
 
-create index idx_macro_series_catalog_required
+create index if not exists idx_macro_series_catalog_required
   on public.macro_series_catalog (required_by_default desc, series_key);
 
-
-create table public.macro_observations (
+create table if not exists public.macro_observations (
   series_key text not null references public.macro_series_catalog(series_key) on delete cascade,
   observation_period text not null,
   observation_date date not null,
@@ -399,14 +391,13 @@ create table public.macro_observations (
   check (frequency in ('daily', 'weekly', 'monthly'))
 );
 
-create index idx_macro_observations_observation_date
+create index if not exists idx_macro_observations_observation_date
   on public.macro_observations (observation_date desc);
 
-create index idx_macro_observations_release_timestamp
+create index if not exists idx_macro_observations_release_timestamp
   on public.macro_observations (release_timestamp_utc desc);
 
-
-create table public.macro_daily (
+create table if not exists public.macro_daily (
   as_of_date date not null,
   series_key text not null references public.macro_series_catalog(series_key) on delete cascade,
   value double precision,
@@ -420,11 +411,10 @@ create table public.macro_daily (
   primary key (as_of_date, series_key)
 );
 
-create index idx_macro_daily_series_date
+create index if not exists idx_macro_daily_series_date
   on public.macro_daily (series_key, as_of_date desc);
 
-
-create materialized view public.mv_latest_macro_observations as
+create materialized view if not exists public.mv_latest_macro_observations as
 select
   ranked.series_key,
   ranked.observation_period,
@@ -451,9 +441,8 @@ from (
 ) ranked
 where ranked.row_num = 1;
 
-create unique index idx_mv_latest_macro_observations_series_key
+create unique index if not exists idx_mv_latest_macro_observations_series_key
   on public.mv_latest_macro_observations (series_key);
-
 
 create or replace function public.refresh_mv_latest_macro_observations()
 returns void
@@ -465,8 +454,7 @@ begin
 end;
 $$;
 
-
-create table public.economic_release_calendar (
+create table if not exists public.economic_release_calendar (
   series_key text not null references public.macro_series_catalog(series_key) on delete cascade,
   observation_period text not null,
   observation_date date not null,
@@ -484,54 +472,16 @@ create table public.economic_release_calendar (
   provenance_class text,
   ingested_at timestamptz not null default now(),
   primary key (series_key, observation_period),
-  check (release_timestamp_utc = scheduled_release_timestamp_utc),
-  check (
-    availability_status in (
-      'observed_available',
-      'scheduled_provisional',
-      'late_missing_observation',
-      'schedule_only_unsupported_history'
-    )
-  ),
-  check (
-    (
-      observed_first_available_at_utc is null
-      and is_schedule_based_only = true
-      and delay_vs_schedule_seconds is null
-      and availability_status in (
-        'scheduled_provisional',
-        'late_missing_observation',
-        'schedule_only_unsupported_history'
-      )
-    )
-    or (
-      observed_first_available_at_utc is not null
-      and is_schedule_based_only = false
-      and availability_status = 'observed_available'
-      and delay_vs_schedule_seconds is not null
-    )
-  )
+  check (release_timestamp_utc = scheduled_release_timestamp_utc)
 );
 
-create index idx_economic_release_calendar_scheduled_release
+create index if not exists idx_economic_release_calendar_scheduled_release
   on public.economic_release_calendar (scheduled_release_timestamp_utc desc);
 
-create index idx_economic_release_calendar_observed_release
+create index if not exists idx_economic_release_calendar_observed_release
   on public.economic_release_calendar (observed_first_available_at_utc desc);
 
-create index idx_economic_release_calendar_effective_release
-  on public.economic_release_calendar (
-    coalesce(observed_first_available_at_utc, scheduled_release_timestamp_utc) desc
-  );
-
-comment on column public.economic_release_calendar.release_timestamp_utc is
-  'Backward-compatible alias of scheduled_release_timestamp_utc. Use observed_first_available_at_utc for actual observed availability.';
-
-comment on column public.economic_release_calendar.observed_first_available_at_utc is
-  'First observed availability timestamp. This is the source of truth for actual release availability when present.';
-
-
-create materialized view public.mv_latest_economic_release_calendar as
+create materialized view if not exists public.mv_latest_economic_release_calendar as
 select
   ranked.series_key,
   ranked.observation_period,
@@ -561,9 +511,8 @@ from (
 ) ranked
 where ranked.row_num = 1;
 
-create unique index idx_mv_latest_economic_release_calendar_series_key
+create unique index if not exists idx_mv_latest_economic_release_calendar_series_key
   on public.mv_latest_economic_release_calendar (series_key);
-
 
 create or replace function public.refresh_mv_latest_economic_release_calendar()
 returns void
@@ -575,8 +524,7 @@ begin
 end;
 $$;
 
-
-create table public.async_job_runs (
+create table if not exists public.async_job_runs (
   job_id text primary key,
   job_type text not null,
   registry_key text not null default '',
@@ -592,14 +540,13 @@ create table public.async_job_runs (
   check (status in ('queued', 'running', 'completed', 'failed', 'cancelled', 'skipped'))
 );
 
-create index idx_async_job_runs_registry_updated
+create index if not exists idx_async_job_runs_registry_updated
   on public.async_job_runs (registry_key, updated_at desc);
 
-create index idx_async_job_runs_type_status_updated
+create index if not exists idx_async_job_runs_type_status_updated
   on public.async_job_runs (job_type, status, updated_at desc);
 
-
-create table public.analysis_jobs (
+create table if not exists public.analysis_jobs (
   job_id text primary key,
   user_id text,
   ticker text not null,
@@ -616,17 +563,16 @@ create table public.analysis_jobs (
   check (status in ('queued', 'running', 'completed', 'failed'))
 );
 
-create index idx_analysis_jobs_ticker_created
+create index if not exists idx_analysis_jobs_ticker_created
   on public.analysis_jobs (ticker, created_at desc);
 
-create index idx_analysis_jobs_status_created
+create index if not exists idx_analysis_jobs_status_created
   on public.analysis_jobs (status, created_at desc);
 
-create index idx_analysis_jobs_type_created
+create index if not exists idx_analysis_jobs_type_created
   on public.analysis_jobs (analysis_type, created_at desc);
 
-
-create table public.analysis_results (
+create table if not exists public.analysis_results (
   job_id text primary key references public.analysis_jobs(job_id) on delete cascade,
   analysis_type text not null,
   result_json jsonb not null,
@@ -634,5 +580,76 @@ create table public.analysis_results (
   created_at timestamptz not null default now()
 );
 
-create index idx_analysis_results_type_created
+create index if not exists idx_analysis_results_type_created
   on public.analysis_results (analysis_type, created_at desc);
+
+create table if not exists public.production_signals (
+  signal_date date not null,
+  strategy_family text not null,
+  universe text not null,
+  environment text not null default 'production',
+  symbol text not null,
+  active_pointer_id text,
+  candidate_id text,
+  bundle_id text,
+  score double precision,
+  rank integer,
+  percentile double precision,
+  selected boolean,
+  horizon text,
+  target_exposure double precision,
+  signal_json jsonb not null default '{}'::jsonb,
+  result_ref text,
+  orchestrator_run_id text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (signal_date, strategy_family, universe, environment, symbol)
+);
+
+create index if not exists ix_production_signals_date
+  on public.production_signals (signal_date desc);
+
+create index if not exists ix_production_signals_pointer
+  on public.production_signals (active_pointer_id);
+
+insert into public.macro_series_catalog (
+  series_key,
+  source_provider,
+  source_code,
+  frequency,
+  required_by_default,
+  required_from_date,
+  optional,
+  staleness_max_bdays,
+  release_calendar_source,
+  description
+)
+values
+  ('VIX', 'yfinance', '^VIX', 'daily', true, '1990-01-02', false, 5, null, 'CBOE Volatility Index close.'),
+  ('VIX3M', 'fred', 'VXVCLS', 'daily', true, '2007-12-04', false, 5, null, 'CBOE 3M volatility index close.'),
+  ('VVIX', 'yfinance', '^VVIX', 'daily', true, '2007-01-03', false, 5, null, 'CBOE VVIX close.'),
+  ('10Y_Treasury_Yield', 'fred', 'DGS10', 'daily', true, null, false, 5, null, '10Y treasury yield.'),
+  ('2Y_Treasury_Yield', 'fred', 'DGS2', 'daily', true, null, false, 5, null, '2Y treasury yield.'),
+  ('High_Yield_Spread', 'fred', 'BAMLH0A0HYM2', 'daily', true, null, false, 5, null, 'US high yield OAS.'),
+  ('TED_Spread', 'fred', 'TEDRATE', 'daily', false, null, true, 5, null, 'TED spread optional.'),
+  ('CPI_Headline', 'fred', 'CPIAUCSL', 'monthly', false, null, false, 45, 'bls_cpi_release_calendar_v1', 'Headline CPI.'),
+  ('CPI_Core', 'fred', 'CPILFESL', 'monthly', false, null, false, 45, 'bls_cpi_release_calendar_v1', 'Core CPI.'),
+  ('UNRATE', 'fred', 'UNRATE', 'monthly', true, null, false, 45, 'bls_unrate_release_calendar_v1', 'U-3 unemployment rate.'),
+  ('U6RATE', 'fred', 'U6RATE', 'monthly', false, null, false, 45, 'bls_unrate_release_calendar_v1', 'U-6 unemployment rate.'),
+  ('ICSA', 'fred', 'ICSA', 'weekly', false, null, false, 10, 'dol_icsa_release_calendar_v1', 'Initial jobless claims.'),
+  ('CIVPART', 'fred', 'CIVPART', 'monthly', false, null, false, 45, 'bls_unrate_release_calendar_v1', 'Labor force participation.'),
+  ('WTI', 'fred', 'DCOILWTICO', 'daily', false, null, false, 5, null, 'WTI spot price.'),
+  ('Gasoline_US_Regular', 'fred', 'GASREGW', 'weekly', false, null, false, 10, null, 'US gasoline weekly.'),
+  ('NatGas_HenryHub', 'fred', 'DHHNGSP', 'daily', false, null, false, 5, null, 'Henry Hub nat gas.'),
+  ('DBC', 'yfinance', 'DBC', 'daily', false, null, false, 5, null, 'DBC ETF close.')
+on conflict (series_key) do update set
+  source_provider = excluded.source_provider,
+  source_code = excluded.source_code,
+  frequency = excluded.frequency,
+  required_by_default = excluded.required_by_default,
+  required_from_date = excluded.required_from_date,
+  optional = excluded.optional,
+  staleness_max_bdays = excluded.staleness_max_bdays,
+  release_calendar_source = excluded.release_calendar_source,
+  description = excluded.description,
+  updated_at = now();

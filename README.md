@@ -192,7 +192,12 @@ Fresh Supabase projects should use the definitive runtime baseline:
 - Schema: [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
 - Seed: [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
 
-Historical numbered SQL files (`001..007`) remain in the repo as migration archaeology for older instances, but they are not the supported bootstrap path for new projects anymore.
+Legacy public product surfaces are retired and are absent from the runtime baseline. Historical
+legacy SQL lives under
+[`sql/archive/legacy_public_product_surfaces/`](/home/franciscosantos/finance-data-ops/sql/archive/legacy_public_product_surfaces)
+for archaeology only. Existing databases can run
+[`sql/019_retire_legacy_public_product_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/019_retire_legacy_public_product_surfaces.sql)
+as an explicit manual cleanup step; it is not part of normal source refresh or fresh bootstrap.
 
 ## Additional docs
 

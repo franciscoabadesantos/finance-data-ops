@@ -13,13 +13,13 @@ Preferred path for a fresh empty project:
 This is the single-file bootstrap for empty projects: current tables, materialized views, refresh
 functions, indexes, RLS enablement, and minimal runtime seed data.
 
-Historical migration path, retained for older-instance archaeology:
+Legacy/retirement SQL, retained for older-instance archaeology and explicit cleanup only:
 
-- [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
-- [`sql/013_fundamentals_point_in_time_snapshot.sql`](/home/franciscosantos/finance-data-ops/sql/013_fundamentals_point_in_time_snapshot.sql)
-- [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
+- [`sql/archive/legacy_public_product_surfaces/`](/home/franciscosantos/finance-data-ops/sql/archive/legacy_public_product_surfaces)
+- [`sql/019_retire_legacy_public_product_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/019_retire_legacy_public_product_surfaces.sql)
 
-Historical numbered SQL files are retained for older-instance archaeology.
+Historical numbered SQL files in the archive are not part of fresh installs and are not runtime
+product outputs.
 
 ## Surfaces created/owned by migrations
 
@@ -45,6 +45,11 @@ Historical numbered SQL files are retained for older-instance archaeology.
   - `async_job_runs` durable request-driven async job audit surface
   - `analysis_jobs`
   - `analysis_results`
+
+Retired public product tables, materialized views, and refresh RPCs are intentionally absent from
+the runtime schema. Existing databases can drop those objects with
+[`sql/019_retire_legacy_public_product_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/019_retire_legacy_public_product_surfaces.sql);
+the script is manual-only and must not run as part of normal refresh.
 - Runtime seed:
   - default `macro_series_catalog` rows required by daily macro/release refreshes
 

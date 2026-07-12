@@ -304,12 +304,10 @@ def publish_fundamentals_surfaces(
     *,
     publisher: Publisher,
     fundamentals_history: pd.DataFrame,
-    fundamentals_summary: pd.DataFrame,
     ticker_profile: pd.DataFrame | None = None,
     etf_holdings: pd.DataFrame | None = None,
     etf_holding_onboarding_identity: pd.DataFrame | None = None,
     etf_sector_weights: pd.DataFrame | None = None,
-    refresh_materialized_view: bool = True,
 ) -> dict[str, Any]:
     source_cache_rows = build_source_cache_fundamentals_payload(fundamentals_history)
     profile_rows = build_ticker_profile_payload(_frame_or_empty(ticker_profile))

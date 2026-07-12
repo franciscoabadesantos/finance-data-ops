@@ -21,7 +21,6 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from flows.dataops_trading_calendar_daily import run_dataops_trading_calendar_daily
-from finance_data_ops.derived.fundamentals_summary import compute_ticker_fundamental_summary
 from finance_data_ops.onboarding.wave_a import (
     DEEP_EARNINGS_HISTORY_LIMIT,
     FULL_HISTORY_START_DATE,
@@ -149,8 +148,6 @@ def _run_full_history_backfill(
             publish_prices_surfaces(
                 publisher=publisher,
                 market_price_daily=prices,
-                market_quotes=quotes,
-                refresh_materialized_view=False,
             )
 
         fundamentals, fundamentals_run = refresh_fundamentals_daily(
@@ -165,8 +162,6 @@ def _run_full_history_backfill(
             publish_fundamentals_surfaces(
                 publisher=publisher,
                 fundamentals_history=fundamentals,
-                fundamentals_summary=compute_ticker_fundamental_summary(fundamentals),
-                refresh_materialized_view=False,
             )
 
         earnings_events, earnings_history, earnings_run = refresh_earnings_daily(
@@ -184,7 +179,6 @@ def _run_full_history_backfill(
                 publisher=publisher,
                 earnings_events=earnings_events,
                 earnings_history=earnings_history,
-                refresh_materialized_view=False,
             )
 
     calendar_result: dict[str, Any] = {"status": "skipped"}

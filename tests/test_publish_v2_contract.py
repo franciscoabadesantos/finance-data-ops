@@ -29,23 +29,6 @@ def test_publish_v2_contract_writes_expected_tables() -> None:
             }
         ]
     )
-    summary = pd.DataFrame(
-        [
-            {
-                "ticker": "SPY",
-                "latest_revenue": 550.0,
-                "latest_eps": 10.0,
-                "trailing_pe": 20.0,
-                "market_cap": 2200.0,
-                "revenue_growth_yoy": 0.1,
-                "earnings_growth_yoy": 0.1,
-                "latest_period_end": "2025-12-31",
-                "source": "fake",
-                "updated_at": datetime(2026, 4, 11, 12, 0, tzinfo=UTC),
-            }
-        ]
-    )
-
     earnings_events = pd.DataFrame(
         [
             {
@@ -81,14 +64,11 @@ def test_publish_v2_contract_writes_expected_tables() -> None:
     publish_fundamentals_surfaces(
         publisher=publisher,
         fundamentals_history=fundamentals,
-        fundamentals_summary=summary,
-        refresh_materialized_view=True,
     )
     publish_earnings_surfaces(
         publisher=publisher,
         earnings_events=earnings_events,
         earnings_history=earnings_history,
-        refresh_materialized_view=True,
     )
 
     tables = [call["table"] for call in publisher.upserts]
@@ -164,7 +144,6 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
                 }
             ]
         ),
-        fundamentals_summary=pd.DataFrame(),
         ticker_profile=pd.DataFrame(
             [
                 {
@@ -228,7 +207,6 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
                 }
             ]
         ),
-        refresh_materialized_view=False,
     )
 
     conflicts = {call["table"]: call["on_conflict"] for call in publisher.upserts}

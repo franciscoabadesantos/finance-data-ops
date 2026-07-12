@@ -88,7 +88,6 @@ def publish_earnings_surfaces(
     publisher: Publisher,
     earnings_events: pd.DataFrame,
     earnings_history: pd.DataFrame,
-    refresh_materialized_view: bool = True,
 ) -> dict[str, Any]:
     source_cache_rows = build_source_cache_earnings_payload(earnings_events, earnings_history)
 

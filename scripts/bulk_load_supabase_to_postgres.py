@@ -3,6 +3,9 @@
 
 This script is intentionally not a Prefect flow. The server agent runs it once
 with explicit source/target credentials after the local schema is in place.
+
+Legacy public product relations listed here are migration inputs only. Runtime
+schema and product publishing write canonical source_cache/feature_store targets.
 """
 
 from __future__ import annotations

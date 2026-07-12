@@ -68,8 +68,6 @@ def publish_prices_surfaces(
     *,
     publisher: Publisher,
     market_price_daily: pd.DataFrame,
-    market_quotes: pd.DataFrame,
-    refresh_materialized_view: bool = True,
 ) -> dict[str, Any]:
     source_cache_daily_rows = build_source_cache_market_price_daily_payload(market_price_daily)
     source_cache_daily_result = publisher.upsert(

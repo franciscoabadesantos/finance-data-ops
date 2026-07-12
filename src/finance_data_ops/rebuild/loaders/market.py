@@ -39,8 +39,6 @@ def load_market_chunk(
     publish_result = publish_prices_surfaces(
         publisher=publisher,
         market_price_daily=prices_frame,
-        market_quotes=quotes_frame,
-        refresh_materialized_view=False,
     )
     return {
         "refresh_runs": [prices_run.as_dict(), quotes_run.as_dict()],
@@ -50,4 +48,3 @@ def load_market_chunk(
         "touched_series": [],
         "current_window": {"start_date": start_date, "end_date": end_date},
     }
-

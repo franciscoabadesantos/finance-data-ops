@@ -111,7 +111,6 @@ def load_earnings_chunk(
             publisher=publisher,
             earnings_events=filtered_events,
             earnings_history=filtered_history,
-            refresh_materialized_view=False,
         )
     symbol_breakdown = _build_symbol_breakdown(
         tickers=normalized_tickers,

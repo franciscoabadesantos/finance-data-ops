@@ -141,7 +141,6 @@ def run_dataops_earnings_daily(
                 publisher=publisher_impl,
                 earnings_events=cached_earnings_events,
                 earnings_history=cached_earnings_history,
-                refresh_materialized_view=bool(publish_enabled),
             ),
             failures=publish_failures,
         )

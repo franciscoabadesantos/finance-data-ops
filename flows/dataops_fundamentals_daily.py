@@ -27,7 +27,7 @@ from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
 from finance_data_ops.publish.status import fetch_symbol_data_coverage_rows, publish_status_surfaces
 from finance_data_ops.refresh.fundamentals_daily import refresh_fundamentals_daily
 from finance_data_ops.refresh.market_daily import RefreshRunResult
-from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
+from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import load_settings
 from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
 from finance_data_ops.validation.coverage import (
@@ -90,13 +90,6 @@ def run_dataops_fundamentals_daily(
         required=False,
     )
     fundamentals_summary = compute_ticker_fundamental_summary(cached_fundamentals)
-    write_parquet_table(
-        "ticker_fundamental_summary",
-        fundamentals_summary,
-        cache_root=settings.cache_root,
-        mode="replace",
-        dedupe_subset=["ticker"],
-    )
 
     cached_prices = read_parquet_table("market_price_daily", cache_root=settings.cache_root, required=False)
     cached_quotes = read_parquet_table("market_quotes", cache_root=settings.cache_root, required=False)
@@ -151,13 +144,11 @@ def run_dataops_fundamentals_daily(
             lambda: _publish_fundamentals_and_theme_surfaces(
                 publisher=publisher_impl,
                 fundamentals_history=cached_fundamentals,
-                fundamentals_summary=fundamentals_summary,
                 ticker_profile=cached_ticker_profile,
                 etf_holdings=cached_etf_holdings,
                 etf_holding_onboarding_identity=cached_etf_holding_onboarding_identity,
                 etf_themes=cached_etf_themes,
                 etf_sector_weights=cached_etf_sector_weights,
-                refresh_materialized_view=bool(publish_enabled),
             ),
             failures=publish_failures,
         )
@@ -312,23 +303,19 @@ def _publish_fundamentals_and_theme_surfaces(
     *,
     publisher: Publisher,
     fundamentals_history: pd.DataFrame,
-    fundamentals_summary: pd.DataFrame,
     ticker_profile: pd.DataFrame,
     etf_holdings: pd.DataFrame,
     etf_holding_onboarding_identity: pd.DataFrame,
     etf_themes: pd.DataFrame,
     etf_sector_weights: pd.DataFrame,
-    refresh_materialized_view: bool,
 ) -> dict[str, Any]:
     result = publish_fundamentals_surfaces(
         publisher=publisher,
         fundamentals_history=fundamentals_history,
-        fundamentals_summary=fundamentals_summary,
         ticker_profile=ticker_profile,
         etf_holdings=etf_holdings,
         etf_holding_onboarding_identity=etf_holding_onboarding_identity,
         etf_sector_weights=etf_sector_weights,
-        refresh_materialized_view=refresh_materialized_view,
     )
     if not etf_themes.empty:
         result["etf_themes"] = publisher.upsert(

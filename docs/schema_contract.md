@@ -7,13 +7,14 @@ Data Ops writes five product-data domains: market, fundamentals, earnings, macro
 The definitive baseline is a single-file bootstrap for empty projects: current tables, materialized
 views, refresh functions, indexes, RLS enablement, and minimal runtime seed data.
 
-Historical migration path, retained for older-instance archaeology:
+Legacy/retirement SQL, retained for older-instance archaeology and explicit cleanup only:
 
-- [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
-- [`sql/013_fundamentals_point_in_time_snapshot.sql`](/home/franciscosantos/finance-data-ops/sql/013_fundamentals_point_in_time_snapshot.sql)
-- [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
+- [`sql/archive/legacy_public_product_surfaces/`](/home/franciscosantos/finance-data-ops/sql/archive/legacy_public_product_surfaces)
+- [`sql/019_retire_legacy_public_product_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/019_retire_legacy_public_product_surfaces.sql)
 
-Historical numbered SQL files remain in the repo for older-instance archaeology, not for fresh installs.
+Historical numbered SQL files in the archive are not part of fresh installs and are not runtime
+product outputs. Existing databases that still have retired public product objects should run the
+explicit retirement script manually after confirming product readers have cut over.
 
 ## Market surfaces
 
@@ -53,6 +54,31 @@ country/exchange suffix resolution is owned by `finance_data_ops.identity`.
 
 - `source_cache.earnings`
 - `feature_store.ticker_page_summary`
+
+## Retired public product surfaces
+
+These public product objects are retired and must not be created by final runtime schema or product
+publishing paths:
+
+- `public.market_price_daily`
+- `public.market_quotes`
+- `public.market_quotes_history`
+- `public.ticker_market_stats_snapshot`
+- `public.market_fundamentals_v2`
+- `public.ticker_fundamental_summary`
+- `public.market_earnings_events`
+- `public.market_earnings_history`
+- `public.mv_latest_prices`
+- `public.mv_latest_fundamentals`
+- `public.mv_next_earnings`
+- `public.refresh_mv_latest_prices`
+- `public.refresh_mv_latest_fundamentals`
+- `public.refresh_mv_next_earnings`
+- `public.ticker_fundamental_point_in_time`
+
+Use [`sql/019_retire_legacy_public_product_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/019_retire_legacy_public_product_surfaces.sql)
+for controlled cleanup on existing databases. Do not include the retirement script in normal source
+refresh or fresh-install bootstrap.
 
 ## Macro surfaces
 

@@ -148,7 +148,7 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     )
 
     assert table_path("market_fundamentals_v2", cache_root=tmp_path).exists()
-    assert table_path("ticker_fundamental_summary", cache_root=tmp_path).exists()
+    assert not table_path("ticker_fundamental_summary", cache_root=tmp_path).exists()
     assert table_path("ticker_profile", cache_root=tmp_path).exists()
     assert table_path("etf_holdings", cache_root=tmp_path).exists()
     assert table_path("etf_sector_weights", cache_root=tmp_path).exists()
