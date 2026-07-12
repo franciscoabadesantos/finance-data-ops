@@ -22,6 +22,10 @@ def _summary(symbols: list[str]) -> pd.DataFrame:
     return pd.DataFrame([{"symbol": symbol, "as_of_date": "2026-07-10"} for symbol in symbols])
 
 
+def _entity_attributes(rows: list[dict[str, object]]) -> pd.DataFrame:
+    return pd.DataFrame(rows)
+
+
 def _registry_row(
     symbol: str,
     *,
@@ -124,6 +128,47 @@ def test_reconciliation_rekeys_wrong_region_rows_to_canonical_region() -> None:
     assert plan.supersede_rows[0]["registry_key"] == "EDP.LS|us|default"
     assert plan.supersede_rows[0]["status"] == "rejected"
     assert plan.supersede_rows[0]["notes"]["superseded_by"] == "EDP.LS|eu|default"
+
+
+def test_reconciliation_never_emits_global_schedule_regions_for_amer_or_other_metadata() -> None:
+    symbols = ["DORL.TA", "ENLT.TA", "EQTL3.SA", "HUT.TO", "ESLT"]
+    registry = pd.DataFrame(
+        [
+            _registry_row("DORL.TA", status="pending_validation", promotion_status="pending_validation", region="apac", exchange="TLV"),
+            _registry_row("ENLT.TA", status="pending_validation", promotion_status="pending_validation", region="apac", exchange="TLV"),
+            _registry_row("EQTL3.SA", status="pending_validation", promotion_status="pending_validation", region="apac", exchange="SAO"),
+            _registry_row("HUT.TO", status="pending_validation", promotion_status="pending_validation", region="us", exchange="TOR"),
+            _registry_row("ESLT", status="pending_validation", promotion_status="pending_validation", region="apac", exchange="NMS"),
+        ]
+    )
+    entity_attributes = _entity_attributes(
+        [
+            {"entity_id": "DORL.TA", "country": "IL", "region": "OTHER", "exchange": "TLV"},
+            {"entity_id": "ENLT.TA", "country": "IL", "region": "OTHER", "exchange": "TLV"},
+            {"entity_id": "EQTL3.SA", "country": "BR", "region": "AMER", "exchange": "SAO"},
+            {"entity_id": "HUT.TO", "country": "CA", "region": "AMER", "exchange": "TOR"},
+            {"entity_id": "ESLT", "country": "IL", "region": "OTHER", "exchange": "NMS"},
+        ]
+    )
+    plan = build_source_universe_reconciliation_plan(
+        registry_frame=registry,
+        readiness_frame=_tracked(symbols),
+        prices_frame=_prices(symbols),
+        technicals_frame=_technicals(symbols),
+        ticker_page_summary_frame=_summary(symbols),
+        entity_attributes_frame=entity_attributes,
+    )
+
+    by_symbol = {row["normalized_symbol"]: row for row in plan.upsert_rows}
+    assert {row["region"] for row in plan.upsert_rows} <= {"us", "eu", "apac"}
+    assert all("|global|" not in str(row["registry_key"]) for row in plan.upsert_rows)
+    assert all(str(row["registry_key"]).split("|")[1] == row["region"] for row in plan.upsert_rows)
+    assert by_symbol["DORL.TA"]["registry_key"] == "DORL.TA|apac|TLV"
+    assert by_symbol["ENLT.TA"]["registry_key"] == "ENLT.TA|apac|TLV"
+    assert by_symbol["ESLT"]["registry_key"] == "ESLT|apac|NMS"
+    assert by_symbol["EQTL3.SA"]["registry_key"] == "EQTL3.SA|us|SAO"
+    assert by_symbol["HUT.TO"]["registry_key"] == "HUT.TO|us|TOR"
+    assert any(row["registry_key"] == "EQTL3.SA|apac|SAO" for row in plan.supersede_rows)
 
 
 def test_reconciliation_groups_pending_missing_normalized_separately() -> None:

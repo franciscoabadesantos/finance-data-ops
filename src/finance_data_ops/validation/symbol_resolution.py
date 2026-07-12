@@ -128,11 +128,33 @@ def normalize_refresh_region(region: str | None) -> str:
         return "all"
     if token in CANONICAL_REFRESH_REGIONS:
         return token
-    if token in {"usa", "united_states", "united states", "nyse", "nasdaq"}:
+    if token in {
+        "usa",
+        "united_states",
+        "united states",
+        "amer",
+        "americas",
+        "north_america",
+        "north america",
+        "latin_america",
+        "latin america",
+        "south_america",
+        "south america",
+        "nyse",
+        "nasdaq",
+        "nms",
+        "nyq",
+        "ase",
+        "tor",
+        "tsx",
+        "xtse",
+        "sao",
+        "bvmf",
+    }:
         return "us"
-    if token in {"europe", "emea", "eur"}:
+    if token in {"europe", "emea", "eur", "lis", "cph", "xetr", "etr", "lse", "ams", "epa"}:
         return "eu"
-    if token in {"asia", "asia_pacific", "asia pacific", "pacific"}:
+    if token in {"asia", "asia_pacific", "asia pacific", "pacific", "il", "israel", "tlv", "tase", "xtae", "hkg", "asx"}:
         return "apac"
 
     country = normalize_country(token)

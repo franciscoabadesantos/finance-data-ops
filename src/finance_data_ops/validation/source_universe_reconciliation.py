@@ -13,11 +13,80 @@ import pandas as pd
 
 from finance_data_ops.geography import country_from_source_or_symbol, normalize_country, region_for_country
 from finance_data_ops.symbology import normalize_symbol_with_country
-from finance_data_ops.validation.symbol_resolution import ALLOWED_PROMOTION_STATUSES, normalize_refresh_region
+from finance_data_ops.validation.symbol_resolution import (
+    ALLOWED_PROMOTION_STATUSES,
+    CANONICAL_REFRESH_REGIONS,
+    normalize_refresh_region,
+)
 from finance_data_ops.validation.ticker_registry import TICKER_REGISTRY_COLUMNS, build_registry_key
 
 RECONCILIATION_NOTE_KEY = "source_universe_reconciliation"
 US_SHARE_CLASS_ALIAS_PATTERN = re.compile(r"^[A-Z]{1,5}[.-][A-Z]$")
+SCHEDULE_REGION_SET = set(CANONICAL_REFRESH_REGIONS)
+APAC_SCHEDULE_COUNTRIES = {"IL"}
+US_SCHEDULE_EXCHANGES = {
+    "AMEX",
+    "ASE",
+    "B3",
+    "BMF",
+    "BVMF",
+    "NASDAQ",
+    "NMS",
+    "NYQ",
+    "NYSE",
+    "PCX",
+    "SAO",
+    "TOR",
+    "TSX",
+    "XASE",
+    "XBMF",
+    "XNYS",
+    "XNAS",
+    "XTSE",
+}
+EU_SCHEDULE_EXCHANGES = {
+    "AMS",
+    "CPH",
+    "EPA",
+    "ETR",
+    "HEL",
+    "LIS",
+    "LSE",
+    "MIL",
+    "OSL",
+    "PAR",
+    "STO",
+    "SWX",
+    "XAMS",
+    "XCSE",
+    "XETR",
+    "XLIS",
+    "XLON",
+    "XMIL",
+    "XPAR",
+    "XSTO",
+    "XSWX",
+}
+APAC_SCHEDULE_EXCHANGES = {
+    "ASX",
+    "HKG",
+    "HKEX",
+    "JPX",
+    "KSC",
+    "NSE",
+    "SES",
+    "SHH",
+    "SHZ",
+    "TASE",
+    "TLV",
+    "TSE",
+    "XASX",
+    "XHKG",
+    "XJPX",
+    "XSES",
+    "XTAE",
+    "XTKS",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,18 +499,96 @@ def _registry_metadata(
     )
     normalized_symbol = normalize_symbol_with_country(symbol, country) or str(symbol).strip().upper()
     product_region = entity_attributes.get("region") or region_for_country(country)
+    schedule_region = _canonical_schedule_region(
+        product_region=product_region,
+        country=country,
+        entity_exchange=_nullable_upper(entity_attributes.get("exchange")),
+        rows=related_rows,
+    )
     return {
         "symbol": normalized_symbol,
-        "region": normalize_refresh_region(str(product_region or "")),
+        "region": schedule_region,
         "exchange": _canonical_exchange(
             entity_exchange=_nullable_upper(entity_attributes.get("exchange")),
-            canonical_region=normalize_refresh_region(str(product_region or "")),
+            canonical_region=schedule_region,
             symbol=normalized_symbol,
             rows=related_rows,
         ),
         "exchange_mic": _nullable_upper(entity_attributes.get("exchange_mic")),
         "currency": _nullable_upper(entity_attributes.get("currency")),
     }
+
+
+def _canonical_schedule_region(
+    *,
+    product_region: Any,
+    country: Any,
+    entity_exchange: str | None,
+    rows: Sequence[Mapping[str, Any]],
+) -> str:
+    product_schedule = normalize_refresh_region(str(product_region or ""))
+    if product_schedule in SCHEDULE_REGION_SET:
+        return product_schedule
+
+    country_code = normalize_country(country)
+    if country_code in APAC_SCHEDULE_COUNTRIES:
+        return "apac"
+
+    country_schedule = normalize_refresh_region(country_code)
+    if country_schedule in SCHEDULE_REGION_SET:
+        return country_schedule
+
+    existing_schedule = _existing_safe_schedule_region(rows)
+    if existing_schedule:
+        return existing_schedule
+
+    exchange_schedule = _schedule_region_for_exchange(entity_exchange)
+    if exchange_schedule:
+        return exchange_schedule
+
+    row_exchange_schedule = _schedule_region_for_exchange(*[_row_exchange_token(row) for row in rows])
+    if row_exchange_schedule:
+        return row_exchange_schedule
+
+    return "us"
+
+
+def _existing_safe_schedule_region(rows: Sequence[Mapping[str, Any]]) -> str | None:
+    ranked: list[tuple[int, str]] = []
+    for row in rows:
+        region = normalize_refresh_region(str(row.get("region") or ""))
+        if region not in SCHEDULE_REGION_SET:
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        promotion_status = str(row.get("promotion_status") or "").strip().lower()
+        ranked.append(
+            (
+                (3 if _is_selected_registry_row(row) else 0)
+                + (2 if status in {"active", "pending_validation"} else 0)
+                + (1 if promotion_status in ALLOWED_PROMOTION_STATUSES or promotion_status == "pending_validation" else 0),
+                region,
+            )
+        )
+    if not ranked:
+        return None
+    return sorted(ranked, reverse=True)[0][1]
+
+
+def _schedule_region_for_exchange(*exchanges: str | None) -> str | None:
+    for exchange in exchanges:
+        token = _nullable_upper(exchange)
+        if not token:
+            continue
+        if token in US_SCHEDULE_EXCHANGES:
+            return "us"
+        if token in EU_SCHEDULE_EXCHANGES:
+            return "eu"
+        if token in APAC_SCHEDULE_EXCHANGES:
+            return "apac"
+        normalized = normalize_refresh_region(token)
+        if normalized in SCHEDULE_REGION_SET:
+            return normalized
+    return None
 
 
 def _selected_row_matches_canonical(

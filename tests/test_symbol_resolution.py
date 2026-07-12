@@ -104,6 +104,10 @@ def test_non_canonical_registry_regions_map_to_schedule_regions() -> None:
     assert normalize_refresh_region("dk") == "eu"
     assert normalize_refresh_region("jp") == "apac"
     assert normalize_refresh_region("au") == "apac"
+    assert normalize_refresh_region("AMER") == "us"
+    assert normalize_refresh_region("BR") == "us"
+    assert normalize_refresh_region("CA") == "us"
+    assert normalize_refresh_region("IL") == "apac"
 
 
 def test_registry_read_failure_without_override_is_clear(tmp_path) -> None:
