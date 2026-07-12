@@ -6,6 +6,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 import json
+import re
 from typing import Any, Iterable, Mapping, Sequence
 
 import pandas as pd
@@ -16,6 +17,7 @@ from finance_data_ops.validation.symbol_resolution import ALLOWED_PROMOTION_STAT
 from finance_data_ops.validation.ticker_registry import TICKER_REGISTRY_COLUMNS, build_registry_key
 
 RECONCILIATION_NOTE_KEY = "source_universe_reconciliation"
+US_SHARE_CLASS_ALIAS_PATTERN = re.compile(r"^[A-Z]{1,5}[.-][A-Z]$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +31,8 @@ class SourceUniverseReconciliationPlan:
     materialized_residue: list[dict[str, Any]]
     reviewed_exclusions: list[dict[str, Any]]
     upsert_rows: list[dict[str, Any]]
+    supersede_rows: list[dict[str, Any]]
+    reject_rows: list[dict[str, Any]]
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -64,6 +68,8 @@ def build_source_universe_reconciliation_plan(
     materialized_residue: list[dict[str, Any]] = []
     reviewed: list[dict[str, Any]] = []
     upsert_rows: list[dict[str, Any]] = []
+    supersede_rows: list[dict[str, Any]] = []
+    reject_rows: list[dict[str, Any]] = []
 
     for symbol in sorted(candidates):
         candidate = candidates[symbol]
@@ -81,16 +87,27 @@ def build_source_universe_reconciliation_plan(
             reviewed.append({"symbol": symbol, "sources": sorted(candidate["sources"]), "reason": "reviewed_exclusion"})
             continue
 
+        related_rows = rows_by_symbol.get(symbol, [])
         selected_rows = selected_rows_by_symbol.get(symbol, [])
-        if len(selected_rows) == 1:
-            continue
-        if len(selected_rows) > 1:
-            issues.append(_issue("duplicate/conflicting canonical rows", symbol, candidate, selected_rows))
+        if len(selected_rows) == 1 and _selected_row_matches_canonical(
+            symbol=symbol,
+            row=selected_rows[0],
+            related_rows=related_rows,
+            entity_attributes=entity_by_symbol.get(symbol, {}),
+        ):
             continue
 
-        related_rows = rows_by_symbol.get(symbol, [])
-        reason = _missing_reason(related_rows)
-        issues.append(_issue(reason, symbol, candidate, related_rows))
+        if len(selected_rows) > 1:
+            reason = "duplicate/conflicting canonical rows"
+            issue_rows = selected_rows
+        elif len(selected_rows) == 1:
+            reason = "duplicate/conflicting canonical rows"
+            issue_rows = selected_rows
+        else:
+            reason = _missing_reason(related_rows)
+            issue_rows = related_rows
+
+        issues.append(_issue(reason, symbol, candidate, issue_rows))
         action_row = _build_reconciled_registry_row(
             symbol=symbol,
             candidate=candidate,
@@ -99,6 +116,14 @@ def build_source_universe_reconciliation_plan(
         )
         if action_row is not None:
             upsert_rows.append(action_row)
+            supersede_rows.extend(
+                _build_supersede_rows(
+                    symbol=symbol,
+                    related_rows=related_rows,
+                    canonical_row=action_row,
+                    reason=reason,
+                )
+            )
 
     issue_counts = Counter(str(issue["reason"]) for issue in issues)
     return SourceUniverseReconciliationPlan(
@@ -111,6 +136,8 @@ def build_source_universe_reconciliation_plan(
         materialized_residue=materialized_residue,
         reviewed_exclusions=reviewed,
         upsert_rows=upsert_rows,
+        supersede_rows=_dedupe_rows_by_registry_key(supersede_rows),
+        reject_rows=reject_rows,
     )
 
 
@@ -224,10 +251,9 @@ def _registry_rows_by_symbol(rows: Sequence[Mapping[str, Any]]) -> dict[str, lis
     out: dict[str, list[dict[str, Any]]] = {}
     for raw in rows:
         row = dict(raw)
-        keys = {
-            str(row.get("normalized_symbol") or "").strip().upper(),
-            str(row.get("input_symbol") or "").strip().upper(),
-        }
+        keys = set()
+        keys.update(_symbol_group_keys(row.get("normalized_symbol")))
+        keys.update(_symbol_group_keys(row.get("input_symbol")))
         for key in keys:
             if key and key not in {"NONE", "NULL", "NAN"}:
                 out.setdefault(key, []).append(row)
@@ -240,8 +266,8 @@ def _selected_registry_rows_by_symbol(rows: Sequence[Mapping[str, Any]]) -> dict
         row = dict(raw)
         if not _is_selected_registry_row(row):
             continue
-        symbol = str(row.get("normalized_symbol") or "").strip().upper()
-        out.setdefault(symbol, []).append(row)
+        for symbol in _symbol_group_keys(row.get("normalized_symbol")):
+            out.setdefault(symbol, []).append(row)
     return out
 
 
@@ -310,24 +336,30 @@ def _build_reconciled_registry_row(
     related_rows: Sequence[Mapping[str, Any]],
     entity_attributes: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    base = _choose_base_registry_row(symbol=symbol, rows=related_rows)
-    metadata = _registry_metadata(symbol=symbol, entity_attributes=entity_attributes)
+    metadata = _registry_metadata(
+        symbol=symbol,
+        entity_attributes=entity_attributes,
+        related_rows=related_rows,
+    )
+    canonical_key = build_registry_key(input_symbol=symbol, region=metadata["region"], exchange=metadata["exchange"])
+    base = _choose_base_registry_row(
+        symbol=symbol,
+        rows=related_rows,
+        canonical_key=canonical_key,
+        canonical_region=metadata["region"],
+        canonical_exchange=metadata["exchange"],
+    )
     now_iso = datetime.now(UTC).isoformat()
     validation_status = "validated_full" if candidate.get("has_fundamentals") and candidate.get("has_earnings") else "validated_market_only"
     if base:
         row = {column: base.get(column) for column in TICKER_REGISTRY_COLUMNS}
-        row["registry_key"] = str(row.get("registry_key") or "").strip() or build_registry_key(
-            input_symbol=symbol,
-            region=metadata["region"],
-            exchange=metadata["exchange"],
-        )
     else:
         row = {column: None for column in TICKER_REGISTRY_COLUMNS}
-        row["registry_key"] = build_registry_key(input_symbol=symbol, region=metadata["region"], exchange=metadata["exchange"])
 
     row.update(
         {
-            "input_symbol": str(row.get("input_symbol") or symbol).strip().upper(),
+            "registry_key": canonical_key,
+            "input_symbol": symbol,
             "normalized_symbol": symbol,
             "region": metadata["region"],
             "exchange": metadata["exchange"],
@@ -356,25 +388,41 @@ def _build_reconciled_registry_row(
     return row
 
 
-def _choose_base_registry_row(*, symbol: str, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+def _choose_base_registry_row(
+    *,
+    symbol: str,
+    rows: Sequence[Mapping[str, Any]],
+    canonical_key: str,
+    canonical_region: str,
+    canonical_exchange: str | None,
+) -> dict[str, Any] | None:
     if not rows:
         return None
     normalized_symbol = str(symbol).strip().upper()
 
-    def score(row: Mapping[str, Any]) -> tuple[int, int, int]:
+    def score(row: Mapping[str, Any]) -> tuple[int, int, int, int, int]:
         status = str(row.get("status") or "").strip().lower()
         normalized = str(row.get("normalized_symbol") or "").strip().upper()
-        registry_key = str(row.get("registry_key") or "").strip().lower()
+        registry_key = str(row.get("registry_key") or "").strip()
+        row_region = normalize_refresh_region(str(row.get("region") or ""))
+        row_exchange = _row_exchange_token(row)
         return (
+            5 if registry_key == canonical_key else 0,
+            3 if row_region == canonical_region else 0,
+            2 if row_exchange == (canonical_exchange or "") else 0,
             2 if status != "rejected" else 0,
             1 if normalized == normalized_symbol else 0,
-            1 if not registry_key.endswith("|default") else 0,
         )
 
     return dict(sorted(rows, key=score, reverse=True)[0])
 
 
-def _registry_metadata(*, symbol: str, entity_attributes: Mapping[str, Any]) -> dict[str, Any]:
+def _registry_metadata(
+    *,
+    symbol: str,
+    entity_attributes: Mapping[str, Any],
+    related_rows: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
     country = normalize_country(
         entity_attributes.get("country")
         or entity_attributes.get("home_country")
@@ -385,10 +433,146 @@ def _registry_metadata(*, symbol: str, entity_attributes: Mapping[str, Any]) -> 
     return {
         "symbol": normalized_symbol,
         "region": normalize_refresh_region(str(product_region or "")),
-        "exchange": _nullable_upper(entity_attributes.get("exchange")),
+        "exchange": _canonical_exchange(
+            entity_exchange=_nullable_upper(entity_attributes.get("exchange")),
+            canonical_region=normalize_refresh_region(str(product_region or "")),
+            symbol=normalized_symbol,
+            rows=related_rows,
+        ),
         "exchange_mic": _nullable_upper(entity_attributes.get("exchange_mic")),
         "currency": _nullable_upper(entity_attributes.get("currency")),
     }
+
+
+def _selected_row_matches_canonical(
+    *,
+    symbol: str,
+    row: Mapping[str, Any],
+    related_rows: Sequence[Mapping[str, Any]],
+    entity_attributes: Mapping[str, Any],
+) -> bool:
+    metadata = _registry_metadata(symbol=symbol, entity_attributes=entity_attributes, related_rows=related_rows)
+    canonical_key = build_registry_key(input_symbol=symbol, region=metadata["region"], exchange=metadata["exchange"])
+    return (
+        str(row.get("registry_key") or "").strip() == canonical_key
+        and str(row.get("normalized_symbol") or "").strip().upper() == str(symbol).strip().upper()
+        and normalize_refresh_region(str(row.get("region") or "")) == metadata["region"]
+    )
+
+
+def _build_supersede_rows(
+    *,
+    symbol: str,
+    related_rows: Sequence[Mapping[str, Any]],
+    canonical_row: Mapping[str, Any],
+    reason: str,
+) -> list[dict[str, Any]]:
+    canonical_key = str(canonical_row.get("registry_key") or "").strip()
+    now_iso = datetime.now(UTC).isoformat()
+    out: list[dict[str, Any]] = []
+    for raw in related_rows:
+        row_key = str(raw.get("registry_key") or "").strip()
+        if not row_key or row_key == canonical_key:
+            continue
+        status = str(raw.get("status") or "").strip().lower()
+        if status == "rejected" and str(raw.get("promotion_status") or "").strip().lower() == "rejected":
+            continue
+        row = {column: raw.get(column) for column in TICKER_REGISTRY_COLUMNS}
+        row.update(
+            {
+                "status": "rejected",
+                "market_supported": False,
+                "fundamentals_supported": False,
+                "earnings_supported": False,
+                "validation_status": "rejected",
+                "validation_reason": f"superseded_by:{canonical_key}",
+                "promotion_status": "rejected",
+                "notes": _merge_notes(
+                    row.get("notes"),
+                    {
+                        RECONCILIATION_NOTE_KEY: True,
+                        "superseded_by": canonical_key,
+                        "superseded_at": now_iso,
+                        "superseded_reason": reason,
+                        "canonical_symbol": str(symbol).strip().upper(),
+                    },
+                ),
+                "updated_at": now_iso,
+            }
+        )
+        out.append(row)
+    return out
+
+
+def _canonical_exchange(
+    *,
+    entity_exchange: str | None,
+    canonical_region: str,
+    symbol: str,
+    rows: Sequence[Mapping[str, Any]],
+) -> str | None:
+    if entity_exchange:
+        return entity_exchange
+    candidates = sorted(
+        {_row_exchange_token(row) for row in rows if _row_exchange_token(row)},
+        key=lambda exchange: _exchange_score(exchange, canonical_region=canonical_region, symbol=symbol, rows=rows),
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def _exchange_score(
+    exchange: str,
+    *,
+    canonical_region: str,
+    symbol: str,
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[int, int, int, str]:
+    preferred_rank = {
+        "NMS": 100,
+        "NYQ": 95,
+        "ASE": 90,
+        "PCX": 85,
+        "CPH": 80,
+        "LIS": 80,
+        "ASX": 80,
+        "HKG": 80,
+        "NASDAQ": 10,
+    }.get(exchange, 50)
+    matching_rows = [row for row in rows if _row_exchange_token(row) == exchange]
+    region_match = any(normalize_refresh_region(str(row.get("region") or "")) == canonical_region for row in matching_rows)
+    symbol_match = any(str(row.get("normalized_symbol") or "").strip().upper() == symbol for row in matching_rows)
+    selected = any(_is_selected_registry_row(row) for row in matching_rows)
+    return (preferred_rank, 20 if region_match else 0, 10 if symbol_match or selected else 0, exchange)
+
+
+def _row_exchange_token(row: Mapping[str, Any]) -> str:
+    exchange = _nullable_upper(row.get("exchange"))
+    if exchange:
+        return exchange
+    parts = _registry_key_parts(str(row.get("registry_key") or ""))
+    key_exchange = parts.get("exchange")
+    return "" if key_exchange.lower() == "default" else key_exchange
+
+
+def _registry_key_parts(registry_key: str) -> dict[str, str]:
+    parts = str(registry_key or "").strip().split("|")
+    if len(parts) != 3:
+        return {"input_symbol": "", "region": "", "exchange": ""}
+    return {
+        "input_symbol": parts[0].strip().upper(),
+        "region": parts[1].strip().lower(),
+        "exchange": parts[2].strip().upper(),
+    }
+
+
+def _dedupe_rows_by_registry_key(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = str(row.get("registry_key") or "").strip()
+        if key:
+            deduped[key] = row
+    return list(deduped.values())
 
 
 def _merge_notes(raw: Any, extras: Mapping[str, Any]) -> dict[str, Any]:
@@ -412,6 +596,17 @@ def _symbol_column(frame: pd.DataFrame) -> str | None:
         if column in frame.columns:
             return column
     return None
+
+
+def _symbol_group_keys(raw: Any) -> set[str]:
+    symbol = str(raw or "").strip().upper()
+    if not symbol or symbol in {"NONE", "NULL", "NAN"}:
+        return set()
+    keys = {symbol}
+    if US_SHARE_CLASS_ALIAS_PATTERN.fullmatch(symbol):
+        keys.add(symbol.replace(".", "-"))
+        keys.add(symbol.replace("-", "."))
+    return keys
 
 
 def _records(frame: pd.DataFrame | None) -> list[dict[str, Any]]:

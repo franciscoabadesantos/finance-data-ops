@@ -99,6 +99,33 @@ def test_reconciliation_promotes_pending_non_promoted_international_rows() -> No
     assert {row["market_supported"] for row in plan.upsert_rows} == {True}
 
 
+def test_reconciliation_rekeys_wrong_region_rows_to_canonical_region() -> None:
+    registry = pd.DataFrame(
+        [
+            _registry_row(
+                "EDP.LS",
+                status="pending_validation",
+                promotion_status="pending_validation",
+                region="us",
+            ),
+        ]
+    )
+    plan = build_source_universe_reconciliation_plan(
+        registry_frame=registry,
+        readiness_frame=_tracked(["EDP.LS"]),
+        prices_frame=_prices(["EDP.LS"]),
+        technicals_frame=_technicals(["EDP.LS"]),
+        ticker_page_summary_frame=_summary(["EDP.LS"]),
+    )
+
+    assert len(plan.upsert_rows) == 1
+    assert plan.upsert_rows[0]["registry_key"] == "EDP.LS|eu|default"
+    assert plan.upsert_rows[0]["region"] == "eu"
+    assert plan.supersede_rows[0]["registry_key"] == "EDP.LS|us|default"
+    assert plan.supersede_rows[0]["status"] == "rejected"
+    assert plan.supersede_rows[0]["notes"]["superseded_by"] == "EDP.LS|eu|default"
+
+
 def test_reconciliation_groups_pending_missing_normalized_separately() -> None:
     row = _registry_row(
         "0700.HK",
@@ -169,6 +196,108 @@ def test_active_short_history_symbols_are_selected_not_reconciled() -> None:
 
     assert plan.issues == []
     assert plan.upsert_rows == []
+
+
+def test_duplicate_wrong_region_selected_rows_are_resolved_by_plan() -> None:
+    registry = pd.DataFrame(
+        [
+            _registry_row("ACN", region="apac", exchange="NYQ"),
+            _registry_row("ACN", region="us", exchange="NYQ"),
+        ]
+    )
+    plan = build_source_universe_reconciliation_plan(
+        registry_frame=registry,
+        readiness_frame=_tracked(["ACN"]),
+        prices_frame=_prices(["ACN"]),
+        technicals_frame=_technicals(["ACN"]),
+        ticker_page_summary_frame=_summary(["ACN"]),
+    )
+
+    assert plan.issue_counts == {"duplicate/conflicting canonical rows": 1}
+    assert plan.upsert_rows[0]["registry_key"] == "ACN|us|NYQ"
+    assert [row["registry_key"] for row in plan.supersede_rows] == ["ACN|apac|NYQ"]
+
+
+def test_duplicate_alias_rows_keep_symbol_canonical_key() -> None:
+    registry = pd.DataFrame(
+        [
+            _registry_row("AF.PA", input_symbol="AF.PA", normalized_symbol="AF.PA", region="eu"),
+            _registry_row("AF.PA", input_symbol="AF", normalized_symbol="AF.PA", region="eu"),
+        ]
+    )
+    plan = build_source_universe_reconciliation_plan(
+        registry_frame=registry,
+        readiness_frame=_tracked(["AF.PA"]),
+        prices_frame=_prices(["AF.PA"]),
+        technicals_frame=_technicals(["AF.PA"]),
+        ticker_page_summary_frame=_summary(["AF.PA"]),
+    )
+
+    assert plan.upsert_rows[0]["registry_key"] == "AF.PA|eu|default"
+    assert [row["registry_key"] for row in plan.supersede_rows] == ["AF|eu|default"]
+
+
+def test_us_share_class_dot_alias_is_superseded_by_tracked_hyphen_symbol() -> None:
+    registry = pd.DataFrame(
+        [
+            _registry_row("BRK.B", input_symbol="BRK.B", normalized_symbol="BRK.B", region="us"),
+            _registry_row("BRK-B", input_symbol="BRK-B", normalized_symbol="BRK-B", region="us"),
+        ]
+    )
+    plan = build_source_universe_reconciliation_plan(
+        registry_frame=registry,
+        readiness_frame=_tracked(["BRK-B"]),
+        prices_frame=_prices(["BRK-B"]),
+        technicals_frame=_technicals(["BRK-B"]),
+        ticker_page_summary_frame=_summary(["BRK-B"]),
+    )
+
+    assert plan.upsert_rows[0]["registry_key"] == "BRK-B|us|default"
+    assert [row["registry_key"] for row in plan.supersede_rows] == ["BRK.B|us|default"]
+
+
+def test_duplicate_exchange_rows_prefer_provider_exchange_over_legacy_alias() -> None:
+    registry = pd.DataFrame(
+        [
+            _registry_row("TSLA", region="us", exchange="NASDAQ"),
+            _registry_row("TSLA", region="us", exchange="NMS"),
+        ]
+    )
+    plan = build_source_universe_reconciliation_plan(
+        registry_frame=registry,
+        readiness_frame=_tracked(["TSLA"]),
+        prices_frame=_prices(["TSLA"]),
+        technicals_frame=_technicals(["TSLA"]),
+        ticker_page_summary_frame=_summary(["TSLA"]),
+    )
+
+    assert plan.upsert_rows[0]["registry_key"] == "TSLA|us|NMS"
+    assert [row["registry_key"] for row in plan.supersede_rows] == ["TSLA|us|NASDAQ"]
+
+
+def test_duplicate_plan_is_clean_after_simulated_apply() -> None:
+    registry = pd.DataFrame(
+        [
+            _registry_row("ACN", region="apac", exchange="NYQ"),
+            _registry_row("ACN", region="us", exchange="NYQ"),
+        ]
+    )
+    kwargs = {
+        "readiness_frame": _tracked(["ACN"]),
+        "prices_frame": _prices(["ACN"]),
+        "technicals_frame": _technicals(["ACN"]),
+        "ticker_page_summary_frame": _summary(["ACN"]),
+    }
+    plan = build_source_universe_reconciliation_plan(registry_frame=registry, **kwargs)
+    applied_registry = (
+        pd.concat([registry, pd.DataFrame(plan.upsert_rows + plan.supersede_rows + plan.reject_rows)], ignore_index=True)
+        .drop_duplicates(subset=["registry_key"], keep="last")
+    )
+    clean = build_source_universe_reconciliation_plan(registry_frame=applied_registry, **kwargs)
+
+    assert clean.issues == []
+    assert clean.upsert_rows == []
+    assert clean.supersede_rows == []
 
 
 def test_price_only_materialized_residue_is_reported_not_promoted() -> None:

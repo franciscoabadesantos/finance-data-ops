@@ -19,7 +19,7 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from finance_data_ops.publish.client import PostgresPublisher
-from finance_data_ops.publish.ticker_registry import publish_ticker_registry
+from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_payload, build_ticker_registry_payload
 from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import load_settings
 from finance_data_ops.validation.source_universe_reconciliation import build_source_universe_reconciliation_plan
@@ -94,16 +94,36 @@ def main() -> None:
     result: dict[str, Any] = plan.as_dict()
     result["apply"] = bool(args.apply)
     result["source"] = args.source
-    result["write_result"] = {"status": "dry_run", "rows": len(plan.upsert_rows)}
+    registry_mutation_rows = plan.upsert_rows + plan.supersede_rows + plan.reject_rows
+    result["write_result"] = {
+        "status": "dry_run",
+        "upsert_rows": len(plan.upsert_rows),
+        "supersede_rows": len(plan.supersede_rows),
+        "reject_rows": len(plan.reject_rows),
+        "registry_rows": len(registry_mutation_rows),
+    }
 
-    if args.apply and plan.upsert_rows:
-        upsert_ticker_registry_rows(cache_root=settings.cache_root, rows=plan.upsert_rows)
+    if args.apply and registry_mutation_rows:
+        upsert_ticker_registry_rows(cache_root=settings.cache_root, rows=registry_mutation_rows)
         if args.source == "postgres":
             settings.require_database()
             publisher = PostgresPublisher(database_dsn=settings.database_dsn)
-            result["write_result"] = publish_ticker_registry(publisher=publisher, rows=plan.upsert_rows)
+            registry_result = publisher.upsert(
+                "ticker_registry",
+                build_ticker_registry_payload(registry_mutation_rows),
+                on_conflict="registry_key",
+            )
+            entity_result = publisher.upsert(
+                "feature_store.entity_attributes_static",
+                build_entity_attributes_static_payload(plan.upsert_rows),
+                on_conflict="entity_id",
+            )
+            result["write_result"] = {
+                "ticker_registry": registry_result,
+                "feature_store.entity_attributes_static": entity_result,
+            }
         else:
-            result["write_result"] = {"status": "ok", "target": "parquet", "rows": len(plan.upsert_rows)}
+            result["write_result"] = {"status": "ok", "target": "parquet", "rows": len(registry_mutation_rows)}
 
     print(json.dumps(result, indent=2, default=str))
     if args.fail_on_issues and plan.issues:
