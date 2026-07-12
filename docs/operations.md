@@ -57,7 +57,7 @@ Provider symbol ownership:
 - Raw holdings symbols that cannot be resolved confidently remain `is_onboardable=false` with a
   `not_onboardable_reason`; backend must not add country/exchange suffixes.
 
-Apply `sql/017_symbology_country_home_country.sql` before publishing the country/home-country backfill.
+Ensure the runtime baseline has been applied before publishing the country/home-country backfill.
 
 Foreign ETF holding symbol/name repair:
 

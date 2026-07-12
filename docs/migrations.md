@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Prepare a fresh Supabase project for current Data Ops-owned runtime surfaces without replaying historical compatibility migrations.
+Prepare a fresh Supabase project for current Data Ops-owned runtime surfaces.
 
 ## SQL sources
 
@@ -12,14 +12,6 @@ Preferred path for a fresh empty project:
 
 This is the single-file bootstrap for empty projects: current tables, materialized views, refresh
 functions, indexes, RLS enablement, and minimal runtime seed data.
-
-Legacy/retirement SQL, retained for older-instance archaeology and explicit cleanup only:
-
-- [`sql/archive/legacy_public_product_surfaces/`](/home/franciscosantos/finance-data-ops/sql/archive/legacy_public_product_surfaces)
-- [`sql/019_retire_legacy_public_product_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/019_retire_legacy_public_product_surfaces.sql)
-
-Historical numbered SQL files in the archive are not part of fresh installs and are not runtime
-product outputs.
 
 ## Surfaces created/owned by migrations
 
@@ -45,11 +37,6 @@ product outputs.
   - `async_job_runs` durable request-driven async job audit surface
   - `analysis_jobs`
   - `analysis_results`
-
-Retired public product tables, materialized views, and refresh RPCs are intentionally absent from
-the runtime schema. Existing databases can drop those objects with
-[`sql/019_retire_legacy_public_product_surfaces.sql`](/home/franciscosantos/finance-data-ops/sql/019_retire_legacy_public_product_surfaces.sql);
-the script is manual-only and must not run as part of normal refresh.
 - Runtime seed:
   - default `macro_series_catalog` rows required by daily macro/release refreshes
 

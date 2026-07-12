@@ -1,10 +1,6 @@
 -- Definitive runtime baseline for fresh projects.
--- Apply this to an empty project instead of replaying historical migrations.
 -- This file is intentionally non-destructive: it creates current runtime
 -- schemas and seed data, but does not drop existing objects or data.
---
--- Retired public product surfaces are intentionally absent. Existing DB cleanup
--- is handled only by the explicit legacy-public-product retirement script.
 
 create extension if not exists pgcrypto;
 
@@ -155,6 +151,14 @@ create table if not exists feature_store.ticker_readiness (
   updated_at timestamptz not null default now()
 );
 
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'finance_data_ops_worker') then
+    grant usage on schema feature_store to finance_data_ops_worker;
+    grant select on feature_store.ticker_readiness to finance_data_ops_worker;
+  end if;
+end $$;
+
 create table if not exists public.data_source_runs (
   run_id text primary key,
   job_name text not null,
@@ -278,6 +282,15 @@ create index if not exists idx_etf_holding_onboarding_identity_onboardable
 
 create index if not exists idx_etf_holding_onboarding_identity_source
   on public.etf_holding_onboarding_identity (source_symbol, source_country);
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'finance_data_ops_worker') then
+    grant select, insert, update, delete
+      on public.etf_holding_onboarding_identity
+      to finance_data_ops_worker;
+  end if;
+end $$;
 
 create table if not exists public.etf_themes (
   etf_ticker text primary key,
