@@ -48,7 +48,6 @@ Owned Supabase surfaces:
 Required for publish runs:
 
 - `DATA_OPS_DATABASE_URL`
-- `DATA_OPS_SYMBOLS` (unless passed via `--symbols`)
 
 Optional:
 
@@ -57,7 +56,8 @@ Optional:
 - `DATA_OPS_SYMBOL_BATCH_SIZE` (default `100`)
 - `DATA_OPS_CACHE_ROOT` (default `./data_cache`)
 - `DATA_OPS_ALERT_WEBHOOK_URL` (critical failure webhook)
-- `DATA_OPS_SYMBOLS_US` / `DATA_OPS_SYMBOLS_EU` / `DATA_OPS_SYMBOLS_APAC` (region-parameterized runs)
+- `DATA_OPS_SYMBOLS_OVERRIDE` for emergency/local source-refresh subsets
+- `DATA_OPS_SYMBOLS_OVERRIDE_US` / `DATA_OPS_SYMBOLS_OVERRIDE_EU` / `DATA_OPS_SYMBOLS_OVERRIDE_APAC` for region-specific emergency/local subsets
 
 See [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example).
 
@@ -75,19 +75,26 @@ See [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example).
 Market:
 
 ```bash
-python scripts/run_market_daily.py --no-publish
+python scripts/run_market_daily.py --region us --no-publish
 ```
 
 Fundamentals:
 
 ```bash
-python scripts/run_fundamentals_daily.py --no-publish
+python scripts/run_fundamentals_daily.py --region all --no-publish
 ```
 
 Earnings:
 
 ```bash
-python scripts/run_earnings_daily.py --no-publish
+python scripts/run_earnings_daily.py --region all --no-publish
+```
+
+Source-universe audit/reconciliation:
+
+```bash
+python scripts/reconcile_source_refresh_universe.py --fail-on-issues
+python scripts/reconcile_source_refresh_universe.py --apply
 ```
 
 Ticker validation (operator direct flow; backend lifecycle requests use Prefect deployments):
@@ -122,8 +129,10 @@ Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.
   - [prefect.yaml](/home/franciscosantos/finance-data-ops/prefect.yaml)
   - Includes source, aggregate, production, and onboarding deployments including `dataops-daily`, `market-daily`, `fundamentals-daily`, `earnings-daily`, `macro-daily`, `release-calendar-daily`, `ticker-validation`, `ticker-onboarding`, `ticker-backfill`, and `ticker-remove`
   - Region is handled via deployment parameters/flow logic (`region`) instead of per-region deployments
-  - Daily symbol resolution order: deployment `symbols` override -> `DATA_OPS_SYMBOLS_<REGION>` -> `DATA_OPS_SYMBOLS`
-  - `ticker_registry` is pipeline state for onboarding/validation, not the tracked-universe source of truth. Data Ops/Prefect owns all `ticker_registry` lifecycle writes; backend services trigger deployments and read state only. The registry fallback is migration-only and requires `DATA_OPS_ALLOW_TICKER_REGISTRY_UNIVERSE=true`.
+  - Scheduled source refresh symbols come from active, promoted, market-supported `ticker_registry` rows.
+  - Deployment `symbols` parameters are manual one-off subsets and always win.
+  - `DATA_OPS_SYMBOLS_OVERRIDE*` variables are emergency/local subset overrides, not the production universe.
+  - `feature_store.ticker_readiness` is the product/search tracked universe; it is audited against `ticker_registry` but is not used directly as the source refresh scheduler universe.
   - Feature-store handoff is config-driven: `FEATURE_BUILD_DAILY_DEPLOYMENT` defaults to `feature-build-daily/feature-build-daily`; targeted onboarding scorecard builds use `FEATURE_SCORECARD_BUILD_DEPLOYMENT`, defaulting to `scorecard-daily/scorecard-daily`.
   - Cadence strategy (weekday UTC):
     - Aggregate source handoff: `23:10`

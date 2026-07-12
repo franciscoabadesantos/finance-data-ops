@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -29,6 +30,7 @@ from finance_data_ops.refresh.fundamentals_daily import refresh_fundamentals_dai
 from finance_data_ops.refresh.market_daily import RefreshRunResult
 from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import load_settings
+from finance_data_ops.validation.symbol_resolution import resolve_source_refresh_universe
 from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
 from finance_data_ops.validation.coverage import (
     assess_symbol_coverage,
@@ -623,10 +625,6 @@ def _symbol_values(frame: pd.DataFrame) -> list[str]:
     return [str(v).strip().upper() for v in frame[symbol_col].dropna().tolist() if str(v).strip()]
 
 
-def _parse_symbols(raw: str) -> list[str]:
-    return [str(v).strip().upper() for v in str(raw).split(",") if str(v).strip()]
-
-
 def _load_existing_symbol_coverage_rows(
     *,
     database_dsn: str,
@@ -647,6 +645,7 @@ def _load_existing_symbol_coverage_rows(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Data Ops fundamentals daily flow.")
     parser.add_argument("--symbols", type=str, default=None, help="Comma-separated symbol universe.")
+    parser.add_argument("--region", type=str, default="all", help="Source refresh region: us, eu, apac, or all.")
     parser.add_argument("--cache-root", type=str, default=None, help="Override canonical local cache root.")
     parser.add_argument("--max-attempts", type=int, default=None, help="Retry attempts for retryable failures.")
     parser.add_argument("--no-publish", action="store_true", help="Skip Postgres publishing (local dry-run).")
@@ -666,9 +665,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     settings = load_settings(cache_root=args.cache_root)
-    symbols = _parse_symbols(args.symbols) if args.symbols else list(settings.default_symbols)
-    if not symbols:
-        raise ValueError("No symbols configured. Set --symbols or DATA_OPS_SYMBOLS_OVERRIDE.")
+    universe = resolve_source_refresh_universe(
+        symbols=args.symbols,
+        region=args.region,
+        settings=settings,
+        env=dict(os.environ),
+    )
+    symbols = universe.symbols
 
     summary = run_dataops_fundamentals_daily(
         symbols=symbols,
@@ -677,7 +680,11 @@ def main() -> None:
         max_attempts=int(args.max_attempts or settings.default_max_attempts),
         refresh_theme_etfs=not bool(args.skip_theme_etf_refresh),
         raise_on_failed_hard=not bool(args.allow_unhealthy),
+        universe_source=universe.source,
+        universe_scope=universe.scope,
+        universe_selection_reason=universe.selection_reason,
     )
+    summary["universe"] = universe.as_dict()
     print(json.dumps(summary, indent=2, default=str))
 
 

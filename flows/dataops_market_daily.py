@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -29,6 +30,7 @@ from finance_data_ops.refresh.market_daily import RefreshRunResult, refresh_mark
 from finance_data_ops.refresh.quotes_latest import refresh_latest_quotes
 from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import DataOpsSettings, load_settings
+from finance_data_ops.validation.symbol_resolution import resolve_source_refresh_universe
 from finance_data_ops.validation.coverage import (
     assess_symbol_coverage,
     build_symbol_coverage_rows,
@@ -725,10 +727,6 @@ def _overall_status(status_rows: list[dict[str, Any]]) -> str:
     return FreshnessState.FRESH
 
 
-def _parse_symbols(raw: str) -> list[str]:
-    return [str(v).strip().upper() for v in str(raw).split(",") if str(v).strip()]
-
-
 def _load_existing_symbol_coverage_rows(
     *,
     database_dsn: str,
@@ -763,6 +761,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols", type=str, default=None, help="Comma-separated symbol universe.")
     parser.add_argument("--start", type=str, default=None, help="Start date YYYY-MM-DD.")
     parser.add_argument("--end", type=str, default=None, help="End date YYYY-MM-DD.")
+    parser.add_argument("--region", type=str, default="all", help="Source refresh region: us, eu, apac, or all.")
     parser.add_argument("--cache-root", type=str, default=None, help="Override canonical local cache root.")
     parser.add_argument("--max-attempts", type=int, default=None, help="Retry attempts for retryable failures.")
     parser.add_argument(
@@ -784,9 +783,13 @@ def main() -> None:
     args = build_parser().parse_args()
     settings = load_settings(cache_root=args.cache_root)
 
-    symbols = _parse_symbols(args.symbols) if args.symbols else list(settings.default_symbols)
-    if not symbols:
-        raise ValueError("No symbols configured. Set --symbols or DATA_OPS_SYMBOLS_OVERRIDE.")
+    universe = resolve_source_refresh_universe(
+        symbols=args.symbols,
+        region=args.region,
+        settings=settings,
+        env=dict(os.environ),
+    )
+    symbols = universe.symbols
 
     end_ts = pd.Timestamp(args.end).date() if args.end else datetime.now(UTC).date()
     if args.start:
@@ -803,7 +806,11 @@ def main() -> None:
         max_attempts=int(args.max_attempts or settings.default_max_attempts),
         raise_on_failed_hard=not bool(args.allow_unhealthy),
         symbol_batch_size=args.symbol_batch_size,
+        universe_source=universe.source,
+        universe_scope=universe.scope,
+        universe_selection_reason=universe.selection_reason,
     )
+    summary["universe"] = universe.as_dict()
     print(json.dumps(summary, indent=2, default=str))
 
 

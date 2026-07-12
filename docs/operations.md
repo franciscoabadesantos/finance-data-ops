@@ -5,19 +5,19 @@
 Market:
 
 ```bash
-python scripts/run_market_daily.py
+python scripts/run_market_daily.py --region us
 ```
 
 Fundamentals:
 
 ```bash
-python scripts/run_fundamentals_daily.py
+python scripts/run_fundamentals_daily.py --region all
 ```
 
 Earnings:
 
 ```bash
-python scripts/run_earnings_daily.py
+python scripts/run_earnings_daily.py --region all
 ```
 
 Macro:
@@ -100,6 +100,17 @@ python scripts/run_market_history_repair.py --region all --min-rows 500 --lookba
 The repair command resolves its universe from `ticker_registry` unless `--symbols` or `DATA_OPS_SYMBOLS_OVERRIDE*`
 is provided. It writes idempotently to `source_cache.market_price_daily`, scopes status as `run_subset`, and does not
 trigger relationship-map or feature-store rebuilds.
+
+Source refresh universe audit/reconciliation:
+
+```bash
+python scripts/reconcile_source_refresh_universe.py --fail-on-issues
+python scripts/reconcile_source_refresh_universe.py --apply
+```
+
+The audit compares active/promoted/market-supported `ticker_registry` rows with tracked/materialized product symbols
+from `feature_store.ticker_readiness`, `source_cache.market_price_daily`, `feature_store.technical_features_daily`,
+and `feature_store.ticker_page_summary`. Dry-run is the default; `--apply` is required before any registry write.
 
 ## Required environment
 
