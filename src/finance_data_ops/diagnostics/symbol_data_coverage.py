@@ -120,12 +120,6 @@ def read_complete_symbol_data_coverage_rows_from_postgres(
             symbol_candidates=("symbol", "ticker"),
             date_candidates=("price_date", "date", "as_of_date"),
         )
-        quotes = _read_aggregate_frame(
-            conn,
-            table_name="public.market_quotes",
-            symbol_candidates=("ticker", "symbol"),
-            date_candidates=("quote_ts", "updated_at", "fetched_at", "created_at"),
-        )
         fundamentals = _read_aggregate_frame(
             conn,
             table_name="source_cache.fundamentals",
@@ -140,7 +134,7 @@ def read_complete_symbol_data_coverage_rows_from_postgres(
         )
     return build_complete_symbol_data_coverage_rows(
         prices_frame=prices,
-        quotes_frame=quotes,
+        quotes_frame=pd.DataFrame(),
         fundamentals_frame=fundamentals,
         earnings_events_frame=earnings,
     )

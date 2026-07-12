@@ -75,8 +75,8 @@ class FakeMarketProvider:
 
 class FailOncePublisher(RecordingPublisher):
     def upsert(self, table: str, rows: list[dict[str, Any]], *, on_conflict: str | None = None) -> dict[str, Any]:
-        if table == "market_quotes":
-            raise RuntimeError("simulated market_quotes publish failure")
+        if table == "source_cache.market_price_daily":
+            raise RuntimeError("simulated source_cache.market_price_daily publish failure")
         return super().upsert(table, rows, on_conflict=on_conflict)
 
 
@@ -95,11 +95,10 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
 
     assert table_path("market_price_daily", cache_root=tmp_path).exists()
     assert table_path("market_quotes", cache_root=tmp_path).exists()
-    assert table_path("ticker_market_stats_snapshot", cache_root=tmp_path).exists()
     assert summary["refresh"]["market_daily"]["status"] == "fresh"
     assert summary["refresh"]["quotes_latest"]["status"] == "fresh"
     assert summary["coverage"]["status"] == "fresh"
-    assert len(summary["asset_status"]) == 4
+    assert len(summary["asset_status"]) == 3
     assert summary["publish_failures"] == []
 
     status_upsert = next(call for call in publisher.upserts if call["table"] == "symbol_data_coverage")
@@ -108,58 +107,23 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
     assert coverage_row["market_data_last_date"] is not None
     assert coverage_row["reason"] == "market_price_and_quote_available"
 
-    prices_upsert = next(call for call in publisher.upserts if call["table"] == "market_price_daily")
+    prices_upsert = next(call for call in publisher.upserts if call["table"] == "source_cache.market_price_daily")
+    assert prices_upsert["on_conflict"] == "symbol,price_date"
     price_row = prices_upsert["rows"][0]
     assert set(price_row.keys()) == {
-        "ticker",
-        "date",
+        "symbol",
+        "price_date",
         "open",
         "high",
         "low",
         "close",
         "adj_close",
         "volume",
-        "source",
-        "fetched_at",
-        "created_at",
+        "source_updated_at",
+        "ingested_at",
     }
     assert price_row["high"] == 101.0
     assert price_row["adj_close"] == 100.5
-
-    quotes_upsert = next(call for call in publisher.upserts if call["table"] == "market_quotes")
-    assert quotes_upsert["on_conflict"] == "ticker"
-    quote_row = quotes_upsert["rows"][0]
-    assert set(quote_row.keys()) == {
-        "ticker",
-        "name",
-        "sector",
-        "industry",
-        "price",
-        "change",
-        "change_percent",
-        "market_cap_text",
-        "source",
-        "fetched_at",
-        "created_at",
-        "updated_at",
-    }
-    assert quote_row["sector"] == "Technology"
-    assert quote_row["industry"] == "Software - Infrastructure"
-    assert "high" not in quote_row
-
-    quotes_history_upsert = next(call for call in publisher.upserts if call["table"] == "market_quotes_history")
-    assert quotes_history_upsert["on_conflict"] == "ticker,fetched_at"
-    history_row = quotes_history_upsert["rows"][0]
-    assert set(history_row.keys()) == {
-        "ticker",
-        "fetched_at",
-        "price",
-        "change",
-        "change_percent",
-        "market_cap",
-        "source",
-    }
-    assert "high" not in history_row
 
     asset_status_upsert = next(call for call in publisher.upserts if call["table"] == "data_asset_status")
     pipeline_row = next(row for row in asset_status_upsert["rows"] if row["asset_key"] == "data_ops_publish_pipeline")

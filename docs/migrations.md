@@ -24,20 +24,17 @@ Historical numbered SQL files are retained for older-instance archaeology.
 ## Surfaces created/owned by migrations
 
 - Runtime schema:
-  - `market_price_daily`
-  - `market_quotes`
-  - `market_quotes_history`
-  - `ticker_market_stats_snapshot`
+  - `source_cache.market_price_daily`
+  - `source_cache.fundamentals`
+  - `source_cache.earnings`
+  - `feature_store.technical_features_daily`
+  - `feature_store.scorecard_daily`
+  - `feature_store.ticker_page_summary`
+  - `feature_store.entity_attributes_static`
+  - `feature_store.ticker_readiness`
   - `data_source_runs`
   - `data_asset_status`
   - `symbol_data_coverage`
-  - `market_fundamentals_v2`
-  - `ticker_fundamental_point_in_time`
-  - `mv_latest_fundamentals` + `refresh_mv_latest_fundamentals`
-  - `ticker_fundamental_summary`
-  - `market_earnings_events`
-  - `market_earnings_history`
-  - `mv_next_earnings` + `refresh_mv_next_earnings`
   - `ticker_registry`
   - `macro_series_catalog`
   - `macro_observations`

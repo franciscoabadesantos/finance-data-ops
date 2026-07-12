@@ -143,8 +143,8 @@ def _run_full_history_backfill(
         market_rows += int(len(prices.index))
         quote_rows += int(len(quotes.index))
         earliest_prices.update(_earliest_price_dates(prices))
-        _record_failures(failures, "market_price_daily", market_run.as_dict())
-        _record_failures(failures, "market_quotes", quotes_run.as_dict())
+        _record_failures(failures, "source_cache.market_price_daily", market_run.as_dict())
+        _record_failures(failures, "latest_quotes_provider_check", quotes_run.as_dict())
         if publish_enabled and publisher is not None:
             publish_prices_surfaces(
                 publisher=publisher,
@@ -160,7 +160,7 @@ def _run_full_history_backfill(
             max_attempts=max_attempts,
         )
         fundamentals_rows += int(len(fundamentals.index))
-        _record_failures(failures, "market_fundamentals_v2", fundamentals_run.as_dict())
+        _record_failures(failures, "source_cache.fundamentals", fundamentals_run.as_dict())
         if publish_enabled and publisher is not None:
             publish_fundamentals_surfaces(
                 publisher=publisher,
@@ -198,21 +198,16 @@ def _run_full_history_backfill(
             raise_on_failed_hard=False,
         )
 
-    if publish_enabled and publisher is not None:
-        for rpc_name in ("refresh_mv_latest_prices", "refresh_mv_latest_fundamentals", "refresh_mv_next_earnings"):
-            publisher.rpc(rpc_name, {})
-
     return {
         "status": "completed",
         "full_history_start_date": start_date,
         "end_date": end_date,
         "batch_count": len(batches),
         "rows": {
-            "market_price_daily": market_rows,
-            "market_quotes": quote_rows,
-            "market_fundamentals_v2": fundamentals_rows,
-            "market_earnings_events": earnings_event_rows,
-            "market_earnings_history": earnings_history_rows,
+            "source_cache.market_price_daily": market_rows,
+            "latest_quotes_provider_check": quote_rows,
+            "source_cache.fundamentals": fundamentals_rows,
+            "source_cache.earnings": earnings_event_rows + earnings_history_rows,
         },
         "earliest_price_dates": dict(sorted(earliest_prices.items())),
         "earliest_price_date_examples": dict(list(sorted(earliest_prices.items()))[:5]),

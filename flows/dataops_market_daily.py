@@ -18,18 +18,16 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from finance_data_ops.derived.market_stats import compute_ticker_market_stats
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.ops.incidents import classify_failure
 from finance_data_ops.providers.exchange_calendar import mic_for_symbol, trading_sessions
 from finance_data_ops.providers.market import MarketDataProvider
 from finance_data_ops.publish.client import Publisher, RecordingPublisher, PostgresPublisher
 from finance_data_ops.publish.prices import publish_prices_surfaces
-from finance_data_ops.publish.product_metrics import publish_product_metrics
 from finance_data_ops.publish.status import fetch_symbol_data_coverage_rows, publish_status_surfaces
 from finance_data_ops.refresh.market_daily import RefreshRunResult, refresh_market_daily
 from finance_data_ops.refresh.quotes_latest import refresh_latest_quotes
-from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
+from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import DataOpsSettings, load_settings
 from finance_data_ops.validation.coverage import (
     assess_symbol_coverage,
@@ -122,19 +120,9 @@ def run_dataops_market_daily(
         observed_symbols=list(cached_prices.get("symbol", pd.Series(dtype=str)).astype(str).tolist()),
     )
 
-    market_stats = compute_ticker_market_stats(cached_prices, as_of_date=end)
-    write_parquet_table(
-        "ticker_market_stats_snapshot",
-        market_stats,
-        cache_root=settings.cache_root,
-        mode="replace",
-        dedupe_subset=["ticker"],
-    )
-
     status_rows = _build_asset_status_rows(
         prices_frame=cached_prices,
         quotes_frame=cached_quotes,
-        market_stats_frame=market_stats,
         prices_run=prices_run,
         quotes_run=quotes_run,
         trading_calendar_frame=cached_trading_calendar,
@@ -169,16 +157,6 @@ def run_dataops_market_daily(
             failures=publish_failures,
         )
         publish_results["prices"] = prices_result
-
-        product_result = _execute_publish_step(
-            "product_metrics",
-            lambda: publish_product_metrics(
-                publisher=publisher_impl,
-                market_stats_snapshot=market_stats,
-            ),
-            failures=publish_failures,
-        )
-        publish_results["product_metrics"] = product_result
 
     if publish_failures:
         for failure in publish_failures:
@@ -289,9 +267,8 @@ def run_dataops_market_daily(
         "published": publish_results,
         "publish_failures": publish_failures,
         "rows": {
-            "market_price_daily": int(len(cached_prices.index)),
+            "source_cache.market_price_daily": int(len(cached_prices.index)),
             "market_quotes": int(len(cached_quotes.index)),
-            "ticker_market_stats_snapshot": int(len(market_stats.index)),
         },
     }
 
@@ -405,7 +382,6 @@ def _build_asset_status_rows(
     *,
     prices_frame: pd.DataFrame,
     quotes_frame: pd.DataFrame,
-    market_stats_frame: pd.DataFrame,
     prices_run: RefreshRunResult,
     quotes_run: RefreshRunResult,
     trading_calendar_frame: pd.DataFrame | None = None,
@@ -415,7 +391,6 @@ def _build_asset_status_rows(
     prices_last = _frame_datetime_max(prices_frame, "date")
     quote_time_column = "quote_ts" if "quote_ts" in quotes_frame.columns else "fetched_at"
     quotes_last = _frame_datetime_max(quotes_frame, quote_time_column, utc=True)
-    stats_last = _frame_datetime_max(market_stats_frame, "updated_at", utc=True)
 
     price_state = _classify_exchange_calendar_freshness(
         last_observed_at=prices_last,
@@ -437,20 +412,12 @@ def _build_asset_status_rows(
         trading_calendar_frame=trading_calendar_frame,
         symbols=symbols or [],
     )
-    stats_state = classify_freshness(
-        last_observed_at=stats_last,
-        now=now,
-        fresh_within=timedelta(hours=6),
-        tolerance=timedelta(hours=12),
-        failure_state="failed_hard" if market_stats_frame.empty else None,
-    )
-
     prices_provider = _provider_from_frame(prices_frame, fallback="unknown")
     quotes_provider = _provider_from_frame(quotes_frame, fallback="unknown")
     now_iso = now.isoformat()
     return [
         {
-            "asset_key": "market_price_daily",
+            "asset_key": "source_cache.market_price_daily",
             "asset_type": "market_data",
             "provider": prices_provider,
             "last_success_at": _last_success_timestamp(prices_last, price_state),
@@ -465,7 +432,7 @@ def _build_asset_status_rows(
             "updated_at": now_iso,
         },
         {
-            "asset_key": "market_quotes",
+            "asset_key": "latest_quotes_provider_check",
             "asset_type": "market_data",
             "provider": quotes_provider,
             "last_success_at": _last_success_timestamp(quotes_last, quote_state),
@@ -476,21 +443,6 @@ def _build_asset_status_rows(
                 rows_written=int(len(quotes_frame.index)),
                 run_id=quotes_run.run_id,
                 errors=quotes_run.error_messages,
-            ),
-            "updated_at": now_iso,
-        },
-        {
-            "asset_key": "ticker_market_stats_snapshot",
-            "asset_type": "derived",
-            "provider": "data_ops",
-            "last_success_at": _last_success_timestamp(stats_last, stats_state),
-            "last_available_date": _date_or_none(stats_last),
-            "freshness_status": str(stats_state),
-            "coverage_status": "fresh" if not market_stats_frame.empty else "failed_hard",
-            "reason": _asset_reason(
-                rows_written=int(len(market_stats_frame.index)),
-                run_id="ticker_market_stats_snapshot_build",
-                errors=["no_rows_computed"] if market_stats_frame.empty else [],
             ),
             "updated_at": now_iso,
         },

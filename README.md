@@ -11,26 +11,24 @@ Data Ops service for Finance product-data domains.
   - market data
   - fundamentals
   - earnings
-- Frontend-serving summary surfaces derived from those datasets
+- Raw/source provider cache publication
 - Freshness, coverage, and operational run-status publication
 - Supabase publication for owned surfaces
 
 Owned Supabase surfaces:
 
 - Market:
-  - `market_price_daily`
-  - `market_quotes`
-  - `market_quotes_history`
-  - `mv_latest_prices` (refresh RPC)
-  - `ticker_market_stats_snapshot`
+  - `source_cache.market_price_daily`
 - Fundamentals:
-  - `market_fundamentals_v2`
-  - `mv_latest_fundamentals`
-  - `ticker_fundamental_summary`
+  - `source_cache.fundamentals`
 - Earnings:
-  - `market_earnings_events`
-  - `market_earnings_history`
-  - `mv_next_earnings`
+  - `source_cache.earnings`
+- Feature-store read models built after onboarding/backfill:
+  - `feature_store.technical_features_daily`
+  - `feature_store.scorecard_daily`
+  - `feature_store.ticker_page_summary`
+  - `feature_store.entity_attributes_static`
+  - `feature_store.ticker_readiness`
 - Operational:
   - `data_source_runs`
   - `data_asset_status`

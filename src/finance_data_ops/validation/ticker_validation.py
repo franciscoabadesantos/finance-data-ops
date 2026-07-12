@@ -18,7 +18,6 @@ from finance_data_ops.providers.symbols import (
     normalize_input_symbol,
     normalize_symbol_for_provider,
 )
-from finance_data_ops.publish.prices import build_market_quotes_payload
 from finance_data_ops.validation.ticker_registry import build_registry_key
 
 SUPPORTED_INSTRUMENT_TYPES = {"equity", "adr", "etf", "index_proxy", "country_fund", "unknown"}
@@ -279,19 +278,15 @@ def validate_market_support(*, candidate_symbol: str, provider: MarketDataProvid
             details={"stage": "latest_quotes", "daily_rows": int(len(prices.index))},
         )
 
-    quote_payload = build_market_quotes_payload(quotes)
-    if not quote_payload:
+    quote_row = _latest_quote_validation_row(quotes, candidate_symbol)
+    if quote_row is None:
         return DomainCheckResult(
             supported=False,
             reason="market_quotes_payload_empty",
             rows=int(len(prices.index)),
             details={"stage": "publish_precheck"},
         )
-    payload_row = next(
-        (row for row in quote_payload if str(row.get("ticker", "")).strip().upper() == candidate_symbol),
-        quote_payload[0],
-    )
-    missing_required = [field for field in PUBLISH_REQUIRED_QUOTE_FIELDS if _is_missing(payload_row.get(field))]
+    missing_required = [field for field in PUBLISH_REQUIRED_QUOTE_FIELDS if _is_missing(quote_row.get(field))]
     if missing_required:
         return DomainCheckResult(
             supported=False,
@@ -300,7 +295,7 @@ def validate_market_support(*, candidate_symbol: str, provider: MarketDataProvid
             details={
                 "stage": "publish_precheck",
                 "missing_fields": missing_required,
-                "payload_sample": {field: payload_row.get(field) for field in ("price", "change", "change_percent")},
+                "payload_sample": {field: quote_row.get(field) for field in ("price", "change", "change_percent")},
             },
         )
 
@@ -641,6 +636,31 @@ def _quote_value(quotes: pd.DataFrame, candidate_symbol: str, column: str) -> st
             return _optional_text(value)
     value = local.iloc[-1].get(column)
     return _optional_text(value)
+
+
+def _latest_quote_validation_row(quotes: pd.DataFrame, candidate_symbol: str) -> dict[str, object] | None:
+    if quotes.empty:
+        return None
+    local = quotes.copy()
+    symbol_column = "symbol" if "symbol" in local.columns else "ticker"
+    if symbol_column in local.columns:
+        matches = local.loc[local[symbol_column].astype(str).str.upper() == str(candidate_symbol).strip().upper()]
+        if not matches.empty:
+            local = matches
+    row = local.iloc[-1]
+    price = pd.to_numeric(row.get("price"), errors="coerce")
+    previous_close = pd.to_numeric(row.get("previous_close"), errors="coerce")
+    if "change" in local.columns:
+        change = pd.to_numeric(row.get("change"), errors="coerce")
+    else:
+        change = price - previous_close
+    if "change_percent" in local.columns:
+        change_percent = pd.to_numeric(row.get("change_percent"), errors="coerce")
+    elif not pd.isna(previous_close) and float(previous_close) != 0.0:
+        change_percent = (change / previous_close) * 100.0
+    else:
+        change_percent = None
+    return {"price": price, "change": change, "change_percent": change_percent}
 
 
 def _optional_text(value: object, *, upper: bool = False) -> str | None:

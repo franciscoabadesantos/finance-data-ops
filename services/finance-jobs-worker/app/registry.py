@@ -30,9 +30,9 @@ class WorkerRegistryStore:
         return psycopg.connect(self.database_dsn, connect_timeout=30, row_factory=dict_row)
 
     def _fetch_one(self, table_name: str, column: str, value: Any) -> dict[str, Any] | None:
-        _validate_identifier(table_name)
+        relation_sql = _quote_relation(table_name)
         _validate_identifier(column)
-        query = f'select * from "{table_name}" where "{column}" = %s limit 1'
+        query = f'select * from {relation_sql} where "{column}" = %s limit 1'
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, (value,))
@@ -48,14 +48,14 @@ class WorkerRegistryStore:
         order_by: str | None = None,
         descending: bool = False,
     ) -> list[dict[str, Any]]:
-        _validate_identifier(table_name)
+        relation_sql = _quote_relation(table_name)
         for column in predicates:
             _validate_identifier(column)
         if order_by:
             _validate_identifier(order_by)
         where_sql = " and ".join(f'"{column}" = %s' for column in predicates) or "true"
         order_sql = f' order by "{order_by}" {"desc" if descending else "asc"}' if order_by else ""
-        query = f'select * from "{table_name}" where {where_sql}{order_sql} limit %s'
+        query = f"select * from {relation_sql} where {where_sql}{order_sql} limit %s"
         params = [*_adapt_values(predicates.values()), max(1, int(limit))]
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -64,7 +64,7 @@ class WorkerRegistryStore:
         return [dict(row) for row in rows]
 
     def _update_by(self, table_name: str, key_column: str, key_value: Any, patch: dict[str, Any]) -> dict[str, Any] | None:
-        _validate_identifier(table_name)
+        relation_sql = _quote_relation(table_name)
         _validate_identifier(key_column)
         columns = [str(column) for column in patch]
         for column in columns:
@@ -72,7 +72,7 @@ class WorkerRegistryStore:
         if not columns:
             return self._fetch_one(table_name, key_column, key_value)
         set_sql = ", ".join(f'"{column}" = %s' for column in columns)
-        query = f'update "{table_name}" set {set_sql} where "{key_column}" = %s returning *'
+        query = f'update {relation_sql} set {set_sql} where "{key_column}" = %s returning *'
         params = [*_adapt_values(patch[column] for column in columns), key_value]
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -81,7 +81,7 @@ class WorkerRegistryStore:
         return dict(row) if row else None
 
     def _upsert(self, table_name: str, row: dict[str, Any], *, conflict_columns: list[str]) -> None:
-        _validate_identifier(table_name)
+        relation_sql = _quote_relation(table_name)
         columns = [str(column) for column in row]
         for column in columns:
             _validate_identifier(column)
@@ -93,7 +93,7 @@ class WorkerRegistryStore:
         update_columns = [column for column in columns if column not in conflict_columns]
         update_sql = ", ".join(f'"{column}" = excluded."{column}"' for column in update_columns)
         action_sql = f"do update set {update_sql}" if update_sql else "do nothing"
-        query = f'insert into "{table_name}" ({column_sql}) values ({placeholders}) on conflict ({conflict_sql}) {action_sql}'
+        query = f"insert into {relation_sql} ({column_sql}) values ({placeholders}) on conflict ({conflict_sql}) {action_sql}"
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, list(_adapt_values(row[column] for column in columns)))
@@ -184,12 +184,13 @@ class WorkerRegistryStore:
         return dict(data[0])
 
     def fetch_market_snapshot(self, ticker: str) -> dict[str, Any] | None:
+        symbol = str(ticker).strip().upper()
         if self._uses_postgres:
-            return self._fetch_one("ticker_market_stats_snapshot", "ticker", str(ticker).strip().upper())
+            return self._fetch_one("feature_store.ticker_page_summary", "symbol", symbol)
         response = (
-            self.client.table("ticker_market_stats_snapshot")
+            self.client.table("feature_store.ticker_page_summary")
             .select("*")
-            .eq("ticker", str(ticker).strip().upper())
+            .eq("symbol", symbol)
             .limit(1)
             .execute()
         )
@@ -199,12 +200,13 @@ class WorkerRegistryStore:
         return dict(data[0])
 
     def fetch_next_earnings_row(self, ticker: str) -> dict[str, Any] | None:
+        symbol = str(ticker).strip().upper()
         if self._uses_postgres:
-            return self._fetch_one("mv_next_earnings", "ticker", str(ticker).strip().upper())
+            return self._fetch_one("feature_store.ticker_page_summary", "symbol", symbol)
         response = (
-            self.client.table("mv_next_earnings")
+            self.client.table("feature_store.ticker_page_summary")
             .select("*")
-            .eq("ticker", str(ticker).strip().upper())
+            .eq("symbol", symbol)
             .limit(1)
             .execute()
         )
@@ -232,36 +234,34 @@ class WorkerRegistryStore:
         symbol = str(ticker).strip().upper()
         if self._uses_postgres:
             rows = self._fetch_many(
-                "market_price_daily",
-                predicates={"ticker": symbol},
+                "source_cache.market_price_daily",
+                predicates={"symbol": symbol},
                 limit=limit,
-                order_by="date",
+                order_by="price_date",
                 descending=True,
             )
-            if rows:
-                return rows
-            return self._fetch_rows_for_ticker("market_price_daily", ticker=ticker, limit=limit)
+            return [_normalize_source_cache_price_row(row) for row in rows]
         try:
             query = (
-                self.client.table("market_price_daily")
+                self.client.table("source_cache.market_price_daily")
                 .select("*")
-                .eq("ticker", symbol)
-                .order("date", desc=True)
+                .eq("symbol", symbol)
+                .order("price_date", desc=True)
                 .limit(max(1, int(limit)))
             )
             response = query.execute()
             rows = [dict(item) for item in (response.data or []) if isinstance(item, dict)]
             if rows:
-                return rows
+                return [_normalize_source_cache_price_row(row) for row in rows]
         except Exception:
             pass
-        return self._fetch_rows_for_ticker("market_price_daily", ticker=ticker, limit=limit)
+        return []
 
     def fetch_fundamentals_rows(self, ticker: str, *, limit: int = 5000) -> list[dict[str, Any]]:
-        return self._fetch_rows_for_ticker("market_fundamentals_v2", ticker=ticker, limit=limit)
+        return self._fetch_rows_for_ticker("source_cache.fundamentals", ticker=ticker, limit=limit)
 
     def fetch_earnings_history_rows(self, ticker: str, *, limit: int = 5000) -> list[dict[str, Any]]:
-        return self._fetch_rows_for_ticker("market_earnings_history", ticker=ticker, limit=limit)
+        return self._fetch_rows_for_ticker("source_cache.earnings", ticker=ticker, limit=limit)
 
     def fetch_data_asset_status(self) -> dict[str, dict[str, Any]]:
         if self._uses_postgres:
@@ -313,6 +313,28 @@ def _validate_identifier(value: str) -> None:
         raise ValueError(f"Invalid SQL identifier: {value!r}")
 
 
+def _quote_relation(value: str) -> str:
+    parts = [part.strip() for part in str(value).split(".") if part.strip()]
+    if not parts or len(parts) > 2:
+        raise ValueError(f"Invalid SQL relation: {value!r}")
+    for part in parts:
+        _validate_identifier(part)
+    return ".".join(f'"{part}"' for part in parts)
+
+
+def _normalize_source_cache_price_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    if "ticker" not in out and out.get("symbol") is not None:
+        out["ticker"] = out.get("symbol")
+    if "date" not in out and out.get("price_date") is not None:
+        out["date"] = out.get("price_date")
+    if "fetched_at" not in out and out.get("source_updated_at") is not None:
+        out["fetched_at"] = out.get("source_updated_at")
+    if "created_at" not in out and out.get("ingested_at") is not None:
+        out["created_at"] = out.get("ingested_at")
+    return out
+
+
 def _adapt_values(values: Any) -> list[Any]:
     try:
         from psycopg.types.json import Jsonb
@@ -343,7 +365,7 @@ class _PostgresTableClient:
 
 class _PostgresQuery:
     def __init__(self, store: WorkerRegistryStore, table_name: str) -> None:
-        _validate_identifier(str(table_name))
+        _quote_relation(str(table_name))
         self.store = store
         self.table_name = str(table_name)
         self.operation = "select"
@@ -437,13 +459,14 @@ class _PostgresQuery:
         if self.order_column:
             order_sql = f' order by "{self.order_column}" {"desc" if self.order_desc else "asc"}'
         limit_sql = " limit %s" if self.limit_count is not None else ""
-        query = f'select {column_sql} from "{self.table_name}" where {where_sql}{order_sql}{limit_sql}'
+        relation_sql = _quote_relation(self.table_name)
+        query = f"select {column_sql} from {relation_sql} where {where_sql}{order_sql}{limit_sql}"
         query_params = [*params, self.limit_count] if self.limit_count is not None else params
         count_value: int | None = None
         with self.store._connect() as conn:
             with conn.cursor() as cur:
                 if self.count_exact:
-                    cur.execute(f'select count(*) as count from "{self.table_name}" where {where_sql}', params)
+                    cur.execute(f"select count(*) as count from {relation_sql} where {where_sql}", params)
                     count_row = cur.fetchone()
                     count_value = int(count_row["count"] if isinstance(count_row, dict) else count_row[0])
                 cur.execute(query, query_params)
@@ -459,7 +482,7 @@ class _PostgresQuery:
         with self.store._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f'insert into "{self.table_name}" ({column_sql}) values ({placeholders})',
+                    f"insert into {_quote_relation(self.table_name)} ({column_sql}) values ({placeholders})",
                     list(_adapt_values(row[column] for column in columns)),
                 )
 
@@ -473,7 +496,7 @@ class _PostgresQuery:
         params = [*_adapt_values(row[column] for column in columns), *where_params]
         with self.store._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(f'update "{self.table_name}" set {set_sql} where {where_sql} returning *', params)
+                cur.execute(f"update {_quote_relation(self.table_name)} set {set_sql} where {where_sql} returning *", params)
                 rows = cur.fetchall()
         return _Response([dict(item) for item in rows], len(rows))
 
@@ -481,7 +504,7 @@ class _PostgresQuery:
         where_sql, params = self._where_sql()
         with self.store._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(f'delete from "{self.table_name}" where {where_sql} returning *', params)
+                cur.execute(f"delete from {_quote_relation(self.table_name)} where {where_sql} returning *", params)
                 rows = cur.fetchall()
         return _Response([dict(item) for item in rows], len(rows))
 

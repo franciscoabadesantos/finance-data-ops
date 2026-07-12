@@ -620,8 +620,8 @@ def dataops_market_daily_flow(
 
     execution_plan = resolve_gap_aware_window(
         domain="market",
-        table_name="market_price_daily",
-        date_column="date",
+        table_name="source_cache.market_price_daily",
+        date_column="price_date",
         cadence="business",
         lookback_days=int(lookback_days if lookback_days is not None else settings.default_lookback_days),
         explicit_start=start,
@@ -687,7 +687,7 @@ def dataops_fundamentals_daily_flow(
     logger = get_run_logger()
     execution_plan = resolve_watermark_execution(
         domain="fundamentals",
-        table_name="market_fundamentals_v2",
+        table_name="source_cache.fundamentals",
         date_column="period_end",
         lookback_days=3650,
         grace_days=180,
@@ -757,7 +757,7 @@ def dataops_earnings_daily_flow(
 
     execution_plan = resolve_watermark_execution(
         domain="earnings",
-        table_name="market_earnings_history",
+        table_name="source_cache.earnings",
         date_column="earnings_date",
         lookback_days=3650,
         grace_days=180,

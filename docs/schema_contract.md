@@ -17,42 +17,33 @@ Historical numbered SQL files remain in the repo for older-instance archaeology,
 
 ## Market surfaces
 
-- `market_price_daily`
-- `market_quotes`
-- `market_quotes_history`
-- `mv_latest_prices` (RPC refresh path: `refresh_mv_latest_prices`)
-- `ticker_market_stats_snapshot`
+- `source_cache.market_price_daily`
+- `feature_store.technical_features_daily`
+- `feature_store.scorecard_daily`
+- `feature_store.ticker_page_summary`
 
-`market_price_daily` write contract (upsert key: `ticker,date`):
+`source_cache.market_price_daily` write contract (upsert key: `symbol,price_date`):
 
-- `ticker`
-- `date`
+- `symbol`
+- `price_date`
 - `open`
 - `high`
 - `low`
 - `close`
 - `adj_close`
 - `volume`
-- `source`
-- `fetched_at`
-- `created_at`
+- `source_updated_at`
+- `ingested_at`
 
 ## Fundamentals surfaces
 
-- `market_fundamentals_v2` (canonical normalized history)
-- `ticker_fundamental_point_in_time` (current non-fiscal snapshot per `(ticker, metric)`)
-- `mv_latest_fundamentals` (latest per `(ticker, metric)`)
-- `ticker_fundamental_summary` (frontend snapshot)
+- `source_cache.fundamentals`
+- `feature_store.ticker_page_summary`
+- `feature_store.entity_attributes_static`
 - `etf_holding_onboarding_identity` (Data Ops-owned provider-symbol read model for ETF/frontier onboarding)
 
-`market_fundamentals_v2` is for fiscal statement history. Point-in-time vendor metrics such as
-`market_cap`, `trailing_pe`, `dividend_yield`, and `beta` belong in
-`ticker_fundamental_point_in_time` and are upserted by `(ticker, metric)` so daily refreshes replace
-the current snapshot instead of accumulating one row per ingestion date.
-
-`market_cap` is currently also present in market quote surfaces for quote/header/network consumers.
-See [`docs/market_cap_contract.md`](/home/franciscosantos/finance-data-ops/docs/market_cap_contract.md)
-for the compatibility contract and future cleanup path.
+`source_cache.fundamentals` stores normalized provider fundamentals, including fiscal history and
+point-in-time vendor metrics. Feature-store owns derived product read models.
 
 `etf_holding_onboarding_identity` preserves ETF/source identity separately from provider onboarding
 identity. Backend/frontier services should read `onboard_symbol` only when `is_onboardable=true`;
@@ -60,9 +51,8 @@ country/exchange suffix resolution is owned by `finance_data_ops.identity`.
 
 ## Earnings surfaces
 
-- `market_earnings_events` (upcoming/scheduled)
-- `market_earnings_history` (historical results)
-- `mv_next_earnings` (next event per ticker)
+- `source_cache.earnings`
+- `feature_store.ticker_page_summary`
 
 ## Macro surfaces
 

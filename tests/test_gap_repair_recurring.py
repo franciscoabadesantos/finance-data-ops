@@ -34,6 +34,14 @@ def _write_market_cache(cache_root, dates: list[str]) -> None:
         mode="replace",
         dedupe_subset=["symbol", "date"],
     )
+    source_cache_rows = pd.DataFrame(rows).rename(columns={"date": "price_date"})
+    write_parquet_table(
+        "source_cache.market_price_daily",
+        source_cache_rows,
+        cache_root=cache_root,
+        mode="replace",
+        dedupe_subset=["symbol", "price_date"],
+    )
 
 
 def test_gap_aware_window_detects_gap_repair_and_earliest_missing(tmp_path) -> None:

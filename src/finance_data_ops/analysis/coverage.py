@@ -74,10 +74,9 @@ def build_coverage_report(
         {
             "title": "Asset Freshness",
             "items": [
-                {"key": "Market price history", "value": str((assets.get("market_price_daily") or {}).get("freshness_status") or "unknown")},
-                {"key": "Market quotes", "value": str((assets.get("market_quotes") or {}).get("freshness_status") or "unknown")},
-                {"key": "Fundamentals", "value": str((assets.get("market_fundamentals_v2") or {}).get("freshness_status") or "unknown")},
-                {"key": "Earnings history", "value": str((assets.get("market_earnings_history") or {}).get("freshness_status") or "unknown")},
+                {"key": "Market price history", "value": str((assets.get("source_cache.market_price_daily") or {}).get("freshness_status") or "unknown")},
+                {"key": "Fundamentals", "value": str((assets.get("source_cache.fundamentals") or {}).get("freshness_status") or "unknown")},
+                {"key": "Earnings history", "value": str((assets.get("source_cache.earnings") or {}).get("freshness_status") or "unknown")},
                 {"key": "Macro observations", "value": str((assets.get("macro_observations") or {}).get("freshness_status") or "unknown")},
                 {
                     "key": "Economic release calendar",
@@ -114,14 +113,14 @@ def build_coverage_report(
             "No ticker_registry onboarding row found for requested scope; canonical data availability is assessed independently."
         )
     if not market_price_rows:
-        warnings.append("No market_price_daily rows found for ticker.")
+        warnings.append("No source_cache.market_price_daily rows found for ticker.")
     if not fundamentals_rows:
-        warnings.append("No market_fundamentals_v2 rows found for ticker.")
+        warnings.append("No source_cache.fundamentals rows found for ticker.")
     if not earnings_rows:
-        warnings.append("No market_earnings_history rows found for ticker.")
+        warnings.append("No source_cache.earnings rows found for ticker.")
 
     freshness_alerts = []
-    for asset_key in ("market_price_daily", "market_quotes", "market_fundamentals_v2", "market_earnings_history"):
+    for asset_key in ("source_cache.market_price_daily", "source_cache.fundamentals", "source_cache.earnings"):
         freshness = str((assets.get(asset_key) or {}).get("freshness_status") or "unknown").strip().lower()
         if freshness in {"stale", "failed_hard", "partial"}:
             freshness_alerts.append(f"{asset_key} freshness={freshness}")

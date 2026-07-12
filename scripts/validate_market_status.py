@@ -34,11 +34,10 @@ def main() -> None:
 
     prices = read_parquet_table("market_price_daily", cache_root=settings.cache_root, required=False)
     quotes = read_parquet_table("market_quotes", cache_root=settings.cache_root, required=False)
-    stats = read_parquet_table("ticker_market_stats_snapshot", cache_root=settings.cache_root, required=False)
 
     now = datetime.now(UTC)
     statuses = {
-        "market_price_daily": str(
+        "source_cache.market_price_daily": str(
             classify_freshness(
                 last_observed_at=pd.to_datetime(prices.get("date"), errors="coerce").max(),
                 now=now,
@@ -47,22 +46,13 @@ def main() -> None:
                 failure_state="failed_hard" if prices.empty else None,
             )
         ),
-        "market_quotes": str(
+        "latest_quotes_provider_check": str(
             classify_freshness(
                 last_observed_at=pd.to_datetime(quotes.get("quote_ts"), utc=True, errors="coerce").max(),
                 now=now,
                 fresh_within=timedelta(hours=26),
                 tolerance=timedelta(hours=24),
                 failure_state="failed_hard" if quotes.empty else None,
-            )
-        ),
-        "ticker_market_stats_snapshot": str(
-            classify_freshness(
-                last_observed_at=pd.to_datetime(stats.get("updated_at"), utc=True, errors="coerce").max(),
-                now=now,
-                fresh_within=timedelta(hours=6),
-                tolerance=timedelta(hours=12),
-                failure_state="failed_hard" if stats.empty else None,
             )
         ),
     }

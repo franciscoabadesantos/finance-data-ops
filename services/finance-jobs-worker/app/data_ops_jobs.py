@@ -519,20 +519,18 @@ def _execute_rebuild(
 def _tables_for_domain(domain: str) -> list[tuple[str, str | None, str | None]]:
     if domain == "market":
         return [
-            ("market_price_daily", "as_of_date", "symbol"),
-            ("market_quotes", None, "ticker"),
-            ("ticker_market_stats_snapshot", "as_of_date", "ticker"),
+            ("source_cache.market_price_daily", "price_date", "symbol"),
+            ("feature_store.technical_features_daily", "as_of_date", "symbol"),
+            ("feature_store.scorecard_daily", "as_of_date", "symbol"),
+            ("feature_store.ticker_page_summary", "as_of_date", "symbol"),
         ]
     if domain == "fundamentals":
         return [
-            ("market_fundamentals_v2", "period_end", "ticker"),
-            ("ticker_fundamental_point_in_time", "as_of_date", "ticker"),
-            ("ticker_fundamental_summary", "latest_period_end", "ticker"),
+            ("source_cache.fundamentals", "period_end", "symbol"),
         ]
     if domain == "earnings":
         return [
-            ("market_earnings_events", "earnings_date", "ticker"),
-            ("market_earnings_history", "earnings_date", "ticker"),
+            ("source_cache.earnings", "earnings_date", "symbol"),
         ]
     if domain == "macro":
         return [

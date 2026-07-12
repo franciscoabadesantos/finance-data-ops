@@ -6,10 +6,7 @@ import pandas as pd
 
 from finance_data_ops.publish.client import RecordingPublisher
 from finance_data_ops.publish.earnings import publish_earnings_surfaces
-from finance_data_ops.publish.fundamentals import (
-    build_ticker_fundamental_point_in_time_payload,
-    publish_fundamentals_surfaces,
-)
+from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
 
 
 def test_publish_v2_contract_writes_expected_tables() -> None:
@@ -96,71 +93,55 @@ def test_publish_v2_contract_writes_expected_tables() -> None:
 
     tables = [call["table"] for call in publisher.upserts]
     assert tables == [
-        "market_fundamentals_v2",
         "source_cache.fundamentals",
-        "ticker_fundamental_summary",
-        "market_earnings_events",
-        "market_earnings_history",
         "source_cache.earnings",
     ]
 
     conflicts = {call["table"]: call["on_conflict"] for call in publisher.upserts}
-    assert conflicts["market_fundamentals_v2"] == "ticker,period,period_end,metric"
     assert conflicts["source_cache.fundamentals"] == "symbol,metric,period_end,period_type,report_date"
-    assert conflicts["ticker_fundamental_summary"] == "ticker"
-    assert conflicts["market_earnings_events"] == "ticker,earnings_date"
-    assert conflicts["market_earnings_history"] == "ticker,earnings_date"
     assert conflicts["source_cache.earnings"] == "symbol,report_date,earnings_date,fiscal_period"
 
-    fundamentals_row = next(call for call in publisher.upserts if call["table"] == "market_fundamentals_v2")["rows"][0]
+    fundamentals_row = next(call for call in publisher.upserts if call["table"] == "source_cache.fundamentals")[
+        "rows"
+    ][0]
     assert set(fundamentals_row.keys()) == {
-        "ticker",
-        "period",
-        "period_end",
+        "symbol",
+        "report_date",
         "metric",
         "value",
         "value_text",
+        "period_end",
+        "period_type",
+        "fiscal_year",
+        "fiscal_quarter",
+        "currency",
         "source",
-        "fetched_at",
+        "source_updated_at",
+        "ingested_at",
     }
+    assert fundamentals_row["symbol"] == "SPY"
 
-    summary_row = next(call for call in publisher.upserts if call["table"] == "ticker_fundamental_summary")["rows"][0]
-    assert summary_row["ticker"] == "SPY"
-    assert summary_row["trailing_pe"] == 20.0
-
-    event_row = next(call for call in publisher.upserts if call["table"] == "market_earnings_events")["rows"][0]
-    assert set(event_row.keys()) == {
-        "ticker",
+    earnings_row = next(call for call in publisher.upserts if call["table"] == "source_cache.earnings")["rows"][0]
+    assert set(earnings_row.keys()) == {
+        "symbol",
+        "report_date",
         "earnings_date",
+        "fiscal_period",
         "earnings_time",
-        "fiscal_period",
-        "estimate_eps",
-        "estimate_revenue",
-        "source",
-        "fetched_at",
-        "created_at",
-        "updated_at",
-    }
-
-    history_row = next(call for call in publisher.upserts if call["table"] == "market_earnings_history")["rows"][0]
-    assert set(history_row.keys()) == {
-        "ticker",
-        "earnings_date",
-        "fiscal_period",
         "actual_eps",
         "estimate_eps",
         "surprise_eps",
         "actual_revenue",
         "estimate_revenue",
         "surprise_revenue",
+        "currency",
         "source",
-        "fetched_at",
-        "created_at",
-        "updated_at",
+        "source_updated_at",
+        "ingested_at",
     }
+    assert earnings_row["symbol"] == "SPY"
 
-    rpc_names = [call["name"] for call in publisher.rpcs]
-    assert rpc_names == ["refresh_mv_latest_fundamentals", "refresh_mv_next_earnings"]
+    assert publisher.rpcs == []
 
 
 def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
@@ -251,26 +232,11 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
     )
 
     conflicts = {call["table"]: call["on_conflict"] for call in publisher.upserts}
-    assert conflicts["market_fundamentals_v2"] == "ticker,period,period_end,metric"
+    assert conflicts["source_cache.fundamentals"] == "symbol,metric,period_end,period_type,report_date"
     assert conflicts["ticker_profile"] == "ticker"
     assert conflicts["etf_holdings"] == "etf_ticker,holding_symbol,as_of"
     assert conflicts["etf_holding_onboarding_identity"] == "etf_ticker,source_symbol,source_country"
     assert conflicts["etf_sector_weights"] == "etf_ticker,sector,as_of"
-
-    assert conflicts["ticker_fundamental_point_in_time"] == "ticker,metric"
-
-    fundamentals_rows = next(call for call in publisher.upserts if call["table"] == "market_fundamentals_v2")[
-        "rows"
-    ]
-    assert fundamentals_rows == []
-
-    point_row = next(call for call in publisher.upserts if call["table"] == "ticker_fundamental_point_in_time")[
-        "rows"
-    ][0]
-    assert point_row["metric"] == "ex_dividend_date"
-    assert point_row["value"] is None
-    assert point_row["value_text"] == "2026-06-20"
-    assert point_row["as_of_date"] == "2026-06-22"
 
     profile_row = next(call for call in publisher.upserts if call["table"] == "ticker_profile")["rows"][0]
     assert profile_row["ticker"] == "SPY"
@@ -292,36 +258,3 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
     sector_row = next(call for call in publisher.upserts if call["table"] == "etf_sector_weights")["rows"][0]
     assert sector_row["sector"] == "technology"
     assert sector_row["weight"] == 0.32
-
-
-def test_point_in_time_payload_keeps_latest_snapshot_per_ticker_metric() -> None:
-    payload = build_ticker_fundamental_point_in_time_payload(
-        pd.DataFrame(
-            [
-                {
-                    "ticker": "SPY",
-                    "metric": "market_cap",
-                    "value": 100.0,
-                    "period_end": "2026-06-21",
-                    "period_type": "point_in_time",
-                    "source": "fake",
-                    "fetched_at": datetime(2026, 6, 21, 12, 0, tzinfo=UTC),
-                },
-                {
-                    "ticker": "SPY",
-                    "metric": "market_cap",
-                    "value": 110.0,
-                    "period_end": "2026-06-22",
-                    "period_type": "point_in_time",
-                    "source": "fake",
-                    "fetched_at": datetime(2026, 6, 22, 12, 0, tzinfo=UTC),
-                },
-            ]
-        )
-    )
-
-    assert len(payload) == 1
-    assert payload[0]["ticker"] == "SPY"
-    assert payload[0]["metric"] == "market_cap"
-    assert payload[0]["value"] == 110.0
-    assert payload[0]["as_of_date"] == pd.Timestamp("2026-06-22").date()

@@ -140,9 +140,8 @@ python scripts/rebuild_symbol_data_coverage.py --source postgres --apply --summa
 ```
 
 The rebuild deletes and reinserts `public.symbol_data_coverage` rows derived from
-`source_cache.market_price_daily`, `source_cache.fundamentals`, `source_cache.earnings`, and
-`public.market_quotes`. `market_data_available=true` requires materialized price rows; quote-only
-symbols can appear for diagnostics but do not claim market coverage. Cleaned placeholder identifiers
+`source_cache.market_price_daily`, `source_cache.fundamentals`, and `source_cache.earnings`.
+`market_data_available=true` requires materialized price rows. Cleaned placeholder identifiers
 and known superseded aliases such as `700.HK` are excluded unless they have materialized price rows.
 
 ## Request-driven async jobs

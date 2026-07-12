@@ -22,21 +22,12 @@ class TableResetTarget:
 DOMAIN_TABLES: dict[str, list[TableResetTarget]] = {
     "market": [
         TableResetTarget("source_cache.market_price_daily"),
-        TableResetTarget("public.ticker_market_stats_snapshot"),
-        TableResetTarget("public.market_quotes_history"),
-        TableResetTarget("public.market_quotes"),
-        TableResetTarget("public.market_price_daily"),
     ],
     "fundamentals": [
         TableResetTarget("source_cache.fundamentals"),
-        TableResetTarget("public.ticker_fundamental_summary"),
-        TableResetTarget("public.ticker_fundamental_point_in_time"),
-        TableResetTarget("public.market_fundamentals_v2"),
     ],
     "earnings": [
         TableResetTarget("source_cache.earnings"),
-        TableResetTarget("public.market_earnings_events"),
-        TableResetTarget("public.market_earnings_history"),
     ],
     "macro": [
         TableResetTarget("source_cache.macro_daily"),

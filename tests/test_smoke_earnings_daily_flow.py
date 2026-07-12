@@ -89,8 +89,8 @@ def test_smoke_earnings_refresh_publish_status(tmp_path) -> None:
     assert summary["refresh"]["earnings_daily"]["status"] == "fresh"
     assert summary["coverage"]["status"] == "fresh"
     assert summary["publish_failures"] == []
-    earnings_history_upsert = next(call for call in publisher.upserts if call["table"] == "market_earnings_history")
-    assert earnings_history_upsert["on_conflict"] == "ticker,earnings_date"
+    earnings_upsert = next(call for call in publisher.upserts if call["table"] == "source_cache.earnings")
+    assert earnings_upsert["on_conflict"] == "symbol,report_date,earnings_date,fiscal_period"
 
     status_upsert = next(call for call in publisher.upserts if call["table"] == "symbol_data_coverage")
     coverage_row = status_upsert["rows"][0]
@@ -99,7 +99,10 @@ def test_smoke_earnings_refresh_publish_status(tmp_path) -> None:
 
     asset_status_upsert = next(call for call in publisher.upserts if call["table"] == "data_asset_status")
     asset_keys = {row["asset_key"] for row in asset_status_upsert["rows"]}
-    assert {"market_earnings_events", "market_earnings_history", "mv_next_earnings"}.issubset(asset_keys)
+    assert "source_cache.earnings" in asset_keys
+    assert "market_earnings_events" not in asset_keys
+    assert "market_earnings_history" not in asset_keys
+    assert "mv_next_earnings" not in asset_keys
 
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_earnings_daily")
@@ -130,8 +133,8 @@ def test_build_asset_status_rows_handles_empty_frames() -> None:
         flow_run_id="run_dataops_earnings_daily_test",
     )
 
-    assert len(rows) == 3
-    assert rows[0]["asset_key"] == "market_earnings_events"
+    assert len(rows) == 1
+    assert rows[0]["asset_key"] == "source_cache.earnings"
     assert rows[0]["freshness_status"] == "failed_hard"
 
 

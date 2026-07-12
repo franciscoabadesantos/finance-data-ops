@@ -244,9 +244,7 @@ def run_dataops_earnings_daily(
         "published": publish_results,
         "publish_failures": publish_failures,
         "rows": {
-            "market_earnings_events": int(len(cached_earnings_events.index)),
-            "market_earnings_history": int(len(cached_earnings_history.index)),
-            "mv_next_earnings": int(len(next_earnings.index)),
+            "source_cache.earnings": int(len(cached_earnings_events.index) + len(cached_earnings_history.index)),
         },
     }
 
@@ -262,8 +260,6 @@ def _build_asset_status_rows(
     now = datetime.now(UTC)
     events_col = "fetched_at" if "fetched_at" in earnings_events.columns else "ingested_at"
     events_last = _frame_datetime_max(earnings_events, events_col, utc=True)
-    history_last = _frame_datetime_max(earnings_history, "earnings_date")
-    next_last = _frame_datetime_max(next_earnings, "updated_at", utc=True)
 
     events_state = classify_freshness(
         last_observed_at=events_last,
@@ -273,27 +269,12 @@ def _build_asset_status_rows(
         partial=str(refresh_run.status) == FreshnessState.PARTIAL,
         failure_state=refresh_run.status,
     )
-    history_state = classify_freshness(
-        last_observed_at=history_last,
-        now=now,
-        fresh_within=timedelta(days=180),
-        tolerance=timedelta(days=120),
-        failure_state="failed_hard" if earnings_history.empty else None,
-    )
-    next_state = classify_freshness(
-        last_observed_at=next_last,
-        now=now,
-        fresh_within=timedelta(hours=30),
-        tolerance=timedelta(hours=24),
-        failure_state="failed_hard" if next_earnings.empty else None,
-    )
-
     provider = _provider_from_frame(earnings_events, fallback="unknown")
     now_iso = now.isoformat()
 
     return [
         {
-            "asset_key": "market_earnings_events",
+            "asset_key": "source_cache.earnings",
             "asset_type": "earnings",
             "provider": provider,
             "last_success_at": _last_success_timestamp(events_last, events_state),
@@ -304,36 +285,6 @@ def _build_asset_status_rows(
                 rows_written=int(len(earnings_events.index)),
                 run_id=refresh_run.run_id,
                 errors=refresh_run.error_messages,
-            ),
-            "updated_at": now_iso,
-        },
-        {
-            "asset_key": "market_earnings_history",
-            "asset_type": "earnings",
-            "provider": _provider_from_frame(earnings_history, fallback=provider),
-            "last_success_at": _last_success_timestamp(history_last, history_state),
-            "last_available_date": _date_or_none(history_last),
-            "freshness_status": str(history_state),
-            "coverage_status": "fresh" if not earnings_history.empty else "failed_hard",
-            "reason": _asset_reason(
-                rows_written=int(len(earnings_history.index)),
-                run_id="market_earnings_history_build",
-                errors=["no_rows_found"] if earnings_history.empty else [],
-            ),
-            "updated_at": now_iso,
-        },
-        {
-            "asset_key": "mv_next_earnings",
-            "asset_type": "derived",
-            "provider": "data_ops",
-            "last_success_at": _last_success_timestamp(next_last, next_state),
-            "last_available_date": _date_or_none(_latest_earnings_date(next_earnings)),
-            "freshness_status": str(next_state),
-            "coverage_status": "fresh" if not next_earnings.empty else "failed_hard",
-            "reason": _asset_reason(
-                rows_written=int(len(next_earnings.index)),
-                run_id=f"{flow_run_id}_mv_next_earnings",
-                errors=["no_rows_to_materialize"] if next_earnings.empty else [],
             ),
             "updated_at": now_iso,
         },

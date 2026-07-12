@@ -77,10 +77,9 @@ def build_ticker_snapshot_report(
         {
             "title": "Freshness",
             "items": [
-                {"key": "Market price history", "value": str((assets.get("market_price_daily") or {}).get("freshness_status") or "unknown")},
-                {"key": "Market quotes", "value": str((assets.get("market_quotes") or {}).get("freshness_status") or "unknown")},
-                {"key": "Fundamentals", "value": str((assets.get("market_fundamentals_v2") or {}).get("freshness_status") or "unknown")},
-                {"key": "Earnings history", "value": str((assets.get("market_earnings_history") or {}).get("freshness_status") or "unknown")},
+                {"key": "Market price history", "value": str((assets.get("source_cache.market_price_daily") or {}).get("freshness_status") or "unknown")},
+                {"key": "Fundamentals", "value": str((assets.get("source_cache.fundamentals") or {}).get("freshness_status") or "unknown")},
+                {"key": "Earnings history", "value": str((assets.get("source_cache.earnings") or {}).get("freshness_status") or "unknown")},
             ],
         },
         {
@@ -116,17 +115,17 @@ def build_ticker_snapshot_report(
     if coverage is None:
         warnings.append("No symbol_data_coverage row found for ticker.")
     if market_snapshot is None:
-        warnings.append("No ticker_market_stats_snapshot row found for ticker.")
+        warnings.append("No feature_store.ticker_page_summary row found for ticker.")
     if registry_row is None:
         warnings.append(
             "No ticker_registry onboarding row found for requested scope; canonical data availability is assessed independently."
         )
     if not market_price_rows:
-        warnings.append("No market_price_daily rows found for ticker.")
+        warnings.append("No source_cache.market_price_daily rows found for ticker.")
     if not fundamentals_rows:
-        warnings.append("No market_fundamentals_v2 rows found for ticker.")
+        warnings.append("No source_cache.fundamentals rows found for ticker.")
     if not earnings_rows:
-        warnings.append("No market_earnings_history rows found for ticker.")
+        warnings.append("No source_cache.earnings rows found for ticker.")
 
     coverage_status = str(coverage_row.get("coverage_status") or "unknown")
     summary = (

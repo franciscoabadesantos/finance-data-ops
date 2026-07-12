@@ -6,18 +6,18 @@ from typing import Any
 import pandas as pd
 
 DATASET_LABELS: dict[str, str] = {
-    "market_price_daily": "Market price history",
-    "market_fundamentals_v2": "Fundamentals",
-    "market_earnings_history": "Earnings history",
+    "source_cache.market_price_daily": "Market price history",
+    "source_cache.fundamentals": "Fundamentals",
+    "source_cache.earnings": "Earnings history",
 }
 
 DATASET_KEYS: tuple[str, ...] = (
-    "market_price_daily",
-    "market_fundamentals_v2",
-    "market_earnings_history",
+    "source_cache.market_price_daily",
+    "source_cache.fundamentals",
+    "source_cache.earnings",
 )
 
-DATE_KEYS_MARKET = ("date", "as_of_date")
+DATE_KEYS_MARKET = ("price_date", "date", "as_of_date")
 DATE_KEYS_FUNDAMENTALS = ("period_end", "latest_period_end")
 DATE_KEYS_EARNINGS = ("earnings_date",)
 UPDATE_TS_KEYS = (
@@ -69,12 +69,12 @@ def build_data_window_stats(
     earnings_rows: list[dict[str, Any]] | None,
 ) -> dict[str, dict[str, Any]]:
     return {
-        "market_price_daily": _compute_daily_window_stats(rows=market_price_rows or [], date_keys=DATE_KEYS_MARKET),
-        "market_fundamentals_v2": _compute_periodic_window_stats(
+        "source_cache.market_price_daily": _compute_daily_window_stats(rows=market_price_rows or [], date_keys=DATE_KEYS_MARKET),
+        "source_cache.fundamentals": _compute_periodic_window_stats(
             rows=fundamentals_rows or [],
             date_keys=DATE_KEYS_FUNDAMENTALS,
         ),
-        "market_earnings_history": _compute_quarterly_window_stats(rows=earnings_rows or [], date_keys=DATE_KEYS_EARNINGS),
+        "source_cache.earnings": _compute_quarterly_window_stats(rows=earnings_rows or [], date_keys=DATE_KEYS_EARNINGS),
     }
 
 
@@ -82,13 +82,13 @@ def build_completeness_summary_lines(
     *,
     stats_by_domain: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    market_stats = stats_by_domain.get("market_price_daily", {})
-    fundamentals_stats = stats_by_domain.get("market_fundamentals_v2", {})
-    earnings_stats = stats_by_domain.get("market_earnings_history", {})
+    market_stats = stats_by_domain.get("source_cache.market_price_daily", {})
+    fundamentals_stats = stats_by_domain.get("source_cache.fundamentals", {})
+    earnings_stats = stats_by_domain.get("source_cache.earnings", {})
     return [
-        {"key": DATASET_LABELS["market_price_daily"], "value": _format_market_completeness_summary(market_stats)},
-        {"key": DATASET_LABELS["market_earnings_history"], "value": _format_earnings_completeness_summary(earnings_stats)},
-        {"key": DATASET_LABELS["market_fundamentals_v2"], "value": _format_fundamentals_completeness_summary(fundamentals_stats)},
+        {"key": DATASET_LABELS["source_cache.market_price_daily"], "value": _format_market_completeness_summary(market_stats)},
+        {"key": DATASET_LABELS["source_cache.earnings"], "value": _format_earnings_completeness_summary(earnings_stats)},
+        {"key": DATASET_LABELS["source_cache.fundamentals"], "value": _format_fundamentals_completeness_summary(fundamentals_stats)},
     ]
 
 

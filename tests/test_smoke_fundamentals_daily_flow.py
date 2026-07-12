@@ -156,24 +156,25 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     assert summary["refresh"]["fundamentals_daily"]["status"] == "fresh"
     assert summary["coverage"]["status"] == "fresh"
     assert summary["publish_failures"] == []
-    fundamentals_upsert = next(call for call in publisher.upserts if call["table"] == "market_fundamentals_v2")
-    assert fundamentals_upsert["on_conflict"] == "ticker,period,period_end,metric"
-    assert {row["metric"] for row in fundamentals_upsert["rows"]} == {"revenue", "net_income", "eps"}
+    fundamentals_upsert = next(call for call in publisher.upserts if call["table"] == "source_cache.fundamentals")
+    assert fundamentals_upsert["on_conflict"] == "symbol,metric,period_end,period_type,report_date"
+    assert {row["metric"] for row in fundamentals_upsert["rows"]} == {"revenue", "net_income", "eps", "market_cap"}
     fundamentals_row = fundamentals_upsert["rows"][0]
     assert set(fundamentals_row.keys()) == {
-        "ticker",
-        "period",
-        "period_end",
+        "symbol",
+        "report_date",
         "metric",
         "value",
         "value_text",
+        "period_end",
+        "period_type",
+        "fiscal_year",
+        "fiscal_quarter",
+        "currency",
         "source",
-        "fetched_at",
+        "source_updated_at",
+        "ingested_at",
     }
-    point_upsert = next(call for call in publisher.upserts if call["table"] == "ticker_fundamental_point_in_time")
-    assert point_upsert["on_conflict"] == "ticker,metric"
-    assert {row["metric"] for row in point_upsert["rows"]} == {"market_cap"}
-    assert {row["as_of_date"] for row in point_upsert["rows"]} == {"2026-04-11"}
     assert next(call for call in publisher.upserts if call["table"] == "ticker_profile")["on_conflict"] == "ticker"
     assert (
         next(call for call in publisher.upserts if call["table"] == "etf_holdings")["on_conflict"]
@@ -191,9 +192,9 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
 
     asset_status_upsert = next(call for call in publisher.upserts if call["table"] == "data_asset_status")
     asset_keys = {row["asset_key"] for row in asset_status_upsert["rows"]}
-    assert {"market_fundamentals_v2", "ticker_fundamental_summary", "mv_latest_fundamentals"}.issubset(
-        asset_keys
-    )
+    assert "source_cache.fundamentals" in asset_keys
+    assert "ticker_fundamental_summary" not in asset_keys
+    assert "mv_latest_fundamentals" not in asset_keys
 
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_fundamentals_daily")
@@ -218,7 +219,7 @@ def test_optional_profile_and_etf_failures_do_not_fail_fundamentals_refresh(tmp_
     assert summary["publish_failures"] == []
     assert summary["refresh"]["fundamentals_daily"]["symbols_succeeded"] == ["KO"]
     assert summary["refresh"]["fundamentals_daily"]["symbols_failed"] == []
-    assert any(call["table"] == "market_fundamentals_v2" for call in publisher.upserts)
+    assert any(call["table"] == "source_cache.fundamentals" for call in publisher.upserts)
     assert not any(call["table"] == "ticker_profile" for call in publisher.upserts)
     assert not any(call["table"] == "etf_holdings" for call in publisher.upserts)
     assert not any(call["table"] == "etf_sector_weights" for call in publisher.upserts)

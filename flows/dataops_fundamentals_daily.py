@@ -267,8 +267,7 @@ def run_dataops_fundamentals_daily(
         "published": publish_results,
         "publish_failures": publish_failures,
         "rows": {
-            "market_fundamentals_v2": int(len(cached_fundamentals.index)),
-            "ticker_fundamental_summary": int(len(fundamentals_summary.index)),
+            "source_cache.fundamentals": int(len(cached_fundamentals.index)),
             "ticker_profile": int(len(cached_ticker_profile.index)),
             "etf_holdings": int(len(cached_etf_holdings.index)),
             "etf_holding_onboarding_identity": int(len(cached_etf_holding_onboarding_identity.index)),
@@ -351,7 +350,6 @@ def _build_asset_status_rows(
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
     fundamentals_last = _frame_datetime_max(fundamentals_frame, "period_end")
-    summary_last = _frame_datetime_max(fundamentals_summary, "updated_at", utc=True)
 
     fundamentals_state = classify_freshness(
         last_observed_at=fundamentals_last,
@@ -361,19 +359,11 @@ def _build_asset_status_rows(
         partial=str(refresh_run.status) == FreshnessState.PARTIAL,
         failure_state=refresh_run.status,
     )
-    summary_state = classify_freshness(
-        last_observed_at=summary_last,
-        now=now,
-        fresh_within=timedelta(hours=30),
-        tolerance=timedelta(hours=24),
-        failure_state="failed_hard" if fundamentals_summary.empty else None,
-    )
-
     provider = _provider_from_frame(fundamentals_frame, fallback="unknown")
     now_iso = now.isoformat()
     return [
         {
-            "asset_key": "market_fundamentals_v2",
+            "asset_key": "source_cache.fundamentals",
             "asset_type": "fundamentals",
             "provider": provider,
             "last_success_at": _last_success_timestamp(fundamentals_last, fundamentals_state),
@@ -384,36 +374,6 @@ def _build_asset_status_rows(
                 rows_written=int(len(fundamentals_frame.index)),
                 run_id=refresh_run.run_id,
                 errors=refresh_run.error_messages,
-            ),
-            "updated_at": now_iso,
-        },
-        {
-            "asset_key": "ticker_fundamental_summary",
-            "asset_type": "derived",
-            "provider": "data_ops",
-            "last_success_at": _last_success_timestamp(summary_last, summary_state),
-            "last_available_date": _date_or_none(summary_last),
-            "freshness_status": str(summary_state),
-            "coverage_status": "fresh" if not fundamentals_summary.empty else "failed_hard",
-            "reason": _asset_reason(
-                rows_written=int(len(fundamentals_summary.index)),
-                run_id="ticker_fundamental_summary_build",
-                errors=["no_rows_computed"] if fundamentals_summary.empty else [],
-            ),
-            "updated_at": now_iso,
-        },
-        {
-            "asset_key": "mv_latest_fundamentals",
-            "asset_type": "derived",
-            "provider": "data_ops",
-            "last_success_at": now_iso if not fundamentals_summary.empty else None,
-            "last_available_date": _latest_period_date(fundamentals_frame),
-            "freshness_status": "fresh" if not fundamentals_summary.empty else "failed_hard",
-            "coverage_status": "fresh" if not fundamentals_summary.empty else "failed_hard",
-            "reason": _asset_reason(
-                rows_written=int(len(fundamentals_summary.index)),
-                run_id=f"{flow_run_id}_mv_latest_fundamentals",
-                errors=["no_rows_to_materialize"] if fundamentals_summary.empty else [],
             ),
             "updated_at": now_iso,
         },

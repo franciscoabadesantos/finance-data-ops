@@ -49,7 +49,6 @@ def main() -> None:
             "prices": "source_cache.market_price_daily" if source == "postgres" else "market_price_daily",
             "fundamentals": "source_cache.fundamentals" if source == "postgres" else "market_fundamentals_v2",
             "earnings": "source_cache.earnings" if source == "postgres" else "market_earnings_events",
-            "quotes": "public.market_quotes" if source == "postgres" else "market_quotes",
             "coverage": "public.symbol_data_coverage" if source == "postgres" else "symbol_data_coverage",
         },
         "summary": summarize_symbol_data_coverage_rebuild(rows=rows, existing_rows=existing_rows),
@@ -97,7 +96,6 @@ def _build_local_rows(*, cache_root: str | Path) -> list[dict[str, object]]:
         ["source_cache.market_price_daily", "market_price_daily"],
         cache_root=cache_root,
     )
-    quotes = _read_first_nonempty(["market_quotes"], cache_root=cache_root)
     fundamentals = _read_first_nonempty(
         ["source_cache.fundamentals", "market_fundamentals_v2"],
         cache_root=cache_root,
@@ -108,7 +106,7 @@ def _build_local_rows(*, cache_root: str | Path) -> list[dict[str, object]]:
     )
     return build_complete_symbol_data_coverage_rows(
         prices_frame=prices,
-        quotes_frame=quotes,
+        quotes_frame=pd.DataFrame(),
         fundamentals_frame=fundamentals,
         earnings_events_frame=earnings,
     )

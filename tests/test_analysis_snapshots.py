@@ -88,7 +88,7 @@ def test_build_ticker_snapshot_report_emits_warnings_on_missing_inputs() -> None
     warnings = payload["warnings"]
     assert len(warnings) >= 3
     assert "No symbol_data_coverage row found for ticker." in warnings
-    assert "No ticker_market_stats_snapshot row found for ticker." in warnings
+    assert "No feature_store.ticker_page_summary row found for ticker." in warnings
     assert (
         "No ticker_registry onboarding row found for requested scope; canonical data availability is assessed independently."
         in warnings

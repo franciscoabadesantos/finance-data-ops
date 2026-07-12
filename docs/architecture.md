@@ -39,26 +39,23 @@ Those remain in the `Finance` repository.
 
 ### Market
 
-- `market_price_daily`
-- `market_quotes`
-- `market_quotes_history`
-- `mv_latest_prices` refresh RPC
-- `ticker_market_stats_snapshot`
+- `source_cache.market_price_daily`
+- `feature_store.technical_features_daily`
+- `feature_store.scorecard_daily`
+- `feature_store.ticker_page_summary`
 
 ### Fundamentals
 
-- `market_fundamentals_v2` (canonical normalized history)
-- `mv_latest_fundamentals` (latest per `(ticker, metric)`)
-- `ticker_fundamental_summary` (frontend-serving denormalized snapshot)
+- `source_cache.fundamentals`
+- `feature_store.ticker_page_summary`
+- `feature_store.entity_attributes_static`
 
-Current market size is intentionally duplicated across market and fundamentals surfaces for
-compatibility with existing consumers. See `docs/market_cap_contract.md`.
+Feature-store owns product read models and schema lifecycle.
 
 ### Earnings
 
-- `market_earnings_events` (upcoming/scheduled events)
-- `market_earnings_history` (historical results)
-- `mv_next_earnings` (next event per ticker)
+- `source_cache.earnings`
+- `feature_store.ticker_page_summary`
 
 ### Macro
 

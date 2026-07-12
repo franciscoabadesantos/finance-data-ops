@@ -7,10 +7,9 @@ import pandas as pd
 
 NON_EARNINGS_INSTRUMENT_TYPES = {"etf", "index_proxy", "country_fund"}
 MARKET_REQUIRED_ASSETS = (
-    "market_price_daily",
-    "market_quotes",
-    "market_earnings_history",
-    "mv_next_earnings",
+    "source_cache.market_price_daily",
+    "source_cache.earnings",
+    "feature_store.ticker_page_summary",
 )
 
 
@@ -141,12 +140,9 @@ def build_ticker_signal_v1_report(
             "analysis_type": str(analysis_type).strip(),
             "generated_at": generated_at_value,
             "source_assets": [
-                "market_price_daily",
-                "market_quotes",
-                "ticker_market_stats_snapshot",
-                "market_earnings_events",
-                "market_earnings_history",
-                "mv_next_earnings",
+                "source_cache.market_price_daily",
+                "source_cache.earnings",
+                "feature_store.ticker_page_summary",
             ],
             "freshness": freshness_map,
             "version": 1,
@@ -163,7 +159,8 @@ def _prepare_market_frame(market_price_rows: list[dict[str, Any]] | None) -> pd.
     ticker_col = "ticker" if "ticker" in frame.columns else ("symbol" if "symbol" in frame.columns else None)
     if ticker_col and ticker_col != "ticker":
         frame["ticker"] = frame[ticker_col]
-    frame["date"] = pd.to_datetime(frame.get("date"), errors="coerce")
+    date_values = frame.get("date", frame.get("price_date"))
+    frame["date"] = pd.to_datetime(date_values, errors="coerce")
     frame["close"] = pd.to_numeric(frame.get("close"), errors="coerce")
     frame["volume"] = pd.to_numeric(frame.get("volume"), errors="coerce")
     frame = frame.dropna(subset=["date", "close"]).sort_values("date").drop_duplicates(subset=["date"], keep="last")
@@ -192,7 +189,7 @@ def _compute_market_features(
         "volume_vs_20d_avg": None,
     }
     if market_frame.empty:
-        warnings.append("no market_price_daily rows found for ticker")
+        warnings.append("no source_cache.market_price_daily rows found for ticker")
         return features, warnings
 
     close = market_frame["close"].astype(float).reset_index(drop=True)
