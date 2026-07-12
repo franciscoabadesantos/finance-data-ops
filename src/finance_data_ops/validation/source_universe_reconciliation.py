@@ -262,16 +262,16 @@ def _missing_reason(rows: Sequence[Mapping[str, Any]]) -> str:
         active_canonical = [row for row in rows if str(row.get("status") or "").strip().lower() == "active"]
         if not any(_is_selected_registry_row(row) for row in active_canonical):
             return "rejected_or_superseded_without_active_canonical"
+    if all(str(row.get("normalized_symbol") or "").strip().upper() in {"", "NONE", "NULL", "NAN"} for row in rows):
+        return "missing_normalized_symbol"
+    if any(not _coerce_bool(row.get("market_supported")) for row in rows):
+        return "market_supported_false"
     if any(
         str(row.get("status") or "").strip().lower() == "pending_validation"
         or str(row.get("promotion_status") or "").strip().lower() == "pending_validation"
         for row in rows
     ):
         return "pending_validation"
-    if all(str(row.get("normalized_symbol") or "").strip().upper() in {"", "NONE", "NULL", "NAN"} for row in rows):
-        return "missing_normalized_symbol"
-    if any(not _coerce_bool(row.get("market_supported")) for row in rows):
-        return "market_supported_false"
     return "not_promoted"
 
 

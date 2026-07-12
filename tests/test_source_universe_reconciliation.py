@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from scripts import reconcile_source_refresh_universe
 from finance_data_ops.validation.source_universe_reconciliation import build_source_universe_reconciliation_plan
 
 
@@ -73,12 +74,12 @@ def test_reconciliation_creates_row_for_tracked_materialized_symbol_without_regi
     assert row["promotion_status"] == "validated_market_only"
 
 
-def test_reconciliation_promotes_pending_null_normalized_international_rows() -> None:
+def test_reconciliation_promotes_pending_non_promoted_international_rows() -> None:
     registry = pd.DataFrame(
         [
-            _registry_row("SAP.DE", normalized_symbol=None, status="pending_validation", promotion_status="pending_validation", region="de"),
-            _registry_row("ASML.AS", normalized_symbol=None, status="pending_validation", promotion_status="pending_validation", region="nl"),
-            _registry_row("BHP.AX", normalized_symbol=None, status="pending_validation", promotion_status="pending_validation", region="au"),
+            _registry_row("SAP.DE", status="pending_validation", promotion_status="pending_validation", region="de"),
+            _registry_row("ASML.AS", status="pending_validation", promotion_status="pending_validation", region="nl"),
+            _registry_row("BHP.AX", status="pending_validation", promotion_status="pending_validation", region="au"),
         ]
     )
     plan = build_source_universe_reconciliation_plan(
@@ -96,6 +97,34 @@ def test_reconciliation_promotes_pending_null_normalized_international_rows() ->
     assert by_symbol["BHP.AX"]["region"] == "apac"
     assert {row["status"] for row in plan.upsert_rows} == {"active"}
     assert {row["market_supported"] for row in plan.upsert_rows} == {True}
+
+
+def test_reconciliation_groups_pending_missing_normalized_separately() -> None:
+    row = _registry_row(
+        "0700.HK",
+        status="pending_validation",
+        promotion_status="pending_validation",
+        market_supported=True,
+        region="hk",
+    )
+    row["normalized_symbol"] = None
+    registry = pd.DataFrame(
+        [
+            row,
+        ]
+    )
+    plan = build_source_universe_reconciliation_plan(
+        registry_frame=registry,
+        readiness_frame=_tracked(["0700.HK"]),
+        prices_frame=_prices(["0700.HK"]),
+        technicals_frame=_technicals(["0700.HK"]),
+        ticker_page_summary_frame=_summary(["0700.HK"]),
+    )
+
+    assert plan.issue_counts == {"missing_normalized_symbol": 1}
+    assert len(plan.upsert_rows) == 1
+    assert plan.upsert_rows[0]["normalized_symbol"] == "0700.HK"
+    assert plan.upsert_rows[0]["region"] == "apac"
 
 
 def test_reconciliation_keeps_rejected_shadow_and_promotes_canonical_pending_row() -> None:
@@ -160,3 +189,42 @@ def test_price_only_materialized_residue_is_reported_not_promoted() -> None:
             "reason": "price_only_materialized_not_tracked",
         }
     ]
+
+
+def test_postgres_loader_queries_are_symbol_level_not_full_table_fetches() -> None:
+    queries = [
+        reconcile_source_refresh_universe.READINESS_TRACKED_SYMBOLS_QUERY,
+        reconcile_source_refresh_universe.READINESS_TRACKED_SEARCH_READY_SYMBOLS_QUERY,
+        reconcile_source_refresh_universe.READINESS_STATUS_SYMBOLS_QUERY,
+        reconcile_source_refresh_universe.PRICE_SYMBOL_STATS_QUERY,
+        reconcile_source_refresh_universe.TECHNICAL_SYMBOLS_QUERY,
+        reconcile_source_refresh_universe.SUMMARY_SYMBOLS_QUERY,
+        reconcile_source_refresh_universe.FUNDAMENTAL_SYMBOLS_QUERY,
+        reconcile_source_refresh_universe.EARNINGS_SYMBOLS_QUERY,
+        reconcile_source_refresh_universe.SELECTED_REGISTRY_QUERY,
+        reconcile_source_refresh_universe.RELATED_REGISTRY_QUERY,
+        reconcile_source_refresh_universe.ENTITY_ATTRIBUTES_QUERY,
+    ]
+
+    for query in queries:
+        normalized = " ".join(query.lower().split())
+        assert "select *" not in normalized
+        if "source_cache.market_price_daily" in normalized:
+            assert "group by upper(symbol)" in normalized
+            assert "count(*)" in normalized
+        if "source_cache.fundamentals" in normalized or "source_cache.earnings" in normalized:
+            assert "select distinct upper(symbol)" in normalized
+        if "feature_store.technical_features_daily" in normalized:
+            assert "select distinct upper(symbol)" in normalized
+
+
+def test_readiness_query_uses_available_tracking_column() -> None:
+    assert reconcile_source_refresh_universe._readiness_symbols_query({"symbol", "is_tracked"}) == (
+        reconcile_source_refresh_universe.READINESS_TRACKED_SYMBOLS_QUERY
+    )
+    assert reconcile_source_refresh_universe._readiness_symbols_query({"symbol", "tracked_search_ready"}) == (
+        reconcile_source_refresh_universe.READINESS_TRACKED_SEARCH_READY_SYMBOLS_QUERY
+    )
+    assert reconcile_source_refresh_universe._readiness_symbols_query({"symbol", "readiness_status"}) == (
+        reconcile_source_refresh_universe.READINESS_STATUS_SYMBOLS_QUERY
+    )
