@@ -93,8 +93,8 @@ def test_smoke_refresh_publish_status_generation(tmp_path) -> None:
         raise_on_failed_hard=True,
     )
 
-    assert table_path("market_price_daily", cache_root=tmp_path).exists()
-    assert table_path("market_quotes", cache_root=tmp_path).exists()
+    assert table_path("source_cache.market_price_daily", cache_root=tmp_path).exists()
+    assert table_path("latest_quotes", cache_root=tmp_path).exists()
     assert summary["refresh"]["market_daily"]["status"] == "fresh"
     assert summary["refresh"]["quotes_latest"]["status"] == "fresh"
     assert summary["coverage"]["status"] == "fresh"

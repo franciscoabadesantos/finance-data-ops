@@ -18,7 +18,7 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from finance_data_ops.derived.fundamentals_summary import compute_ticker_fundamental_summary
+from finance_data_ops.derived.fundamentals_summary import compute_fundamentals_summary
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.ops.incidents import classify_failure
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
@@ -75,7 +75,7 @@ def run_dataops_fundamentals_daily(
         refresh_fn=theme_etf_refresh_fn,
     )
 
-    cached_fundamentals = read_parquet_table("market_fundamentals_v2", cache_root=settings.cache_root, required=False)
+    cached_fundamentals = read_parquet_table("source_cache.fundamentals", cache_root=settings.cache_root, required=False)
     cached_ticker_profile = read_parquet_table("ticker_profile", cache_root=settings.cache_root, required=False)
     cached_etf_holdings = read_parquet_table("etf_holdings", cache_root=settings.cache_root, required=False)
     cached_etf_holding_onboarding_identity = read_parquet_table(
@@ -89,11 +89,11 @@ def run_dataops_fundamentals_daily(
         cache_root=settings.cache_root,
         required=False,
     )
-    fundamentals_summary = compute_ticker_fundamental_summary(cached_fundamentals)
+    fundamentals_summary = compute_fundamentals_summary(cached_fundamentals)
 
-    cached_prices = read_parquet_table("market_price_daily", cache_root=settings.cache_root, required=False)
-    cached_quotes = read_parquet_table("market_quotes", cache_root=settings.cache_root, required=False)
-    cached_earnings_events = read_parquet_table("market_earnings_events", cache_root=settings.cache_root, required=False)
+    cached_prices = read_parquet_table("source_cache.market_price_daily", cache_root=settings.cache_root, required=False)
+    cached_quotes = read_parquet_table("latest_quotes", cache_root=settings.cache_root, required=False)
+    cached_earnings_events = read_parquet_table("earnings_events", cache_root=settings.cache_root, required=False)
 
     existing_coverage_rows = list(existing_symbol_coverage_rows or [])
     if publish_enabled and publisher is None and not existing_coverage_rows:

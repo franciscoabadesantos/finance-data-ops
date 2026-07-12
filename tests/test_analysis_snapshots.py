@@ -23,8 +23,8 @@ def test_build_ticker_snapshot_report_contract_shape() -> None:
             "coverage_status": "fresh",
         },
         asset_status_by_key={
-            "market_price_daily": {"freshness_status": "fresh"},
-            "market_quotes": {"freshness_status": "fresh"},
+            "source_cache.market_price_daily": {"freshness_status": "fresh"},
+            "latest_quotes": {"freshness_status": "fresh"},
             "fundamentals_daily": {"freshness_status": "fresh"},
             "earnings_daily": {"freshness_status": "fresh"},
         },

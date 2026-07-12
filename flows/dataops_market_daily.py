@@ -80,20 +80,20 @@ def run_dataops_market_daily(
         symbol_batch_size=batch_size,
     )
 
-    cached_prices = read_parquet_table("market_price_daily", cache_root=settings.cache_root, required=False)
-    cached_quotes = read_parquet_table("market_quotes", cache_root=settings.cache_root, required=False)
+    cached_prices = read_parquet_table("source_cache.market_price_daily", cache_root=settings.cache_root, required=False)
+    cached_quotes = read_parquet_table("latest_quotes", cache_root=settings.cache_root, required=False)
     cached_trading_calendar = read_parquet_table(
         "exchange_trading_calendar",
         cache_root=settings.cache_root,
         required=False,
     )
     cached_fundamentals = read_parquet_table(
-        "market_fundamentals_v2",
+        "source_cache.fundamentals",
         cache_root=settings.cache_root,
         required=False,
     )
     cached_earnings_events = read_parquet_table(
-        "market_earnings_events",
+        "earnings_events",
         cache_root=settings.cache_root,
         required=False,
     )
@@ -266,7 +266,7 @@ def run_dataops_market_daily(
         "publish_failures": publish_failures,
         "rows": {
             "source_cache.market_price_daily": int(len(cached_prices.index)),
-            "market_quotes": int(len(cached_quotes.index)),
+            "latest_quotes": int(len(cached_quotes.index)),
         },
     }
 

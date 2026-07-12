@@ -82,9 +82,9 @@ def test_smoke_earnings_refresh_publish_status(tmp_path) -> None:
         raise_on_failed_hard=True,
     )
 
-    assert table_path("market_earnings_events", cache_root=tmp_path).exists()
-    assert table_path("market_earnings_history", cache_root=tmp_path).exists()
-    assert table_path("mv_next_earnings", cache_root=tmp_path).exists()
+    assert table_path("earnings_events", cache_root=tmp_path).exists()
+    assert table_path("earnings_history", cache_root=tmp_path).exists()
+    assert table_path("next_earnings", cache_root=tmp_path).exists()
 
     assert summary["refresh"]["earnings_daily"]["status"] == "fresh"
     assert summary["coverage"]["status"] == "fresh"
@@ -100,9 +100,9 @@ def test_smoke_earnings_refresh_publish_status(tmp_path) -> None:
     asset_status_upsert = next(call for call in publisher.upserts if call["table"] == "data_asset_status")
     asset_keys = {row["asset_key"] for row in asset_status_upsert["rows"]}
     assert "source_cache.earnings" in asset_keys
-    assert "market_earnings_events" not in asset_keys
-    assert "market_earnings_history" not in asset_keys
-    assert "mv_next_earnings" not in asset_keys
+    assert "earnings_events" not in asset_keys
+    assert "earnings_history" not in asset_keys
+    assert "next_earnings" not in asset_keys
 
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_earnings_daily")
@@ -113,7 +113,7 @@ def test_smoke_earnings_refresh_publish_status(tmp_path) -> None:
 def test_build_asset_status_rows_handles_empty_frames() -> None:
     refresh_run = RefreshRunResult(
         run_id="run_earnings_daily_test",
-        asset_name="market_earnings_events",
+        asset_name="earnings_events",
         status="failed_hard",
         started_at="2026-04-11T00:00:00+00:00",
         ended_at="2026-04-11T00:01:00+00:00",

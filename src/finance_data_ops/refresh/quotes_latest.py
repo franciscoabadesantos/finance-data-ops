@@ -57,7 +57,7 @@ def refresh_latest_quotes(
         status = "failed_hard" if symbols_requested else "unknown"
         result = RefreshRunResult(
             run_id=run_id,
-            asset_name="market_quotes",
+            asset_name="latest_quotes",
             status=status,
             started_at=started_at.isoformat(),
             ended_at=datetime.now(UTC).isoformat(),
@@ -75,14 +75,14 @@ def refresh_latest_quotes(
     status = "fresh" if not failed_remaining else "partial"
 
     write_parquet_table(
-        "market_quotes",
+        "latest_quotes",
         quotes,
         cache_root=cache_root,
         mode="replace",
         dedupe_subset=["symbol"],
     )
     write_parquet_table(
-        "market_quotes_history",
+        "latest_quotes_history",
         quotes,
         cache_root=cache_root,
         mode="append",
@@ -91,7 +91,7 @@ def refresh_latest_quotes(
 
     result = RefreshRunResult(
         run_id=run_id,
-        asset_name="market_quotes",
+        asset_name="latest_quotes",
         status=status,
         started_at=started_at.isoformat(),
         ended_at=datetime.now(UTC).isoformat(),

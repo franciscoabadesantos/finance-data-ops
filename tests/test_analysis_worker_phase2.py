@@ -30,6 +30,8 @@ class FakeSupabaseQuery:
         self._filters: list[tuple[str, Any]] = []
         self._limit: int | None = None
         self._on_conflict: str | None = None
+        self._order_by: str | None = None
+        self._order_desc: bool = False
 
     def select(self, _columns: str) -> "FakeSupabaseQuery":
         self._operation = "select"
@@ -41,6 +43,11 @@ class FakeSupabaseQuery:
 
     def limit(self, count: int) -> "FakeSupabaseQuery":
         self._limit = int(count)
+        return self
+
+    def order(self, field: str, *, desc: bool = False) -> "FakeSupabaseQuery":
+        self._order_by = str(field)
+        self._order_desc = bool(desc)
         return self
 
     def insert(self, payload: dict[str, Any]) -> "FakeSupabaseQuery":
@@ -63,6 +70,12 @@ class FakeSupabaseQuery:
         rows = self.client.tables.setdefault(self.table_name, [])
         if self._operation == "select":
             selected = self._apply_filters(rows)
+            if self._order_by is not None:
+                selected = sorted(
+                    selected,
+                    key=lambda row: row.get(str(self._order_by)) or "",
+                    reverse=self._order_desc,
+                )
             if self._limit is not None:
                 selected = selected[: self._limit]
             return FakeSupabaseResponse([dict(item) for item in selected])
@@ -113,13 +126,12 @@ class FakeSupabaseClient:
         self.tables: dict[str, list[dict[str, Any]]] = {
             "analysis_jobs": [],
             "analysis_results": [],
-            "ticker_market_stats_snapshot": [],
+            "feature_store.ticker_page_summary": [],
             "symbol_data_coverage": [],
             "data_asset_status": [],
             "ticker_registry": [],
-            "mv_next_earnings": [],
-            "market_price_daily": [],
-            "market_earnings_history": [],
+            "source_cache.market_price_daily": [],
+            "source_cache.earnings": [],
         }
 
     def table(self, table_name: str) -> FakeSupabaseQuery:
@@ -156,9 +168,10 @@ def test_analysis_job_transitions_to_completed_and_persists_result() -> None:
             "worker_job_id": None,
         }
     )
-    supabase.tables["ticker_market_stats_snapshot"].append(
+    supabase.tables["feature_store.ticker_page_summary"].append(
         {
             "ticker": "AAPL",
+            "symbol": "AAPL",
             "as_of_date": "2026-04-17",
             "last_price": 189.11,
             "return_1d_pct": 0.45,
@@ -177,8 +190,8 @@ def test_analysis_job_transitions_to_completed_and_persists_result() -> None:
     )
     supabase.tables["data_asset_status"].extend(
         [
-            {"asset_key": "market_price_daily", "freshness_status": "fresh"},
-            {"asset_key": "market_quotes", "freshness_status": "fresh"},
+            {"asset_key": "source_cache.market_price_daily", "freshness_status": "fresh"},
+            {"asset_key": "latest_quotes", "freshness_status": "fresh"},
             {"asset_key": "fundamentals_daily", "freshness_status": "fresh"},
             {"asset_key": "earnings_daily", "freshness_status": "fresh"},
         ]
@@ -251,8 +264,8 @@ def test_analysis_job_coverage_report_transitions_to_completed_and_persists_resu
     )
     supabase.tables["data_asset_status"].extend(
         [
-            {"asset_key": "market_price_daily", "freshness_status": "fresh"},
-            {"asset_key": "market_quotes", "freshness_status": "fresh"},
+            {"asset_key": "source_cache.market_price_daily", "freshness_status": "fresh"},
+            {"asset_key": "latest_quotes", "freshness_status": "fresh"},
             {"asset_key": "fundamentals_daily", "freshness_status": "fresh"},
             {"asset_key": "earnings_daily", "freshness_status": "stale"},
         ]
@@ -319,9 +332,10 @@ def test_analysis_job_ticker_signal_v1_transitions_to_completed_and_persists_res
             "worker_job_id": None,
         }
     )
-    supabase.tables["ticker_market_stats_snapshot"].append(
+    supabase.tables["feature_store.ticker_page_summary"].append(
         {
             "ticker": "AAPL",
+            "symbol": "AAPL",
             "as_of_date": "2026-04-17",
             "last_price": 189.11,
             "return_1d_pct": 0.0045,
@@ -330,6 +344,8 @@ def test_analysis_job_ticker_signal_v1_transitions_to_completed_and_persists_res
             "return_1y_pct": 0.182,
             "vol_30d_pct": 0.22,
             "drawdown_1y_pct": -0.061,
+            "earnings_date": "2026-04-30",
+            "earnings_time": "post_market",
         }
     )
     supabase.tables["symbol_data_coverage"].append(
@@ -343,10 +359,9 @@ def test_analysis_job_ticker_signal_v1_transitions_to_completed_and_persists_res
     )
     supabase.tables["data_asset_status"].extend(
         [
-            {"asset_key": "market_price_daily", "freshness_status": "fresh"},
-            {"asset_key": "market_quotes", "freshness_status": "fresh"},
-            {"asset_key": "market_earnings_history", "freshness_status": "fresh"},
-            {"asset_key": "mv_next_earnings", "freshness_status": "fresh"},
+            {"asset_key": "source_cache.market_price_daily", "freshness_status": "fresh"},
+            {"asset_key": "latest_quotes", "freshness_status": "fresh"},
+            {"asset_key": "source_cache.earnings", "freshness_status": "fresh"},
         ]
     )
     supabase.tables["ticker_registry"].append(
@@ -361,13 +376,6 @@ def test_analysis_job_ticker_signal_v1_transitions_to_completed_and_persists_res
             "instrument_type": "equity",
         }
     )
-    supabase.tables["mv_next_earnings"].append(
-        {
-            "ticker": "AAPL",
-            "earnings_date": "2026-04-30",
-            "earnings_time": "post_market",
-        }
-    )
     for day, close, volume in [
         ("2025-07-01", 150.0, 1000),
         ("2025-09-15", 162.0, 1100),
@@ -378,8 +386,8 @@ def test_analysis_job_ticker_signal_v1_transitions_to_completed_and_persists_res
         ("2026-04-10", 188.0, 1600),
         ("2026-04-17", 189.11, 1700),
     ]:
-        supabase.tables["market_price_daily"].append(
-            {"ticker": "AAPL", "date": day, "close": close, "volume": volume}
+        supabase.tables["source_cache.market_price_daily"].append(
+            {"symbol": "AAPL", "price_date": day, "close": close, "volume": volume}
         )
     for earnings_date, surprise_eps in [
         ("2025-07-30", 0.08),
@@ -387,8 +395,8 @@ def test_analysis_job_ticker_signal_v1_transitions_to_completed_and_persists_res
         ("2026-01-29", 0.06),
         ("2026-04-28", 0.07),
     ]:
-        supabase.tables["market_earnings_history"].append(
-            {"ticker": "AAPL", "earnings_date": earnings_date, "surprise_eps": surprise_eps}
+        supabase.tables["source_cache.earnings"].append(
+            {"symbol": "AAPL", "earnings_date": earnings_date, "surprise_eps": surprise_eps}
         )
 
     request = ExecuteJobRequest(

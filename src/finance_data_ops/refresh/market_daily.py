@@ -78,7 +78,7 @@ def refresh_market_daily(
     rows_written = int(len(merged.index))
     if not merged.empty:
         write_parquet_table(
-            "market_price_daily",
+            "source_cache.market_price_daily",
             merged,
             cache_root=cache_root,
             mode="append",
@@ -94,7 +94,7 @@ def refresh_market_daily(
 
     result = RefreshRunResult(
         run_id=run_id,
-        asset_name="market_price_daily",
+        asset_name="source_cache.market_price_daily",
         status=status,
         started_at=started_at.isoformat(),
         ended_at=datetime.now(UTC).isoformat(),

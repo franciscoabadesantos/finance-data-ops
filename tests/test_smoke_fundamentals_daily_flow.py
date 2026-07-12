@@ -147,8 +147,8 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
         raise_on_failed_hard=True,
     )
 
-    assert table_path("market_fundamentals_v2", cache_root=tmp_path).exists()
-    assert not table_path("ticker_fundamental_summary", cache_root=tmp_path).exists()
+    assert table_path("source_cache.fundamentals", cache_root=tmp_path).exists()
+    assert not table_path("fundamentals_summary", cache_root=tmp_path).exists()
     assert table_path("ticker_profile", cache_root=tmp_path).exists()
     assert table_path("etf_holdings", cache_root=tmp_path).exists()
     assert table_path("etf_sector_weights", cache_root=tmp_path).exists()
@@ -193,8 +193,7 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     asset_status_upsert = next(call for call in publisher.upserts if call["table"] == "data_asset_status")
     asset_keys = {row["asset_key"] for row in asset_status_upsert["rows"]}
     assert "source_cache.fundamentals" in asset_keys
-    assert "ticker_fundamental_summary" not in asset_keys
-    assert "mv_latest_fundamentals" not in asset_keys
+    assert "fundamentals_summary" not in asset_keys
 
     runs_upsert = next(call for call in publisher.upserts if call["table"] == "data_source_runs")
     orchestration_row = next(row for row in runs_upsert["rows"] if row["job_name"] == "dataops_fundamentals_daily")

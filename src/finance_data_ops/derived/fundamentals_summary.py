@@ -22,7 +22,7 @@ SUMMARY_COLUMNS = [
 ]
 
 
-def compute_ticker_fundamental_summary(fundamentals_frame: pd.DataFrame) -> pd.DataFrame:
+def compute_fundamentals_summary(fundamentals_frame: pd.DataFrame) -> pd.DataFrame:
     if fundamentals_frame.empty:
         return pd.DataFrame(columns=SUMMARY_COLUMNS)
 

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pandas as pd
 
-from finance_data_ops.derived.fundamentals_summary import compute_ticker_fundamental_summary
+from finance_data_ops.derived.fundamentals_summary import compute_fundamentals_summary
 
 
-def test_compute_ticker_fundamental_summary_contains_expected_fields() -> None:
+def test_compute_fundamentals_summary_contains_expected_fields() -> None:
     fundamentals = pd.DataFrame(
         [
             {
@@ -59,7 +59,7 @@ def test_compute_ticker_fundamental_summary_contains_expected_fields() -> None:
         ]
     )
 
-    out = compute_ticker_fundamental_summary(fundamentals)
+    out = compute_fundamentals_summary(fundamentals)
 
     assert len(out.index) == 1
     row = out.iloc[0]

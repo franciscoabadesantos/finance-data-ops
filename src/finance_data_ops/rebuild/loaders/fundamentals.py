@@ -7,7 +7,7 @@ import logging
 
 import pandas as pd
 
-from finance_data_ops.derived.fundamentals_summary import compute_ticker_fundamental_summary
+from finance_data_ops.derived.fundamentals_summary import compute_fundamentals_summary
 from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
@@ -48,7 +48,7 @@ def load_fundamentals_chunk(
         filtered_rows,
         refresh_run.status,
     )
-    summary_frame = compute_ticker_fundamental_summary(filtered_frame)
+    summary_frame = compute_fundamentals_summary(filtered_frame)
     if filtered_frame.empty and summary_frame.empty:
         publish_result = {"status": "skipped", "reason": "window_filter_no_matches"}
     else:

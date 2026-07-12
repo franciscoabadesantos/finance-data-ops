@@ -266,14 +266,14 @@ def validate_market_support(*, candidate_symbol: str, provider: MarketDataProvid
     except Exception as exc:
         return DomainCheckResult(
             supported=False,
-            reason=f"market_quotes_error:{exc}",
+            reason=f"latest_quotes_error:{exc}",
             rows=int(len(prices.index)),
             details={"stage": "latest_quotes", "daily_rows": int(len(prices.index))},
         )
     if quotes.empty:
         return DomainCheckResult(
             supported=False,
-            reason="market_quotes_empty",
+            reason="latest_quotes_empty",
             rows=int(len(prices.index)),
             details={"stage": "latest_quotes", "daily_rows": int(len(prices.index))},
         )
@@ -282,7 +282,7 @@ def validate_market_support(*, candidate_symbol: str, provider: MarketDataProvid
     if quote_row is None:
         return DomainCheckResult(
             supported=False,
-            reason="market_quotes_payload_empty",
+            reason="latest_quotes_payload_empty",
             rows=int(len(prices.index)),
             details={"stage": "publish_precheck"},
         )
@@ -290,7 +290,7 @@ def validate_market_support(*, candidate_symbol: str, provider: MarketDataProvid
     if missing_required:
         return DomainCheckResult(
             supported=False,
-            reason=f"market_quotes_publish_unsafe_missing_{','.join(missing_required)}",
+            reason=f"latest_quotes_publish_unsafe_missing_{','.join(missing_required)}",
             rows=int(len(prices.index)),
             details={
                 "stage": "publish_precheck",

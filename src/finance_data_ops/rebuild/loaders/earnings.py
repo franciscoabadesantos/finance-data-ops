@@ -126,11 +126,11 @@ def load_earnings_chunk(
         "resolved_history_limit": resolved_history_limit,
         "provider_rows": {
             "earnings_events": provider_event_rows,
-            "market_earnings_history": provider_history_rows,
+            "earnings_history": provider_history_rows,
         },
         "filtered_rows": {
             "earnings_events": filtered_event_rows,
-            "market_earnings_history": filtered_history_rows,
+            "earnings_history": filtered_history_rows,
         },
         "symbol_breakdown": symbol_breakdown,
         "window_filter_field": "earnings_date",
@@ -197,11 +197,11 @@ def _build_symbol_breakdown(
                 "ticker": normalized,
                 "provider_rows": {
                     "earnings_events": provider_events_rows,
-                    "market_earnings_history": provider_history_rows,
+                    "earnings_history": provider_history_rows,
                 },
                 "filtered_rows": {
                     "earnings_events": filtered_events_rows,
-                    "market_earnings_history": filtered_history_rows,
+                    "earnings_history": filtered_history_rows,
                 },
                 "rows_written": filtered_total,
                 "zero_reason": zero_reason,

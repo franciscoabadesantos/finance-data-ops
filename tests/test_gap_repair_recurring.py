@@ -27,13 +27,6 @@ def _write_market_cache(cache_root, dates: list[str]) -> None:
                 "ingested_at": datetime(2026, 4, 18, 6, 0, tzinfo=UTC),
             }
         )
-    write_parquet_table(
-        "market_price_daily",
-        pd.DataFrame(rows),
-        cache_root=cache_root,
-        mode="replace",
-        dedupe_subset=["symbol", "date"],
-    )
     source_cache_rows = pd.DataFrame(rows).rename(columns={"date": "price_date"})
     write_parquet_table(
         "source_cache.market_price_daily",
@@ -49,8 +42,8 @@ def test_gap_aware_window_detects_gap_repair_and_earliest_missing(tmp_path) -> N
 
     plan = resolve_gap_aware_window(
         domain="market",
-        table_name="market_price_daily",
-        date_column="date",
+        table_name="source_cache.market_price_daily",
+        date_column="price_date",
         cadence="business",
         lookback_days=3,
         explicit_start=None,
@@ -73,8 +66,8 @@ def test_gap_aware_window_detects_catch_up_for_trailing_gap(tmp_path) -> None:
 
     plan = resolve_gap_aware_window(
         domain="market",
-        table_name="market_price_daily",
-        date_column="date",
+        table_name="source_cache.market_price_daily",
+        date_column="price_date",
         cadence="business",
         lookback_days=1,
         explicit_start=None,

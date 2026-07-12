@@ -2,7 +2,7 @@
 
 Data Ops writes five product-data domains: market, fundamentals, earnings, macro, and economic release calendar. Fresh projects should bootstrap from the definitive runtime baseline:
 
-- [`sql/000_definitive_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_definitive_runtime_schema.sql)
+- [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
 
 The definitive baseline is a single-file bootstrap for empty projects: current tables, materialized
 views, refresh functions, indexes, RLS enablement, and minimal runtime seed data.

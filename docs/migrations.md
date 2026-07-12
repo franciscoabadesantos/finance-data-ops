@@ -8,7 +8,7 @@ Prepare a fresh Supabase project for current Data Ops-owned runtime surfaces.
 
 Preferred path for a fresh empty project:
 
-- [`sql/000_definitive_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_definitive_runtime_schema.sql)
+- [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
 
 This is the single-file bootstrap for empty projects: current tables, materialized views, refresh
 functions, indexes, RLS enablement, and minimal runtime seed data.
@@ -43,7 +43,7 @@ functions, indexes, RLS enablement, and minimal runtime seed data.
 ## Apply steps
 
 1. Open Supabase SQL editor for a new project.
-2. Execute `sql/000_definitive_runtime_schema.sql`.
+2. Execute `sql/000_runtime_schema.sql`.
 3. Run dry flows:
    - `python scripts/run_market_daily.py --symbols SPY --no-publish`
    - `python scripts/run_fundamentals_daily.py --symbols SPY --no-publish`

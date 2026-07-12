@@ -69,7 +69,7 @@ def main() -> None:
     plan["tables"] = {
         "registry": "public.ticker_registry" if source == "postgres" else "ticker_registry",
         "readiness": args.readiness_table if source == "postgres" else args.local_readiness_table,
-        "prices": "source_cache.market_price_daily" if source == "postgres" else "market_price_daily",
+        "prices": "source_cache.market_price_daily",
         "technicals": args.technical_table if source == "postgres" else args.local_technical_table,
         "scorecard": args.scorecard_table if source == "postgres" else args.local_scorecard_table,
         "coverage": "public.symbol_data_coverage" if source == "postgres" else "symbol_data_coverage",
@@ -171,7 +171,7 @@ def _read_local_inputs(
     return (
         read_parquet_table("ticker_registry", cache_root=cache_root, required=False),
         _read_local_optional_table(readiness_table, cache_root=cache_root, warnings=warnings),
-        read_parquet_table("market_price_daily", cache_root=cache_root, required=False),
+        read_parquet_table("source_cache.market_price_daily", cache_root=cache_root, required=False),
         _read_local_optional_table(technical_table, cache_root=cache_root, warnings=warnings),
         _read_local_optional_table(scorecard_table, cache_root=cache_root, warnings=warnings),
         read_parquet_table("symbol_data_coverage", cache_root=cache_root, required=False),

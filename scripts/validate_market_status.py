@@ -32,8 +32,8 @@ def main() -> None:
     args = build_parser().parse_args()
     settings = load_settings(cache_root=args.cache_root)
 
-    prices = read_parquet_table("market_price_daily", cache_root=settings.cache_root, required=False)
-    quotes = read_parquet_table("market_quotes", cache_root=settings.cache_root, required=False)
+    prices = read_parquet_table("source_cache.market_price_daily", cache_root=settings.cache_root, required=False)
+    quotes = read_parquet_table("latest_quotes", cache_root=settings.cache_root, required=False)
 
     now = datetime.now(UTC)
     statuses = {

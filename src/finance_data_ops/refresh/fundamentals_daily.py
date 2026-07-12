@@ -94,7 +94,7 @@ def refresh_fundamentals_daily(
     rows_written = int(len(merged.index))
     if not merged.empty:
         write_parquet_table(
-            "market_fundamentals_v2",
+            "source_cache.fundamentals",
             merged,
             cache_root=cache_root,
             mode="append",
@@ -142,7 +142,7 @@ def refresh_fundamentals_daily(
 
     refresh_result = RefreshRunResult(
         run_id=run_id,
-        asset_name="market_fundamentals_v2",
+        asset_name="source_cache.fundamentals",
         status=status,
         started_at=started_at.isoformat(),
         ended_at=datetime.now(UTC).isoformat(),

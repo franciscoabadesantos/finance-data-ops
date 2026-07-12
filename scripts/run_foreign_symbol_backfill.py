@@ -33,7 +33,7 @@ def main() -> None:
 
     holdings = read_parquet_table("etf_holdings", cache_root=settings.cache_root, required=True)
     entities = read_parquet_table("entity_attributes_static", cache_root=settings.cache_root, required=False)
-    prices = read_parquet_table("market_price_daily", cache_root=settings.cache_root, required=False)
+    prices = read_parquet_table("source_cache.market_price_daily", cache_root=settings.cache_root, required=False)
 
     normalized_holdings, holding_summary = _normalize_holdings_table(holdings)
     name_by_entity = _holding_name_lookup(normalized_holdings)

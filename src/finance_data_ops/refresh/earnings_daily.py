@@ -85,7 +85,7 @@ def refresh_earnings_daily(
 
     if not events.empty:
         write_parquet_table(
-            "market_earnings_events",
+            "earnings_events",
             events,
             cache_root=cache_root,
             mode="replace",
@@ -93,7 +93,7 @@ def refresh_earnings_daily(
         )
     if not history.empty:
         write_parquet_table(
-            "market_earnings_history",
+            "earnings_history",
             history,
             cache_root=cache_root,
             mode="append",

@@ -66,28 +66,28 @@ def run_dataops_earnings_daily(
     )
 
     cached_earnings_events = read_parquet_table(
-        "market_earnings_events",
+        "earnings_events",
         cache_root=settings.cache_root,
         required=False,
     )
     cached_earnings_history = read_parquet_table(
-        "market_earnings_history",
+        "earnings_history",
         cache_root=settings.cache_root,
         required=False,
     )
 
     next_earnings = compute_next_earnings(cached_earnings_events)
     write_parquet_table(
-        "mv_next_earnings",
+        "next_earnings",
         next_earnings,
         cache_root=settings.cache_root,
         mode="replace",
         dedupe_subset=["ticker"],
     )
 
-    cached_prices = read_parquet_table("market_price_daily", cache_root=settings.cache_root, required=False)
-    cached_quotes = read_parquet_table("market_quotes", cache_root=settings.cache_root, required=False)
-    cached_fundamentals = read_parquet_table("market_fundamentals_v2", cache_root=settings.cache_root, required=False)
+    cached_prices = read_parquet_table("source_cache.market_price_daily", cache_root=settings.cache_root, required=False)
+    cached_quotes = read_parquet_table("latest_quotes", cache_root=settings.cache_root, required=False)
+    cached_fundamentals = read_parquet_table("source_cache.fundamentals", cache_root=settings.cache_root, required=False)
     existing_coverage_rows = list(existing_symbol_coverage_rows or [])
     if publish_enabled and publisher is None and not existing_coverage_rows:
         existing_coverage_rows = _load_existing_symbol_coverage_rows(

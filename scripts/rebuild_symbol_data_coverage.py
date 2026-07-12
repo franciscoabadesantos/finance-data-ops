@@ -46,9 +46,9 @@ def main() -> None:
         "source": source,
         "dry_run": not bool(args.apply),
         "tables": {
-            "prices": "source_cache.market_price_daily" if source == "postgres" else "market_price_daily",
-            "fundamentals": "source_cache.fundamentals" if source == "postgres" else "market_fundamentals_v2",
-            "earnings": "source_cache.earnings" if source == "postgres" else "market_earnings_events",
+            "prices": "source_cache.market_price_daily",
+            "fundamentals": "source_cache.fundamentals",
+            "earnings": "source_cache.earnings" if source == "postgres" else "earnings_events",
             "coverage": "public.symbol_data_coverage" if source == "postgres" else "symbol_data_coverage",
         },
         "summary": summarize_symbol_data_coverage_rebuild(rows=rows, existing_rows=existing_rows),
@@ -92,16 +92,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _build_local_rows(*, cache_root: str | Path) -> list[dict[str, object]]:
-    prices = _read_first_nonempty(
-        ["source_cache.market_price_daily", "market_price_daily"],
-        cache_root=cache_root,
-    )
-    fundamentals = _read_first_nonempty(
-        ["source_cache.fundamentals", "market_fundamentals_v2"],
-        cache_root=cache_root,
-    )
+    prices = read_parquet_table("source_cache.market_price_daily", cache_root=cache_root, required=False)
+    fundamentals = read_parquet_table("source_cache.fundamentals", cache_root=cache_root, required=False)
     earnings = _read_first_nonempty(
-        ["source_cache.earnings", "market_earnings_events", "market_earnings_history"],
+        ["source_cache.earnings", "earnings_events", "earnings_history"],
         cache_root=cache_root,
     )
     return build_complete_symbol_data_coverage_rows(
