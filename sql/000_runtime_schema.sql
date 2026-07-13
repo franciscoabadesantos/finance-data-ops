@@ -96,6 +96,25 @@ create table if not exists source_cache.calendars (
   primary key (exchange_mic, session_date)
 );
 
+create table if not exists source_cache.openfigi_mapping_raw (
+  request_hash text primary key,
+  request_payload jsonb not null,
+  response_payload jsonb,
+  status text not null,
+  error_message text,
+  requested_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (status in ('success', 'not_found', 'ambiguous', 'error'))
+);
+
+create table if not exists source_cache.gleif_entity_raw (
+  lei text primary key,
+  response_payload jsonb not null,
+  status text not null,
+  fetched_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists feature_store.entity_attributes_static (
   entity_id text primary key,
   name text,
@@ -108,6 +127,82 @@ create table if not exists feature_store.entity_attributes_static (
   sector text,
   updated_at timestamptz not null default now()
 );
+
+create table if not exists feature_store.entity_master (
+  entity_id text primary key,
+  legal_name text,
+  display_name text,
+  home_country text,
+  lei text,
+  entity_source text not null,
+  resolution_confidence double precision not null default 0,
+  resolution_status text not null,
+  primary_listing_symbol text,
+  primary_listing_reason text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb,
+  check (resolution_status in ('resolved', 'ambiguous', 'unresolved', 'manual_review'))
+);
+
+create index if not exists idx_entity_master_home_country
+  on feature_store.entity_master (home_country);
+
+create table if not exists feature_store.entity_listing (
+  symbol text primary key,
+  entity_id text not null references feature_store.entity_master(entity_id),
+  provider_symbol text,
+  exchange text,
+  exchange_mic text,
+  country text,
+  currency text,
+  figi text,
+  composite_figi text,
+  share_class_figi text,
+  isin text,
+  lei text,
+  listing_type text,
+  is_primary_listing boolean not null default false,
+  primary_listing_reason text,
+  resolution_source text not null,
+  resolution_confidence double precision not null default 0,
+  resolution_status text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb,
+  check (resolution_status in ('resolved', 'ambiguous', 'unresolved', 'manual_review'))
+);
+
+create index if not exists idx_entity_listing_entity_id
+  on feature_store.entity_listing (entity_id);
+
+create index if not exists idx_entity_listing_isin
+  on feature_store.entity_listing (isin);
+
+create index if not exists idx_entity_listing_figi
+  on feature_store.entity_listing (figi);
+
+create index if not exists idx_entity_listing_composite_figi
+  on feature_store.entity_listing (composite_figi);
+
+create index if not exists idx_entity_listing_share_class_figi
+  on feature_store.entity_listing (share_class_figi);
+
+create index if not exists idx_entity_listing_exchange_mic
+  on feature_store.entity_listing (exchange_mic);
+
+create table if not exists feature_store.entity_identity_audit (
+  audit_id bigserial primary key,
+  symbol text,
+  entity_id text,
+  issue_type text not null,
+  issue_severity text not null default 'warning',
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_entity_identity_audit_symbol_issue_type
+  on feature_store.entity_identity_audit (symbol, issue_type);
 
 create table if not exists feature_store.technical_features_daily (
   symbol text not null,
@@ -152,11 +247,40 @@ create table if not exists feature_store.ticker_readiness (
 );
 
 do $$
+declare
+  read_role text;
 begin
   if exists (select 1 from pg_roles where rolname = 'finance_data_ops_worker') then
+    grant usage on schema source_cache to finance_data_ops_worker;
     grant usage on schema feature_store to finance_data_ops_worker;
+    grant select, insert, update, delete
+      on source_cache.openfigi_mapping_raw,
+         source_cache.gleif_entity_raw
+      to finance_data_ops_worker;
+    grant select, insert, update, delete
+      on feature_store.entity_master,
+         feature_store.entity_listing,
+         feature_store.entity_identity_audit
+      to finance_data_ops_worker;
+    grant usage, select on sequence feature_store.entity_identity_audit_audit_id_seq
+      to finance_data_ops_worker;
     grant select on feature_store.ticker_readiness to finance_data_ops_worker;
   end if;
+
+  foreach read_role in array array['finance_backend_read', 'finance_backend', 'backend_read'] loop
+    if exists (select 1 from pg_roles where rolname = read_role) then
+      execute format('grant usage on schema source_cache to %I', read_role);
+      execute format('grant usage on schema feature_store to %I', read_role);
+      execute format(
+        'grant select on source_cache.openfigi_mapping_raw, source_cache.gleif_entity_raw to %I',
+        read_role
+      );
+      execute format(
+        'grant select on feature_store.entity_master, feature_store.entity_listing, feature_store.entity_identity_audit to %I',
+        read_role
+      );
+    end if;
+  end loop;
 end $$;
 
 create table if not exists public.data_source_runs (

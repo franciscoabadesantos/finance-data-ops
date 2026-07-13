@@ -5,9 +5,11 @@ from finance_data_ops.identity.provider_symbols import (
     build_holding_onboarding_identities,
     resolve_holding_onboarding_identity,
 )
+from finance_data_ops.identity.resolver import build_entity_identity
 
 __all__ = [
     "ONBOARDING_IDENTITY_COLUMNS",
+    "build_entity_identity",
     "build_holding_onboarding_identities",
     "resolve_holding_onboarding_identity",
 ]

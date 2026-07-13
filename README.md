@@ -29,6 +29,12 @@ Owned Supabase surfaces:
   - `feature_store.ticker_page_summary`
   - `feature_store.entity_attributes_static`
   - `feature_store.ticker_readiness`
+- Entity identity V0 side-by-side tables:
+  - `source_cache.openfigi_mapping_raw`
+  - `source_cache.gleif_entity_raw`
+  - `feature_store.entity_master`
+  - `feature_store.entity_listing`
+  - `feature_store.entity_identity_audit`
 - Operational:
   - `data_source_runs`
   - `data_asset_status`
@@ -108,6 +114,15 @@ Status check:
 ```bash
 python scripts/validate_market_status.py
 ```
+
+Entity identity V0 dry-run:
+
+```bash
+python scripts/build_entity_identity.py --source fixtures
+python scripts/build_entity_identity.py --source postgres --symbols SAP,SAP.DE --offline
+```
+
+Entity Layer V0 is side-by-side only. OpenFIGI is the main listing/security identity source; GLEIF/LEI is optional enrichment and is not required for V0. `feature_store.entity_attributes_static` remains a metadata read model and must not be treated as entity master. No product/read path uses `feature_store.entity_master` or `feature_store.entity_listing` yet, no command autonomously onboards symbols, and no price series are merged across listings. Future consumers should migrate only after the entity layer has been validated.
 
 ## Prefect orchestration
 

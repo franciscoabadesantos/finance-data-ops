@@ -82,10 +82,17 @@ Release timing semantics:
 - `symbol_data_coverage`
 - `ticker_registry`
 - `etf_holding_onboarding_identity`
+- `source_cache.openfigi_mapping_raw`
+- `source_cache.gleif_entity_raw`
+- `feature_store.entity_master`
+- `feature_store.entity_listing`
+- `feature_store.entity_identity_audit`
 
 Data Ops owns provider symbology for frontier/onboarding candidates. Backend services consume
 `etf_holding_onboarding_identity` as a read model and pass through `onboard_symbol`; suffix and listing
 venue rules live in `finance_data_ops.identity`.
+
+Entity identity V0 is an auditable side-by-side layer. A company/entity is not a ticker: one entity can have many listings, and listings retain their own symbol, venue, MIC, currency, country, provider identity, calendar, and price series. OpenFIGI is the primary listing/security identity source; GLEIF/LEI enrichment is optional. No product read path uses the entity layer yet, and no autonomous onboarding or cross-listing price blending is allowed.
 
 ## Runtime source-of-truth contract
 

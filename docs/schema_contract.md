@@ -121,6 +121,16 @@ Compatibility note:
 - `ticker_registry` (ticker lifecycle registry; Data Ops/Prefect owns writes)
 - `etf_holding_onboarding_identity` (provider onboarding identity read model)
 
+## Entity identity V0 surfaces
+
+- `source_cache.openfigi_mapping_raw` (raw/cache table for OpenFIGI mapping requests and responses)
+- `source_cache.gleif_entity_raw` (optional future LEI enrichment cache)
+- `feature_store.entity_master` (canonical company/legal entity read model)
+- `feature_store.entity_listing` (one row per provider/listing symbol mapped to an entity)
+- `feature_store.entity_identity_audit` (append-only audit rows for unresolved, ambiguous, or conflicting identity cases)
+
+Entity identity V0 is side-by-side only. OpenFIGI is the main listing/security identity source. GLEIF is enrichment only and LEI is not required for V0. `feature_store.entity_attributes_static` is still a metadata read model, not entity master. Existing product/read paths, frontend search, `ticker_readiness`, prices, technicals, scorecards, and relationship edges do not consume these tables yet. Listings remain separate price series even when they map to the same entity, and universe growth remains human-supervised.
+
 Macro/release asset keys in `data_asset_status` are required:
 
 - `macro_observations`

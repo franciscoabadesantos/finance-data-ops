@@ -16,6 +16,9 @@ class Publisher(Protocol):
     def upsert(self, table: str, rows: list[dict[str, Any]], *, on_conflict: str | None = None) -> dict[str, Any]:
         ...
 
+    def insert(self, table: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        ...
+
     def rpc(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
         ...
 
@@ -112,6 +115,19 @@ class PostgresPublisher:
                 cur.executemany(query, values)
         return {"table": table, "status": "ok", "rows": len(normalized_rows), "status_code": 200}
 
+    def insert(self, table: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        if not rows:
+            return {"table": table, "status": "skipped", "rows": 0}
+        normalized_rows = to_json_safe(rows)
+        schema_name, table_name = _parse_table_name(table)
+        columns = _ordered_columns(normalized_rows)
+        values = [[_adapt_postgres_value(row.get(column)) for column in columns] for row in normalized_rows]
+        query = _build_insert_sql(schema_name=schema_name, table_name=table_name, columns=columns)
+        with _connect(self.database_dsn, self.application_name) as conn:
+            with conn.cursor() as cur:
+                cur.executemany(query, values)
+        return {"table": table, "status": "ok", "rows": len(normalized_rows), "status_code": 200}
+
     def rpc(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
         function_name = _parse_function_name(name)
         with _connect(self.database_dsn, self.application_name) as conn:
@@ -164,6 +180,12 @@ def _build_upsert_sql(
         f"insert into {_quote_ident(schema_name)}.{_quote_ident(table_name)} ({column_sql}) "
         f"values ({placeholders}) on conflict ({conflict_sql}) {conflict_action}"
     )
+
+
+def _build_insert_sql(*, schema_name: str, table_name: str, columns: list[str]) -> str:
+    column_sql = ", ".join(_quote_ident(column) for column in columns)
+    placeholders = ", ".join(["%s"] * len(columns))
+    return f"insert into {_quote_ident(schema_name)}.{_quote_ident(table_name)} ({column_sql}) values ({placeholders})"
 
 
 def _build_update_assignment(*, schema_name: str, table_name: str, column: str) -> str:
@@ -235,6 +257,7 @@ class RecordingPublisher:
     """In-memory publisher used by tests and local dry-runs."""
 
     upserts: list[dict[str, Any]] = field(default_factory=list)
+    inserts: list[dict[str, Any]] = field(default_factory=list)
     rpcs: list[dict[str, Any]] = field(default_factory=list)
 
     def upsert(self, table: str, rows: list[dict[str, Any]], *, on_conflict: str | None = None) -> dict[str, Any]:
@@ -244,6 +267,16 @@ class RecordingPublisher:
                 "table": table,
                 "rows": list(normalized_rows),
                 "on_conflict": on_conflict,
+            }
+        )
+        return {"table": table, "status": "ok", "rows": len(normalized_rows)}
+
+    def insert(self, table: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        normalized_rows = to_json_safe(rows)
+        self.inserts.append(
+            {
+                "table": table,
+                "rows": list(normalized_rows),
             }
         )
         return {"table": table, "status": "ok", "rows": len(normalized_rows)}
