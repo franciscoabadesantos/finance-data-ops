@@ -54,6 +54,9 @@ Provider symbol ownership:
 - Data Ops owns provider/onboarding symbol resolution for ETF/frontier identities.
 - Backend/frontier services should consume `public.etf_holding_onboarding_identity` and submit `onboard_symbol`
   only when `is_onboardable=true`.
+- `public.etf_holding_onboarding_identity` is an operational onboarding identity read model only. Relationship-map
+  holdings/theme consumers must use `source_cache.etf_holdings`, `source_cache.etf_themes`, and
+  `source_cache.etf_theme_readiness`.
 - Raw holdings symbols that cannot be resolved confidently remain `is_onboardable=false` with a
   `not_onboardable_reason`; backend must not add country/exchange suffixes.
 
@@ -72,6 +75,50 @@ corrected to non-US listing country plus US-listed rows that gained a non-US `ho
 newly discovered foreign constituents. When `--publish` is used, it also deletes old bare numeric or unpadded `.HK` entity
 IDs only when their normalized replacement already exists in `feature_store.entity_attributes_static`, and removes dead
 numeric-plus-letter placeholder entity IDs.
+
+ETF canonical schema reconciliation:
+
+```bash
+python scripts/reconcile_etf_canonical_schema.py
+python scripts/reconcile_etf_canonical_schema.py --apply
+```
+
+The command is dry-run by default. It is an admin-only one-shot for existing live databases where
+`source_cache.etf_holdings` or `source_cache.etf_themes` still exist as old views. With `--apply`, it replaces those
+views with writable `source_cache` tables, copies rows from the old `public.etf_holdings` and `public.etf_themes`
+tables, rebuilds `source_cache.etf_theme_readiness`, and applies conditional grants. It does not drop the old public
+tables unless `--drop-old-public` is passed.
+
+Live verification after apply:
+
+```bash
+psql "$DATA_OPS_DATABASE_URL" -c "
+select n.nspname as schema_name, c.relname, c.relkind
+from pg_class c
+join pg_namespace n on n.oid = c.relnamespace
+where (n.nspname, c.relname) in (
+  ('source_cache', 'etf_holdings'),
+  ('source_cache', 'etf_themes'),
+  ('source_cache', 'etf_theme_readiness'),
+  ('public', 'etf_holdings'),
+  ('public', 'etf_themes')
+)
+order by 1, 2;"
+
+psql "$DATA_OPS_DATABASE_URL" -c "
+select 'source_cache.etf_holdings' as object, count(*) from source_cache.etf_holdings
+union all
+select 'source_cache.etf_themes', count(*) from source_cache.etf_themes
+union all
+select 'source_cache.etf_theme_readiness', count(*) from source_cache.etf_theme_readiness;"
+
+psql "$DATA_OPS_DATABASE_URL" -c "
+set role finance_data_ops_worker;
+select count(*) from source_cache.etf_holdings;
+select count(*) from source_cache.etf_themes;
+select count(*) from source_cache.etf_theme_readiness;
+reset role;"
+```
 
 Wave A onboarding (ITB homebuilders + US-listed GDX gold miners):
 

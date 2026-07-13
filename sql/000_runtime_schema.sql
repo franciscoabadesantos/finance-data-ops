@@ -251,6 +251,9 @@ create table if not exists source_cache.etf_holdings (
 create index if not exists idx_etf_holdings_ticker_weight
   on source_cache.etf_holdings (etf_ticker, as_of desc, weight desc);
 
+-- Operational identity read model for provider/onboarding workflows. Relationship-map
+-- holdings and theme catalog consumers must use source_cache.etf_holdings,
+-- source_cache.etf_themes, and source_cache.etf_theme_readiness.
 create table if not exists public.etf_holding_onboarding_identity (
   etf_ticker text not null,
   theme text,
@@ -329,6 +332,30 @@ create table if not exists source_cache.etf_theme_readiness (
 
 create index if not exists idx_etf_theme_readiness_eligibility
   on source_cache.etf_theme_readiness (relationship_map_eligible, active, computed_at desc);
+
+do $$
+declare
+  read_role text;
+begin
+  if exists (select 1 from pg_roles where rolname = 'finance_data_ops_worker') then
+    grant usage on schema source_cache to finance_data_ops_worker;
+    grant select, insert, update, delete
+      on source_cache.etf_holdings,
+         source_cache.etf_themes,
+         source_cache.etf_theme_readiness
+      to finance_data_ops_worker;
+  end if;
+
+  foreach read_role in array array['finance_backend_read', 'finance_backend', 'backend_read'] loop
+    if exists (select 1 from pg_roles where rolname = read_role) then
+      execute format('grant usage on schema source_cache to %I', read_role);
+      execute format(
+        'grant select on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness to %I',
+        read_role
+      );
+    end if;
+  end loop;
+end $$;
 
 create table if not exists public.etf_sector_weights (
   etf_ticker text not null,

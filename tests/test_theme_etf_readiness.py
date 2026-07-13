@@ -112,6 +112,9 @@ def test_known_low_coverage_wave2_etfs_are_pending_coverage_not_no_edges() -> No
 
 def test_active_data_ops_paths_do_not_write_bare_public_etf_theme_tables() -> None:
     repo_root = Path(__file__).resolve().parents[1]
+    admin_only_exclusions = {
+        Path("scripts/reconcile_etf_canonical_schema.py"),
+    }
     checked_files = [
         *repo_root.joinpath("src").rglob("*.py"),
         *repo_root.joinpath("flows").rglob("*.py"),
@@ -122,9 +125,12 @@ def test_active_data_ops_paths_do_not_write_bare_public_etf_theme_tables() -> No
 
     offenders: list[str] = []
     for path in checked_files:
+        relative_path = path.relative_to(repo_root)
+        if relative_path in admin_only_exclusions:
+            continue
         text = path.read_text()
         if bare_upsert.search(text) or public_sql.search(text):
-            offenders.append(str(path.relative_to(repo_root)))
+            offenders.append(str(relative_path))
 
     assert offenders == []
 
