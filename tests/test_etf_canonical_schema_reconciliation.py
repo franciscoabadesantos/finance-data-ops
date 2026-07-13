@@ -8,7 +8,11 @@ from scripts import reconcile_etf_canonical_schema as reconcile
 def test_dry_run_plan_detects_old_views_and_public_tables() -> None:
     states = _old_live_states()
 
-    plan = reconcile.build_plan(states=states, backend_read_roles=("finance_backend_read",))
+    plan = reconcile.build_plan(
+        states=states,
+        dependencies=_known_dependency_states(),
+        backend_read_roles=("finance_backend_read",),
+    )
 
     replace_actions = [action for action in plan if action["action"] == "replace_view_with_table"]
     copy_actions = [action for action in plan if action["action"] == "copy_old_public_rows"]
@@ -18,16 +22,30 @@ def test_dry_run_plan_detects_old_views_and_public_tables() -> None:
     }
     assert {action["object"] for action in copy_actions} == {"public.etf_holdings", "public.etf_themes"}
     assert next(action for action in copy_actions if action["object"] == "public.etf_holdings")["rows"] == 506
+    assert any(action["action"] == "drop_known_dependent_views" for action in plan)
     assert any(action["action"] == "ensure_readiness_snapshot_table" for action in plan)
     assert any(action["action"] == "rebuild_readiness" for action in plan)
+    assert any(action["action"] == "recreate_known_dependent_views" for action in plan)
 
 
 def test_apply_replaces_views_creates_writable_tables_and_copies_rows() -> None:
     conn = RecordingConnection()
 
-    reconcile.apply_plan(conn, states=_old_live_states(), backend_read_roles=("finance_backend_read",))
+    reconcile.apply_plan(
+        conn,
+        states=_old_live_states(),
+        dependencies=_known_dependency_states(),
+        backend_read_roles=("finance_backend_read",),
+    )
 
     sql = conn.normalized_sql
+    assert "cascade" not in sql
+    assert sql.index("drop view if exists feature_store.ticker_readiness") < sql.index(
+        "drop view if exists feature_store.ticker_readiness_etf_constituents"
+    )
+    assert sql.index("drop view if exists feature_store.ticker_readiness_etf_constituents") < sql.index(
+        "drop view source_cache.etf_holdings"
+    )
     assert "drop view source_cache.etf_holdings" in sql
     assert "drop view source_cache.etf_themes" in sql
     assert "create table if not exists source_cache.etf_holdings" in sql
@@ -39,12 +57,17 @@ def test_apply_replaces_views_creates_writable_tables_and_copies_rows() -> None:
     assert "from public.etf_themes" in sql
     assert "truncate table source_cache.etf_theme_readiness" in sql
     assert "insert into source_cache.etf_theme_readiness" in sql
+    assert "create view feature_store.ticker_readiness_etf_constituents as" in sql
+    assert "create view feature_store.ticker_readiness as" in sql
+    assert sql.index("create view feature_store.ticker_readiness_etf_constituents as") < sql.index(
+        "create view feature_store.ticker_readiness as"
+    )
 
 
 def test_apply_creates_readiness_rows_from_prices_and_technicals_contract() -> None:
     conn = RecordingConnection()
 
-    reconcile.apply_plan(conn, states=_old_live_states())
+    reconcile.apply_plan(conn, states=_old_live_states(), dependencies=_known_dependency_states())
 
     sql = conn.normalized_sql
     assert "from source_cache.market_price_daily p" in sql
@@ -57,13 +80,54 @@ def test_apply_creates_readiness_rows_from_prices_and_technicals_contract() -> N
 def test_apply_grants_are_conditional_for_worker_and_backend_read_roles() -> None:
     conn = RecordingConnection()
 
-    reconcile.apply_plan(conn, states=_old_live_states(), backend_read_roles=("finance_backend_read", "backend_read"))
+    reconcile.apply_plan(
+        conn,
+        states=_old_live_states(),
+        dependencies=_known_dependency_states(),
+        backend_read_roles=("finance_backend_read", "backend_read"),
+    )
 
     sql = conn.normalized_sql
     assert "if exists (select 1 from pg_roles where rolname = 'finance_data_ops_worker')" in sql
     assert "grant select, insert, update, delete on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness to finance_data_ops_worker" in sql
     assert "foreach read_role in array array['finance_backend_read', 'backend_read'] loop" in sql
     assert "grant select on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness to %i" in sql
+
+
+def test_unexpected_dependencies_fail_with_manual_review_and_no_cascade() -> None:
+    dependencies = [
+        *_known_dependency_states(),
+        reconcile.DependencyState("feature_store", "unexpected_view", "v", "source_cache", "etf_holdings"),
+    ]
+    plan = reconcile.build_plan(states=_old_live_states(), dependencies=dependencies)
+
+    manual_review = next(action for action in plan if action["action"] == "manual_review_required")
+    assert manual_review["reason"] == "unexpected_dependencies"
+    assert manual_review["dependencies"][0]["dependent"] == "feature_store.unexpected_view"
+
+    conn = RecordingConnection()
+    try:
+        reconcile.apply_plan(conn, states=_old_live_states(), dependencies=dependencies)
+    except RuntimeError as exc:
+        assert "unexpected ETF dependencies" in str(exc)
+    else:  # pragma: no cover - explicit assertion for readability
+        raise AssertionError("expected unexpected dependency failure")
+    assert "cascade" not in conn.normalized_sql
+
+
+def test_statement_failure_reports_original_sql_and_stops() -> None:
+    conn = RecordingConnection(fail_on="drop view source_cache.etf_holdings")
+
+    try:
+        reconcile.apply_plan(conn, states=_old_live_states())
+    except reconcile.ReconciliationSQLError as exc:
+        message = str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected statement failure")
+
+    assert "drop view source_cache.etf_holdings" in message
+    assert "simulated sql failure" in message
+    assert "create table if not exists source_cache.etf_holdings" not in conn.normalized_sql
 
 
 def test_runtime_schema_contains_final_etf_contract_and_conditional_grants() -> None:
@@ -81,8 +145,9 @@ def test_runtime_schema_contains_final_etf_contract_and_conditional_grants() -> 
 
 
 class RecordingConnection:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_on: str | None = None) -> None:
         self.statements: list[str] = []
+        self.fail_on = fail_on
 
     def cursor(self) -> "RecordingCursor":
         return RecordingCursor(self)
@@ -103,6 +168,8 @@ class RecordingCursor:
         return None
 
     def execute(self, statement: str, params: object | None = None) -> None:
+        if self.conn.fail_on and self.conn.fail_on in " ".join(str(statement).lower().split()):
+            raise RuntimeError("simulated sql failure")
         self.conn.statements.append(statement)
 
 
@@ -113,4 +180,23 @@ def _old_live_states() -> list[reconcile.ObjectState]:
         reconcile.ObjectState("source_cache", "etf_theme_readiness", None, None),
         reconcile.ObjectState("public", "etf_holdings", "r", 506),
         reconcile.ObjectState("public", "etf_themes", "r", 32),
+    ]
+
+
+def _known_dependency_states() -> list[reconcile.DependencyState]:
+    return [
+        reconcile.DependencyState(
+            "feature_store",
+            "ticker_readiness_etf_constituents",
+            "v",
+            "source_cache",
+            "etf_holdings",
+        ),
+        reconcile.DependencyState(
+            "feature_store",
+            "ticker_readiness",
+            "v",
+            "feature_store",
+            "ticker_readiness_etf_constituents",
+        ),
     ]
