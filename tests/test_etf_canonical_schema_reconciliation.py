@@ -177,8 +177,35 @@ def test_apply_grants_are_conditional_for_worker_and_backend_read_roles() -> Non
     sql = conn.normalized_sql
     assert "if exists (select 1 from pg_roles where rolname = 'finance_data_ops_worker')" in sql
     assert "grant select, insert, update, delete on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness to finance_data_ops_worker" in sql
+    assert "grant usage on schema feature_store to finance_data_ops_worker" in sql
+    assert "grant select on feature_store.ticker_readiness to finance_data_ops_worker" in sql
+    assert "grant select on feature_store.ticker_readiness_etf_constituents to finance_data_ops_worker" in sql
     assert "foreach read_role in array array['finance_backend_read', 'backend_read'] loop" in sql
     assert "grant select on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness to %i" in sql
+    assert "grant usage on schema feature_store to %i" in sql
+    assert "grant select on feature_store.ticker_readiness to %i" in sql
+    assert "grant select on feature_store.ticker_readiness_etf_constituents to %i" in sql
+
+
+def test_recreated_dependent_view_grants_are_applied_after_view_recreation() -> None:
+    conn = RecordingConnection()
+
+    reconcile.apply_plan(
+        conn,
+        states=_old_live_states(),
+        dependencies=_known_dependency_states(),
+        backend_read_roles=("finance_backend_read",),
+    )
+
+    sql = conn.normalized_sql
+    assert sql.index('create view "feature_store"."ticker_readiness" as') < sql.index(
+        "grant select on feature_store.ticker_readiness to finance_data_ops_worker"
+    )
+    assert sql.index('create view "feature_store"."ticker_readiness_etf_constituents" as') < sql.index(
+        "grant select on feature_store.ticker_readiness_etf_constituents to finance_data_ops_worker"
+    )
+    assert "to_regclass('feature_store.ticker_readiness') is not null" in sql
+    assert "to_regclass('feature_store.ticker_readiness_etf_constituents') is not null" in sql
 
 
 def test_reconciler_does_not_hardcode_feature_store_ticker_readiness_definition() -> None:

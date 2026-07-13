@@ -362,6 +362,14 @@ begin
          source_cache.etf_themes,
          source_cache.etf_theme_readiness
       to finance_data_ops_worker;
+    if to_regclass('feature_store.ticker_readiness') is not null then
+      grant usage on schema feature_store to finance_data_ops_worker;
+      grant select on feature_store.ticker_readiness to finance_data_ops_worker;
+    end if;
+    if to_regclass('feature_store.ticker_readiness_etf_constituents') is not null then
+      grant usage on schema feature_store to finance_data_ops_worker;
+      grant select on feature_store.ticker_readiness_etf_constituents to finance_data_ops_worker;
+    end if;
   end if;
 
   foreach read_role in array {read_roles} loop
@@ -371,6 +379,14 @@ begin
         'grant select on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness to %I',
         read_role
       );
+      if to_regclass('feature_store.ticker_readiness') is not null then
+        execute format('grant usage on schema feature_store to %I', read_role);
+        execute format('grant select on feature_store.ticker_readiness to %I', read_role);
+      end if;
+      if to_regclass('feature_store.ticker_readiness_etf_constituents') is not null then
+        execute format('grant usage on schema feature_store to %I', read_role);
+        execute format('grant select on feature_store.ticker_readiness_etf_constituents to %I', read_role);
+      end if;
     end if;
   end loop;
 end $$;
