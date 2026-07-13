@@ -40,6 +40,7 @@ class ObjectState:
     table_name: str
     relkind: str | None
     rows: int | None = None
+    row_count_error: str | None = None
 
     @property
     def qualified_name(self) -> str:
@@ -476,8 +477,9 @@ def main(argv: list[str] | None = None) -> int:
 
     read_roles = tuple(args.backend_read_role or DEFAULT_BACKEND_READ_ROLES)
     with psycopg.connect(database_dsn, autocommit=False) as conn:
-        states = inspect_objects(conn)
-        dependencies = inspect_dependencies(conn)
+        warnings: list[dict[str, Any]] = []
+        states = inspect_objects(conn, warnings=warnings)
+        dependencies = inspect_dependencies(conn, warnings=warnings)
         plan = build_plan(
             states=states,
             dependencies=dependencies,
@@ -489,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
             "drop_old_public": bool(args.drop_old_public),
             "objects": [state_to_dict(state) for state in states],
             "dependencies": [dependency_to_dict(dependency) for dependency in dependencies],
+            "warnings": warnings,
             "actions": plan,
         }
         if args.apply:
@@ -536,18 +539,47 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def inspect_objects(conn: Any) -> list[ObjectState]:
+def inspect_objects(conn: Any, *, warnings: list[dict[str, Any]] | None = None) -> list[ObjectState]:
     object_rows = _fetch_object_rows(conn)
     states: list[ObjectState] = []
     for schema_name, table_name in ETF_OBJECTS:
         relkind = object_rows.get((schema_name, table_name))
-        rows = _count_rows(conn, schema_name=schema_name, table_name=table_name) if relkind else None
-        states.append(ObjectState(schema_name=schema_name, table_name=table_name, relkind=relkind, rows=rows))
+        rows: int | None = None
+        row_count_error: str | None = None
+        if relkind:
+            rows, row_count_error = _count_rows(conn, schema_name=schema_name, table_name=table_name)
+            if row_count_error and warnings is not None:
+                warnings.append(
+                    {
+                        "object": f"{schema_name}.{table_name}",
+                        "warning": "row_count_unavailable",
+                        "error": row_count_error,
+                    }
+                )
+        states.append(
+            ObjectState(
+                schema_name=schema_name,
+                table_name=table_name,
+                relkind=relkind,
+                rows=rows,
+                row_count_error=row_count_error,
+            )
+        )
     return states
 
 
-def inspect_dependencies(conn: Any) -> list[DependencyState]:
-    rows = _fetch_dependency_rows(conn)
+def inspect_dependencies(conn: Any, *, warnings: list[dict[str, Any]] | None = None) -> list[DependencyState]:
+    rows, error = _fetch_dependency_rows(conn)
+    if error:
+        if warnings is not None:
+            warnings.append(
+                {
+                    "object": "pg_catalog.dependencies",
+                    "warning": "dependency_inspection_unavailable",
+                    "error": error,
+                }
+            )
+        return []
     return [
         DependencyState(
             dependent_schema=str(row["dependent_schema"]),
@@ -647,6 +679,7 @@ def apply_plan(
     drop_old_public: bool = False,
     backend_read_roles: tuple[str, ...] = DEFAULT_BACKEND_READ_ROLES,
 ) -> None:
+    _require_apply_admin_role(conn)
     dependencies = list(dependencies or [])
     _validate_apply_safe(states, dependencies=dependencies)
     by_name = {state.qualified_name: state for state in states}
@@ -689,6 +722,7 @@ def state_to_dict(state: ObjectState) -> dict[str, Any]:
         "kind": state.kind,
         "relkind": state.relkind,
         "rows": state.rows,
+        "row_count_error": state.row_count_error,
     }
 
 
@@ -741,73 +775,119 @@ def _fetch_object_rows(conn: Any) -> dict[tuple[str, str], str]:
         }
 
 
-def _fetch_dependency_rows(conn: Any) -> list[dict[str, str]]:
+def _fetch_dependency_rows(conn: Any) -> tuple[list[dict[str, str]], str | None]:
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            with recursive target_objects as (
-              select c.oid, n.nspname as source_schema, c.relname as source_name
-              from pg_class c
-              join pg_namespace n on n.oid = c.relnamespace
-              where (n.nspname, c.relname) in (
-                ('source_cache', 'etf_holdings'),
-                ('source_cache', 'etf_themes')
-              )
-            ),
-            dependent_views as (
-              select
-                dependent.oid,
-                dependent_ns.nspname as dependent_schema,
-                dependent.relname as dependent_name,
-                dependent.relkind as dependent_relkind,
-                target.source_schema,
-                target.source_name
-              from target_objects target
-              join pg_depend dep on dep.refobjid = target.oid
-              join pg_rewrite rewrite on rewrite.oid = dep.objid
-              join pg_class dependent on dependent.oid = rewrite.ev_class
-              join pg_namespace dependent_ns on dependent_ns.oid = dependent.relnamespace
-              where dependent.oid <> target.oid
-              union
-              select
-                next_dependent.oid,
-                next_dependent_ns.nspname as dependent_schema,
-                next_dependent.relname as dependent_name,
-                next_dependent.relkind as dependent_relkind,
-                known.dependent_schema as source_schema,
-                known.dependent_name as source_name
-              from dependent_views known
-              join pg_depend dep on dep.refobjid = known.oid
-              join pg_rewrite rewrite on rewrite.oid = dep.objid
-              join pg_class next_dependent on next_dependent.oid = rewrite.ev_class
-              join pg_namespace next_dependent_ns on next_dependent_ns.oid = next_dependent.relnamespace
-              where next_dependent.oid <> known.oid
+        cur.execute("savepoint etf_dependency_inspection")
+        try:
+            cur.execute(
+                """
+                with recursive target_objects as (
+                  select c.oid, n.nspname as source_schema, c.relname as source_name
+                  from pg_class c
+                  join pg_namespace n on n.oid = c.relnamespace
+                  where (n.nspname, c.relname) in (
+                    ('source_cache', 'etf_holdings'),
+                    ('source_cache', 'etf_themes')
+                  )
+                ),
+                dependent_views as (
+                  select
+                    dependent.oid,
+                    dependent_ns.nspname as dependent_schema,
+                    dependent.relname as dependent_name,
+                    dependent.relkind as dependent_relkind,
+                    target.source_schema,
+                    target.source_name
+                  from target_objects target
+                  join pg_depend dep on dep.refobjid = target.oid
+                  join pg_rewrite rewrite on rewrite.oid = dep.objid
+                  join pg_class dependent on dependent.oid = rewrite.ev_class
+                  join pg_namespace dependent_ns on dependent_ns.oid = dependent.relnamespace
+                  where dependent.oid <> target.oid
+                  union
+                  select
+                    next_dependent.oid,
+                    next_dependent_ns.nspname as dependent_schema,
+                    next_dependent.relname as dependent_name,
+                    next_dependent.relkind as dependent_relkind,
+                    known.dependent_schema as source_schema,
+                    known.dependent_name as source_name
+                  from dependent_views known
+                  join pg_depend dep on dep.refobjid = known.oid
+                  join pg_rewrite rewrite on rewrite.oid = dep.objid
+                  join pg_class next_dependent on next_dependent.oid = rewrite.ev_class
+                  join pg_namespace next_dependent_ns on next_dependent_ns.oid = next_dependent.relnamespace
+                  where next_dependent.oid <> known.oid
+                )
+                select distinct dependent_schema, dependent_name, dependent_relkind, source_schema, source_name
+                from dependent_views
+                order by dependent_schema, dependent_name, source_schema, source_name
+                """
             )
-            select distinct dependent_schema, dependent_name, dependent_relkind, source_schema, source_name
-            from dependent_views
-            order by dependent_schema, dependent_name, source_schema, source_name
-            """
-        )
-        return [
-            {
-                "dependent_schema": str(row[0]),
-                "dependent_name": str(row[1]),
-                "dependent_relkind": str(row[2]),
-                "source_schema": str(row[3]),
-                "source_name": str(row[4]),
-            }
-            for row in cur.fetchall()
-        ]
+            rows = [
+                {
+                    "dependent_schema": str(row[0]),
+                    "dependent_name": str(row[1]),
+                    "dependent_relkind": str(row[2]),
+                    "source_schema": str(row[3]),
+                    "source_name": str(row[4]),
+                }
+                for row in cur.fetchall()
+            ]
+        except Exception as exc:
+            cur.execute("rollback to savepoint etf_dependency_inspection")
+            cur.execute("release savepoint etf_dependency_inspection")
+            return [], str(exc)
+        cur.execute("release savepoint etf_dependency_inspection")
+        return rows, None
 
 
-def _count_rows(conn: Any, *, schema_name: str, table_name: str) -> int | None:
-    try:
-        with conn.cursor() as cur:
+def _count_rows(conn: Any, *, schema_name: str, table_name: str) -> tuple[int | None, str | None]:
+    savepoint = f"etf_count_{schema_name}_{table_name}".replace(".", "_")
+    with conn.cursor() as cur:
+        cur.execute(f"savepoint {savepoint}")
+        try:
             cur.execute(f'select count(*) from "{schema_name}"."{table_name}"')
             row = cur.fetchone()
-            return int(row[0]) if row else None
-    except Exception:
-        return None
+            rows = int(row[0]) if row else None
+        except Exception as exc:
+            cur.execute(f"rollback to savepoint {savepoint}")
+            cur.execute(f"release savepoint {savepoint}")
+            return None, str(exc)
+        cur.execute(f"release savepoint {savepoint}")
+        return rows, None
+
+
+def _require_apply_admin_role(conn: Any) -> None:
+    with conn.cursor() as cur:
+        try:
+            cur.execute(
+                """
+                select
+                  current_user,
+                  session_user,
+                  case
+                    when to_regnamespace('source_cache') is null
+                      then has_database_privilege(current_user, current_database(), 'CREATE')
+                    else has_schema_privilege(current_user, 'source_cache', 'CREATE')
+                  end as ddl_capable
+                """
+            )
+            row = cur.fetchone()
+        except Exception as exc:
+            raise RuntimeError(f"apply_requires_admin_role: failed to inspect current database role: {exc}") from exc
+    current_user = str(row[0] if row else "").strip()
+    session_user = str(row[1] if row else "").strip()
+    ddl_capable = bool(row[2]) if row and len(row) > 2 else False
+    users = {current_user.lower(), session_user.lower()}
+    if WORKER_ROLE.lower() in users:
+        raise RuntimeError(
+            f"apply_requires_admin_role: {WORKER_ROLE} cannot run ETF schema reconciliation --apply"
+        )
+    if not ddl_capable:
+        raise RuntimeError(
+            f"apply_requires_admin_role: current role {current_user or '<unknown>'} lacks source_cache DDL privilege"
+        )
 
 
 class ReconciliationSQLError(RuntimeError):

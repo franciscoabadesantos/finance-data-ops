@@ -130,6 +130,68 @@ def test_statement_failure_reports_original_sql_and_stops() -> None:
     assert "create table if not exists source_cache.etf_holdings" not in conn.normalized_sql
 
 
+def test_count_permission_error_does_not_abort_dry_run_inspection() -> None:
+    conn = InspectConnection(count_failures={("source_cache", "etf_holdings"): "permission denied for view"})
+    warnings: list[dict[str, object]] = []
+
+    states = reconcile.inspect_objects(conn, warnings=warnings)
+    dependencies = reconcile.inspect_dependencies(conn, warnings=warnings)
+
+    by_object = {state.qualified_name: state for state in states}
+    assert by_object["source_cache.etf_holdings"].rows is None
+    assert by_object["source_cache.etf_holdings"].row_count_error == "permission denied for view"
+    assert dependencies[0].dependent_qualified_name == "feature_store.ticker_readiness_etf_constituents"
+    assert warnings == [
+        {
+            "object": "source_cache.etf_holdings",
+            "warning": "row_count_unavailable",
+            "error": "permission denied for view",
+        }
+    ]
+    assert conn.aborted is False
+    assert any("rollback to savepoint etf_count_source_cache_etf_holdings" in statement for statement in conn.normalized)
+
+
+def test_dependency_inspection_permission_error_reports_warning_without_aborting() -> None:
+    conn = InspectConnection(dependency_failure="permission denied for pg_depend")
+    warnings: list[dict[str, object]] = []
+
+    dependencies = reconcile.inspect_dependencies(conn, warnings=warnings)
+
+    assert dependencies == []
+    assert warnings == [
+        {
+            "object": "pg_catalog.dependencies",
+            "warning": "dependency_inspection_unavailable",
+            "error": "permission denied for pg_depend",
+        }
+    ]
+    assert conn.aborted is False
+
+
+def test_apply_with_worker_or_non_ddl_role_fails_early_and_clearly() -> None:
+    worker_conn = RecordingConnection(current_user="finance_data_ops_worker", ddl_capable=False)
+
+    try:
+        reconcile.apply_plan(worker_conn, states=_old_live_states(), dependencies=_known_dependency_states())
+    except RuntimeError as exc:
+        assert "apply_requires_admin_role" in str(exc)
+        assert "finance_data_ops_worker cannot run" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected worker role to be rejected")
+    assert "drop view" not in worker_conn.normalized_sql
+
+    readonly_conn = RecordingConnection(current_user="data_ops_readonly", ddl_capable=False)
+    try:
+        reconcile.apply_plan(readonly_conn, states=_old_live_states(), dependencies=_known_dependency_states())
+    except RuntimeError as exc:
+        assert "apply_requires_admin_role" in str(exc)
+        assert "lacks source_cache DDL privilege" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected non-DDL role to be rejected")
+    assert "drop view" not in readonly_conn.normalized_sql
+
+
 def test_runtime_schema_contains_final_etf_contract_and_conditional_grants() -> None:
     schema = Path("sql/000_runtime_schema.sql").read_text()
 
@@ -145,9 +207,19 @@ def test_runtime_schema_contains_final_etf_contract_and_conditional_grants() -> 
 
 
 class RecordingConnection:
-    def __init__(self, *, fail_on: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on: str | None = None,
+        current_user: str = "postgres",
+        session_user: str | None = None,
+        ddl_capable: bool = True,
+    ) -> None:
         self.statements: list[str] = []
         self.fail_on = fail_on
+        self.current_user = current_user
+        self.session_user = session_user or current_user
+        self.ddl_capable = ddl_capable
 
     def cursor(self) -> "RecordingCursor":
         return RecordingCursor(self)
@@ -160,6 +232,7 @@ class RecordingConnection:
 class RecordingCursor:
     def __init__(self, conn: RecordingConnection) -> None:
         self.conn = conn
+        self._rows: list[tuple[object, ...]] = []
 
     def __enter__(self) -> "RecordingCursor":
         return self
@@ -168,9 +241,15 @@ class RecordingCursor:
         return None
 
     def execute(self, statement: str, params: object | None = None) -> None:
-        if self.conn.fail_on and self.conn.fail_on in " ".join(str(statement).lower().split()):
+        normalized = " ".join(str(statement).lower().split())
+        if self.conn.fail_on and self.conn.fail_on in normalized:
             raise RuntimeError("simulated sql failure")
+        if "select current_user" in normalized and "session_user" in normalized:
+            self._rows = [(self.conn.current_user, self.conn.session_user, self.conn.ddl_capable)]
         self.conn.statements.append(statement)
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self._rows[0] if self._rows else None
 
 
 def _old_live_states() -> list[reconcile.ObjectState]:
@@ -200,3 +279,91 @@ def _known_dependency_states() -> list[reconcile.DependencyState]:
             "ticker_readiness_etf_constituents",
         ),
     ]
+
+
+class InspectConnection:
+    def __init__(
+        self,
+        *,
+        count_failures: dict[tuple[str, str], str] | None = None,
+        dependency_failure: str | None = None,
+    ) -> None:
+        self.statements: list[str] = []
+        self.aborted = False
+        self.count_failures = dict(count_failures or {})
+        self.dependency_failure = dependency_failure
+
+    def cursor(self) -> "InspectCursor":
+        return InspectCursor(self)
+
+    @property
+    def normalized(self) -> list[str]:
+        return [" ".join(statement.lower().split()) for statement in self.statements]
+
+
+class InspectCursor:
+    def __init__(self, conn: InspectConnection) -> None:
+        self.conn = conn
+        self._rows: list[tuple[object, ...]] = []
+
+    def __enter__(self) -> "InspectCursor":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def execute(self, statement: str, params: object | None = None) -> None:
+        normalized = " ".join(str(statement).lower().split())
+        if self.conn.aborted and not normalized.startswith(("rollback to savepoint", "release savepoint")):
+            raise RuntimeError("current transaction is aborted")
+        self.conn.statements.append(statement)
+        if normalized.startswith("rollback to savepoint"):
+            self.conn.aborted = False
+            return
+        if normalized.startswith(("savepoint", "release savepoint")):
+            return
+        if "from pg_class c" in normalized and "c.relkind" in normalized:
+            self._rows = [
+                ("source_cache", "etf_holdings", "v"),
+                ("source_cache", "etf_themes", "v"),
+                ("public", "etf_holdings", "r"),
+                ("public", "etf_themes", "r"),
+            ]
+            return
+        if normalized.startswith('select count(*) from "'):
+            schema_name, table_name = _count_target(normalized)
+            failure = self.conn.count_failures.get((schema_name, table_name))
+            if failure:
+                self.conn.aborted = True
+                raise RuntimeError(failure)
+            self._rows = [(506 if table_name == "etf_holdings" else 32,)]
+            return
+        if "with recursive target_objects as" in normalized:
+            if self.conn.dependency_failure:
+                self.conn.aborted = True
+                raise RuntimeError(self.conn.dependency_failure)
+            self._rows = [
+                (
+                    "feature_store",
+                    "ticker_readiness_etf_constituents",
+                    "v",
+                    "source_cache",
+                    "etf_holdings",
+                )
+            ]
+            return
+        self._rows = []
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return list(self._rows)
+
+
+def _count_target(normalized: str) -> tuple[str, str]:
+    marker = 'select count(*) from "'
+    rest = normalized.split(marker, 1)[1]
+    schema_name, rest = rest.split('"."', 1)
+    table_name = rest.split('"', 1)[0]
+    return schema_name, table_name
