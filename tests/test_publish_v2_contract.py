@@ -212,7 +212,7 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
     conflicts = {call["table"]: call["on_conflict"] for call in publisher.upserts}
     assert conflicts["source_cache.fundamentals"] == "symbol,metric,period_end,period_type,report_date"
     assert conflicts["ticker_profile"] == "ticker"
-    assert conflicts["etf_holdings"] == "etf_ticker,holding_symbol,as_of"
+    assert conflicts["source_cache.etf_holdings"] == "etf_ticker,holding_symbol,as_of"
     assert conflicts["etf_holding_onboarding_identity"] == "etf_ticker,source_symbol,source_country"
     assert conflicts["etf_sector_weights"] == "etf_ticker,sector,as_of"
 
@@ -222,7 +222,7 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
     assert profile_row["long_business_summary"] == "Tracks large US companies."
     assert profile_row["expense_ratio"] == 0.0009
 
-    holding_row = next(call for call in publisher.upserts if call["table"] == "etf_holdings")["rows"][0]
+    holding_row = next(call for call in publisher.upserts if call["table"] == "source_cache.etf_holdings")["rows"][0]
     assert holding_row["holding_symbol"] == "AAPL"
     assert holding_row["weight"] == 0.071
 

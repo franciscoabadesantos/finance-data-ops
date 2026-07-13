@@ -177,7 +177,7 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     }
     assert next(call for call in publisher.upserts if call["table"] == "ticker_profile")["on_conflict"] == "ticker"
     assert (
-        next(call for call in publisher.upserts if call["table"] == "etf_holdings")["on_conflict"]
+        next(call for call in publisher.upserts if call["table"] == "source_cache.etf_holdings")["on_conflict"]
         == "etf_ticker,holding_symbol,as_of"
     )
     assert (
@@ -221,7 +221,7 @@ def test_optional_profile_and_etf_failures_do_not_fail_fundamentals_refresh(tmp_
     assert summary["refresh"]["fundamentals_daily"]["symbols_failed"] == []
     assert any(call["table"] == "source_cache.fundamentals" for call in publisher.upserts)
     assert not any(call["table"] == "ticker_profile" for call in publisher.upserts)
-    assert not any(call["table"] == "etf_holdings" for call in publisher.upserts)
+    assert not any(call["table"] == "source_cache.etf_holdings" for call in publisher.upserts)
     assert not any(call["table"] == "etf_sector_weights" for call in publisher.upserts)
     assert "Optional fundamentals refresh surface failed (symbol=KO surface=profile)" in caplog.text
     assert "Optional fundamentals refresh surface failed (symbol=KO surface=etf_funds_data)" in caplog.text
@@ -277,9 +277,14 @@ def test_fundamentals_daily_refreshes_and_publishes_theme_etfs(tmp_path) -> None
 
     assert summary["refresh"]["theme_etf_holdings"]["status"] == "fresh"
     assert summary["rows"]["etf_themes"] == 1
-    theme_upsert = next(call for call in publisher.upserts if call["table"] == "etf_themes")
+    theme_upsert = next(call for call in publisher.upserts if call["table"] == "source_cache.etf_themes")
     assert theme_upsert["on_conflict"] == "etf_ticker"
     assert theme_upsert["rows"][0]["theme"] == "space"
+    readiness_upsert = next(call for call in publisher.upserts if call["table"] == "source_cache.etf_theme_readiness")
+    assert readiness_upsert["on_conflict"] == "etf_symbol"
+    assert readiness_upsert["rows"][0]["etf_symbol"] == "ARKX"
+    assert readiness_upsert["rows"][0]["relationship_map_eligible"] is False
+    assert readiness_upsert["rows"][0]["relationship_map_ineligible_reason"] == "insufficient_constituent_coverage"
     holdings = pd.read_parquet(table_path("etf_holdings", cache_root=tmp_path))
     assert {"SPY", "ARKX"}.issubset(set(holdings["etf_ticker"]))
 

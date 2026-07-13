@@ -15,10 +15,17 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from finance_data_ops.publish.client import PostgresPublisher
-from finance_data_ops.publish.fundamentals import build_etf_holdings_payload
+from finance_data_ops.publish.fundamentals import (
+    ETF_HOLDINGS_TABLE,
+    ETF_THEMES_TABLE,
+    ETF_THEME_READINESS_TABLE,
+    build_etf_holdings_payload,
+    build_etf_theme_readiness_payload,
+)
 from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import load_settings
 from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
+from finance_data_ops.theme_etfs.readiness import build_etf_theme_readiness
 
 
 def main() -> None:
@@ -33,6 +40,24 @@ def main() -> None:
     )
     cached_holdings = read_parquet_table("etf_holdings", cache_root=settings.cache_root, required=False)
     cached_themes = read_parquet_table("etf_themes", cache_root=settings.cache_root, required=False)
+    cached_prices = read_parquet_table("source_cache.market_price_daily", cache_root=settings.cache_root, required=False)
+    cached_technicals = read_parquet_table(
+        "feature_store.technical_features_daily",
+        cache_root=settings.cache_root,
+        required=False,
+    )
+    cached_identity = read_parquet_table(
+        "etf_holding_onboarding_identity",
+        cache_root=settings.cache_root,
+        required=False,
+    )
+    readiness = build_etf_theme_readiness(
+        etf_holdings=cached_holdings,
+        etf_themes=cached_themes,
+        market_price_daily=cached_prices,
+        technical_features_daily=cached_technicals,
+        etf_holding_onboarding_identity=cached_identity,
+    )
 
     publish_result: dict[str, object] = {"status": "skipped"}
     if args.publish:
@@ -40,14 +65,19 @@ def main() -> None:
         publisher = PostgresPublisher(database_dsn=settings.database_dsn)
         publish_result = {
             "etf_holdings": publisher.upsert(
-                "etf_holdings",
+                ETF_HOLDINGS_TABLE,
                 build_etf_holdings_payload(cached_holdings),
                 on_conflict="etf_ticker,holding_symbol,as_of",
             ),
             "etf_themes": publisher.upsert(
-                "etf_themes",
+                ETF_THEMES_TABLE,
                 cached_themes.to_dict(orient="records"),
                 on_conflict="etf_ticker",
+            ),
+            "etf_theme_readiness": publisher.upsert(
+                ETF_THEME_READINESS_TABLE,
+                build_etf_theme_readiness_payload(readiness),
+                on_conflict="etf_symbol",
             ),
         }
 

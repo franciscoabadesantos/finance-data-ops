@@ -235,7 +235,7 @@ create table if not exists public.ticker_profile (
 create index if not exists idx_ticker_profile_updated_at
   on public.ticker_profile (updated_at desc);
 
-create table if not exists public.etf_holdings (
+create table if not exists source_cache.etf_holdings (
   etf_ticker text not null,
   holding_symbol text not null,
   holding_name text,
@@ -249,7 +249,7 @@ create table if not exists public.etf_holdings (
 );
 
 create index if not exists idx_etf_holdings_ticker_weight
-  on public.etf_holdings (etf_ticker, as_of desc, weight desc);
+  on source_cache.etf_holdings (etf_ticker, as_of desc, weight desc);
 
 create table if not exists public.etf_holding_onboarding_identity (
   etf_ticker text not null,
@@ -292,7 +292,7 @@ begin
   end if;
 end $$;
 
-create table if not exists public.etf_themes (
+create table if not exists source_cache.etf_themes (
   etf_ticker text primary key,
   theme text not null,
   wave integer not null check (wave in (1, 2)),
@@ -309,7 +309,26 @@ create table if not exists public.etf_themes (
 );
 
 create index if not exists idx_etf_themes_theme_wave
-  on public.etf_themes (theme, wave, active);
+  on source_cache.etf_themes (theme, wave, active);
+
+create table if not exists source_cache.etf_theme_readiness (
+  etf_symbol text primary key,
+  theme text,
+  active boolean not null default true,
+  holdings_count integer not null default 0,
+  holdings_as_of date,
+  holdings_shallow boolean not null default false,
+  priced_constituent_count integer not null default 0,
+  technical_constituent_count integer not null default 0,
+  tracked_constituent_count integer not null default 0,
+  coverage_ratio double precision not null default 0,
+  relationship_map_eligible boolean not null default false,
+  relationship_map_ineligible_reason text,
+  computed_at timestamptz not null default now()
+);
+
+create index if not exists idx_etf_theme_readiness_eligibility
+  on source_cache.etf_theme_readiness (relationship_map_eligible, active, computed_at desc);
 
 create table if not exists public.etf_sector_weights (
   etf_ticker text not null,

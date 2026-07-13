@@ -9,6 +9,12 @@ import pandas as pd
 from finance_data_ops.identity.provider_symbols import ONBOARDING_IDENTITY_COLUMNS
 
 from finance_data_ops.publish.client import Publisher
+from finance_data_ops.theme_etfs.readiness import ETF_THEME_READINESS_COLUMNS
+
+
+ETF_HOLDINGS_TABLE = "source_cache.etf_holdings"
+ETF_THEMES_TABLE = "source_cache.etf_themes"
+ETF_THEME_READINESS_TABLE = "source_cache.etf_theme_readiness"
 
 
 def build_ticker_profile_payload(profile_frame: pd.DataFrame) -> list[dict[str, Any]]:
@@ -154,6 +160,35 @@ def build_etf_holding_onboarding_identity_payload(identity_frame: pd.DataFrame) 
     payload = payload.dropna(subset=["etf_ticker", "source_symbol"])
     payload = payload.drop_duplicates(subset=["etf_ticker", "source_symbol", "source_country"], keep="last")
     return payload[ONBOARDING_IDENTITY_COLUMNS].to_dict(orient="records")
+
+
+def build_etf_theme_readiness_payload(readiness_frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if readiness_frame.empty:
+        return []
+    frame = readiness_frame.copy()
+    for column in ETF_THEME_READINESS_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = None
+    payload = frame[ETF_THEME_READINESS_COLUMNS].copy()
+    payload["etf_symbol"] = _normalize_string_series(payload["etf_symbol"].astype(str).str.upper())
+    payload["theme"] = _normalize_string_series(payload["theme"])
+    payload["active"] = payload["active"].fillna(False).astype(bool)
+    payload["holdings_count"] = pd.to_numeric(payload["holdings_count"], errors="coerce").fillna(0).astype(int)
+    payload["holdings_as_of"] = pd.to_datetime(payload["holdings_as_of"], errors="coerce").dt.date
+    payload["holdings_shallow"] = payload["holdings_shallow"].fillna(False).astype(bool)
+    for column in ["priced_constituent_count", "technical_constituent_count", "tracked_constituent_count"]:
+        payload[column] = pd.to_numeric(payload[column], errors="coerce").fillna(0).astype(int)
+    payload["coverage_ratio"] = pd.to_numeric(payload["coverage_ratio"], errors="coerce").fillna(0.0).astype(float)
+    payload["relationship_map_eligible"] = payload["relationship_map_eligible"].fillna(False).astype(bool)
+    payload["relationship_map_ineligible_reason"] = _normalize_string_series(
+        payload["relationship_map_ineligible_reason"]
+    )
+    payload["computed_at"] = pd.to_datetime(payload["computed_at"], utc=True, errors="coerce").fillna(
+        pd.Timestamp.now(tz="UTC")
+    )
+    payload = payload.dropna(subset=["etf_symbol"])
+    payload = payload.drop_duplicates(subset=["etf_symbol"], keep="last")
+    return payload[ETF_THEME_READINESS_COLUMNS].to_dict(orient="records")
 
 
 def build_etf_sector_weights_payload(sector_weights_frame: pd.DataFrame) -> list[dict[str, Any]]:
@@ -307,12 +342,14 @@ def publish_fundamentals_surfaces(
     ticker_profile: pd.DataFrame | None = None,
     etf_holdings: pd.DataFrame | None = None,
     etf_holding_onboarding_identity: pd.DataFrame | None = None,
+    etf_theme_readiness: pd.DataFrame | None = None,
     etf_sector_weights: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     source_cache_rows = build_source_cache_fundamentals_payload(fundamentals_history)
     profile_rows = build_ticker_profile_payload(_frame_or_empty(ticker_profile))
     holding_rows = build_etf_holdings_payload(_frame_or_empty(etf_holdings))
     identity_rows = build_etf_holding_onboarding_identity_payload(_frame_or_empty(etf_holding_onboarding_identity))
+    readiness_rows = build_etf_theme_readiness_payload(_frame_or_empty(etf_theme_readiness))
     sector_weight_rows = build_etf_sector_weights_payload(_frame_or_empty(etf_sector_weights))
 
     source_cache_result = publisher.upsert(
@@ -330,7 +367,7 @@ def publish_fundamentals_surfaces(
     holdings_result: dict[str, Any] | None = None
     if holding_rows:
         holdings_result = publisher.upsert(
-            "etf_holdings",
+            ETF_HOLDINGS_TABLE,
             holding_rows,
             on_conflict="etf_ticker,holding_symbol,as_of",
         )
@@ -340,6 +377,13 @@ def publish_fundamentals_surfaces(
             "etf_holding_onboarding_identity",
             identity_rows,
             on_conflict="etf_ticker,source_symbol,source_country",
+        )
+    readiness_result: dict[str, Any] | None = None
+    if readiness_rows:
+        readiness_result = publisher.upsert(
+            ETF_THEME_READINESS_TABLE,
+            readiness_rows,
+            on_conflict="etf_symbol",
         )
     sector_weights_result: dict[str, Any] | None = None
     if sector_weight_rows:
@@ -352,8 +396,9 @@ def publish_fundamentals_surfaces(
     return {
         "source_cache.fundamentals": source_cache_result,
         "ticker_profile": profile_result,
-        "etf_holdings": holdings_result,
+        ETF_HOLDINGS_TABLE: holdings_result,
         "etf_holding_onboarding_identity": identity_result,
+        ETF_THEME_READINESS_TABLE: readiness_result,
         "etf_sector_weights": sector_weights_result,
     }
 

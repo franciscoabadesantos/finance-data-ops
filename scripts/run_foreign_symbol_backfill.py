@@ -20,7 +20,7 @@ if str(SRC_PATH) not in sys.path:
 
 from finance_data_ops.geography import country_from_source_or_symbol, infer_country_from_symbol, normalize_country
 from finance_data_ops.publish.client import PostgresPublisher
-from finance_data_ops.publish.fundamentals import build_etf_holdings_payload
+from finance_data_ops.publish.fundamentals import ETF_HOLDINGS_TABLE, build_etf_holdings_payload
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_backfill_payload
 from finance_data_ops.refresh.storage import read_parquet_table, write_parquet_table
 from finance_data_ops.settings import load_settings
@@ -75,7 +75,7 @@ def main() -> None:
         affected_etfs = sorted({str(value).strip().upper() for value in normalized_holdings["etf_ticker"].dropna()})
         _delete_published_etf_holdings(database_dsn=settings.database_dsn, etf_tickers=affected_etfs)
         holdings_result = publisher.upsert(
-            "etf_holdings",
+            ETF_HOLDINGS_TABLE,
             build_etf_holdings_payload(normalized_holdings),
             on_conflict="etf_ticker,holding_symbol,as_of",
         )
@@ -346,7 +346,7 @@ def _delete_published_etf_holdings(*, database_dsn: str, etf_tickers: list[str])
     placeholders = ", ".join(["%s"] * len(etf_tickers))
     with psycopg.connect(database_dsn, autocommit=True, application_name="finance-data-ops") as conn:
         with conn.cursor() as cur:
-            cur.execute(f"delete from public.etf_holdings where etf_ticker in ({placeholders})", etf_tickers)
+            cur.execute(f"delete from source_cache.etf_holdings where etf_ticker in ({placeholders})", etf_tickers)
 
 
 def _delete_published_replaced_bare_entities(*, database_dsn: str) -> dict[str, Any]:

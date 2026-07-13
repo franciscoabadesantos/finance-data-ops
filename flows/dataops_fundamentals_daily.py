@@ -24,7 +24,7 @@ from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_al
 from finance_data_ops.ops.incidents import classify_failure
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
 from finance_data_ops.publish.client import Publisher, RecordingPublisher, PostgresPublisher
-from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
+from finance_data_ops.publish.fundamentals import ETF_THEMES_TABLE, publish_fundamentals_surfaces
 from finance_data_ops.publish.status import fetch_symbol_data_coverage_rows, publish_status_surfaces
 from finance_data_ops.refresh.fundamentals_daily import refresh_fundamentals_daily
 from finance_data_ops.refresh.market_daily import RefreshRunResult
@@ -32,6 +32,7 @@ from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import load_settings
 from finance_data_ops.validation.symbol_resolution import resolve_source_refresh_universe
 from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
+from finance_data_ops.theme_etfs.readiness import build_etf_theme_readiness
 from finance_data_ops.validation.coverage import (
     assess_symbol_coverage,
     build_symbol_coverage_rows,
@@ -97,8 +98,20 @@ def run_dataops_fundamentals_daily(
     fundamentals_summary = compute_fundamentals_summary(cached_fundamentals)
 
     cached_prices = read_parquet_table("source_cache.market_price_daily", cache_root=settings.cache_root, required=False)
+    cached_technical_features = read_parquet_table(
+        "feature_store.technical_features_daily",
+        cache_root=settings.cache_root,
+        required=False,
+    )
     cached_quotes = read_parquet_table("latest_quotes", cache_root=settings.cache_root, required=False)
     cached_earnings_events = read_parquet_table("earnings_events", cache_root=settings.cache_root, required=False)
+    cached_etf_theme_readiness = build_etf_theme_readiness(
+        etf_holdings=cached_etf_holdings,
+        etf_themes=cached_etf_themes,
+        market_price_daily=cached_prices,
+        technical_features_daily=cached_technical_features,
+        etf_holding_onboarding_identity=cached_etf_holding_onboarding_identity,
+    )
 
     existing_coverage_rows = list(existing_symbol_coverage_rows or [])
     if publish_enabled and publisher is None and not existing_coverage_rows:
@@ -155,6 +168,7 @@ def run_dataops_fundamentals_daily(
                 ticker_profile=cached_ticker_profile,
                 etf_holdings=cached_etf_holdings,
                 etf_holding_onboarding_identity=cached_etf_holding_onboarding_identity,
+                etf_theme_readiness=cached_etf_theme_readiness,
                 etf_themes=cached_etf_themes,
                 etf_sector_weights=cached_etf_sector_weights,
             ),
@@ -317,6 +331,7 @@ def _publish_fundamentals_and_theme_surfaces(
     ticker_profile: pd.DataFrame,
     etf_holdings: pd.DataFrame,
     etf_holding_onboarding_identity: pd.DataFrame,
+    etf_theme_readiness: pd.DataFrame,
     etf_themes: pd.DataFrame,
     etf_sector_weights: pd.DataFrame,
 ) -> dict[str, Any]:
@@ -326,16 +341,17 @@ def _publish_fundamentals_and_theme_surfaces(
         ticker_profile=ticker_profile,
         etf_holdings=etf_holdings,
         etf_holding_onboarding_identity=etf_holding_onboarding_identity,
+        etf_theme_readiness=etf_theme_readiness,
         etf_sector_weights=etf_sector_weights,
     )
     if not etf_themes.empty:
-        result["etf_themes"] = publisher.upsert(
-            "etf_themes",
+        result[ETF_THEMES_TABLE] = publisher.upsert(
+            ETF_THEMES_TABLE,
             etf_themes.to_dict(orient="records"),
             on_conflict="etf_ticker",
         )
     else:
-        result["etf_themes"] = {"status": "skipped", "rows": 0}
+        result[ETF_THEMES_TABLE] = {"status": "skipped", "rows": 0}
     return result
 
 
