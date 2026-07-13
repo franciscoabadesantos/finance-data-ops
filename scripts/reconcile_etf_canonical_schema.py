@@ -32,6 +32,10 @@ DROP_DEPENDENT_VIEWS_SQL = [
     "drop view if exists feature_store.ticker_readiness",
     "drop view if exists feature_store.ticker_readiness_etf_constituents",
 ]
+DEPENDENT_VIEW_RECREATE_ORDER = [
+    "feature_store.ticker_readiness_etf_constituents",
+    "feature_store.ticker_readiness",
+]
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,22 @@ class DependencyState:
     @property
     def dependent_kind(self) -> str:
         return RELKIND_LABELS.get(str(self.dependent_relkind or ""), "unknown")
+
+
+@dataclass(frozen=True)
+class CapturedView:
+    schema_name: str
+    view_name: str
+    definition: str
+    columns: tuple[tuple[str, str, str], ...]
+
+    @property
+    def qualified_name(self) -> str:
+        return f"{self.schema_name}.{self.view_name}"
+
+    @property
+    def create_sql(self) -> str:
+        return f"create view {_quote_ident(self.schema_name)}.{_quote_ident(self.view_name)} as\n{self.definition}"
 
 
 RELKIND_LABELS = {
@@ -146,108 +166,6 @@ CREATE_ETF_THEME_READINESS_INDEX_SQL = """
 create index if not exists idx_etf_theme_readiness_eligibility
   on source_cache.etf_theme_readiness (relationship_map_eligible, active, computed_at desc)
 """
-
-CREATE_TICKER_READINESS_ETF_CONSTITUENTS_VIEW_SQL = """
-create view feature_store.ticker_readiness_etf_constituents as
-select distinct
-  upper(h.holding_symbol) as symbol,
-  upper(h.etf_ticker) as etf_symbol,
-  r.theme,
-  r.relationship_map_eligible,
-  r.relationship_map_ineligible_reason,
-  now() as updated_at
-from source_cache.etf_holdings h
-join source_cache.etf_theme_readiness r
-  on upper(r.etf_symbol) = upper(h.etf_ticker)
-where h.holding_symbol is not null
-"""
-
-CREATE_TICKER_READINESS_VIEW_SQL = """
-create view feature_store.ticker_readiness as
-with symbols as (
-  select upper(normalized_symbol) as symbol
-  from public.ticker_registry
-  where normalized_symbol is not null
-  union
-  select upper(symbol) as symbol
-  from source_cache.market_price_daily
-  where symbol is not null
-  union
-  select upper(symbol) as symbol
-  from source_cache.fundamentals
-  where symbol is not null
-  union
-  select upper(symbol) as symbol
-  from source_cache.earnings
-  where symbol is not null
-  union
-  select upper(symbol) as symbol
-  from feature_store.technical_features_daily
-  where symbol is not null
-  union
-  select upper(symbol) as symbol
-  from feature_store.scorecard_daily
-  where symbol is not null
-  union
-  select upper(symbol) as symbol
-  from feature_store.ticker_page_summary
-  where symbol is not null
-  union
-  select upper(symbol) as symbol
-  from feature_store.ticker_readiness_etf_constituents
-  where symbol is not null
-),
-materialized as (
-  select
-    s.symbol,
-    exists (
-      select 1 from source_cache.market_price_daily p where upper(p.symbol) = s.symbol
-    ) as market_data_available,
-    exists (
-      select 1 from source_cache.fundamentals f where upper(f.symbol) = s.symbol
-    ) as fundamentals_available,
-    exists (
-      select 1 from source_cache.earnings e where upper(e.symbol) = s.symbol
-    ) as earnings_available,
-    exists (
-      select 1 from feature_store.technical_features_daily t where upper(t.symbol) = s.symbol
-    ) as technical_features_available,
-    exists (
-      select 1 from feature_store.scorecard_daily sc where upper(sc.symbol) = s.symbol
-    ) as scorecard_available,
-    exists (
-      select 1 from feature_store.ticker_page_summary ps where upper(ps.symbol) = s.symbol
-    ) as ticker_page_summary_available
-  from symbols s
-)
-select
-  symbol,
-  case
-    when market_data_available and technical_features_available then 'ready'
-    when market_data_available then 'partial'
-    else 'pending'
-  end as readiness_status,
-  market_data_available,
-  fundamentals_available,
-  earnings_available,
-  technical_features_available,
-  scorecard_available,
-  ticker_page_summary_available,
-  case
-    when not market_data_available then 'missing_market_price_daily'
-    when not technical_features_available then 'missing_technical_features'
-    when not scorecard_available then 'missing_scorecard'
-    when not ticker_page_summary_available then 'missing_ticker_page_summary'
-    else null
-  end as reason,
-  now() as updated_at
-from materialized
-"""
-
-CREATE_DEPENDENT_VIEWS_SQL = [
-    CREATE_TICKER_READINESS_ETF_CONSTITUENTS_VIEW_SQL,
-    CREATE_TICKER_READINESS_VIEW_SQL,
-]
 
 COPY_PUBLIC_HOLDINGS_SQL = """
 insert into source_cache.etf_holdings (
@@ -683,6 +601,7 @@ def apply_plan(
     dependencies = list(dependencies or [])
     _validate_apply_safe(states, dependencies=dependencies)
     by_name = {state.qualified_name: state for state in states}
+    captured_views = _capture_known_dependent_views(conn, dependencies)
     _execute(conn, "create schema if not exists source_cache")
     for statement in DROP_DEPENDENT_VIEWS_SQL:
         if _should_drop_dependent_view(statement, dependencies):
@@ -707,9 +626,9 @@ def apply_plan(
     if by_name["public.etf_themes"].relkind:
         _execute(conn, COPY_PUBLIC_THEMES_SQL)
     _execute(conn, REFRESH_READINESS_SQL)
-    for statement in CREATE_DEPENDENT_VIEWS_SQL:
-        if _known_dependencies(dependencies):
-            _execute(conn, statement)
+    for view in _captured_views_in_recreate_order(captured_views):
+        _execute(conn, view.create_sql)
+    _validate_recreated_view_columns(conn, captured_views)
     _execute(conn, _grant_sql(backend_read_roles))
     if drop_old_public:
         for statement in DROP_OLD_PUBLIC_SQL:
@@ -858,6 +777,78 @@ def _count_rows(conn: Any, *, schema_name: str, table_name: str) -> tuple[int | 
         return rows, None
 
 
+def _capture_known_dependent_views(conn: Any, dependencies: list[DependencyState]) -> list[CapturedView]:
+    views: list[CapturedView] = []
+    for name in _known_dependent_view_names(_known_dependencies(dependencies)):
+        schema_name, view_name = name.split(".", 1)
+        definition = _fetch_view_definition(conn, schema_name=schema_name, view_name=view_name)
+        columns = _fetch_view_columns(conn, schema_name=schema_name, view_name=view_name)
+        if not definition.strip():
+            raise RuntimeError(f"Cannot capture dependent view definition for {name}.")
+        if not columns:
+            raise RuntimeError(f"Cannot capture dependent view columns for {name}.")
+        views.append(
+            CapturedView(
+                schema_name=schema_name,
+                view_name=view_name,
+                definition=definition,
+                columns=tuple(columns),
+            )
+        )
+    return views
+
+
+def _fetch_view_definition(conn: Any, *, schema_name: str, view_name: str) -> str:
+    with conn.cursor() as cur:
+        try:
+            cur.execute(
+                """
+                select pg_get_viewdef(c.oid, true)
+                from pg_class c
+                join pg_namespace n on n.oid = c.relnamespace
+                where n.nspname = %s and c.relname = %s and c.relkind = 'v'
+                """,
+                (schema_name, view_name),
+            )
+            row = cur.fetchone()
+        except Exception as exc:
+            raise RuntimeError(f"Failed to capture dependent view definition for {schema_name}.{view_name}: {exc}") from exc
+    return str(row[0] if row else "")
+
+
+def _fetch_view_columns(conn: Any, *, schema_name: str, view_name: str) -> tuple[tuple[str, str, str], ...]:
+    with conn.cursor() as cur:
+        try:
+            cur.execute(
+                """
+                select column_name, data_type, udt_name
+                from information_schema.columns
+                where table_schema = %s and table_name = %s
+                order by ordinal_position
+                """,
+                (schema_name, view_name),
+            )
+            rows = cur.fetchall()
+        except Exception as exc:
+            raise RuntimeError(f"Failed to capture dependent view columns for {schema_name}.{view_name}: {exc}") from exc
+    return tuple((str(row[0]), str(row[1]), str(row[2])) for row in rows)
+
+
+def _captured_views_in_recreate_order(views: list[CapturedView]) -> list[CapturedView]:
+    by_name = {view.qualified_name: view for view in views}
+    return [by_name[name] for name in DEPENDENT_VIEW_RECREATE_ORDER if name in by_name]
+
+
+def _validate_recreated_view_columns(conn: Any, views: list[CapturedView]) -> None:
+    for view in views:
+        current = _fetch_view_columns(conn, schema_name=view.schema_name, view_name=view.view_name)
+        if current != view.columns:
+            raise RuntimeError(
+                "Recreated dependent view column contract changed: "
+                f"{view.qualified_name}; before={list(view.columns)}; after={list(current)}"
+            )
+
+
 def _require_apply_admin_role(conn: Any) -> None:
     with conn.cursor() as cur:
         try:
@@ -912,6 +903,10 @@ def _grant_sql(backend_read_roles: tuple[str, ...]) -> str:
 
 def _sql_literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def _quote_ident(value: str) -> str:
+    return '"' + str(value).replace('"', '""') + '"'
 
 
 def _known_dependencies(dependencies: list[DependencyState]) -> list[DependencyState]:

@@ -4,6 +4,78 @@ from pathlib import Path
 
 from scripts import reconcile_etf_canonical_schema as reconcile
 
+TICKER_READINESS_COLUMNS = (
+    ("symbol", "text", "text"),
+    ("name", "text", "text"),
+    ("registry_key", "text", "text"),
+    ("registry_status", "text", "text"),
+    ("validation_status", "text", "text"),
+    ("promotion_status", "text", "text"),
+    ("validation_reason", "text", "text"),
+    ("has_prices", "boolean", "bool"),
+    ("price_row_count", "integer", "int4"),
+    ("first_price_date", "date", "date"),
+    ("last_price_date", "date", "date"),
+    ("has_technicals", "boolean", "bool"),
+    ("technical_row_count", "integer", "int4"),
+    ("first_technical_date", "date", "date"),
+    ("last_technical_date", "date", "date"),
+    ("has_fundamentals", "boolean", "bool"),
+    ("has_earnings", "boolean", "bool"),
+    ("has_scorecard", "boolean", "bool"),
+    ("latest_scorecard_as_of", "date", "date"),
+    ("is_tracked", "boolean", "bool"),
+    ("is_scorecard_ready", "boolean", "bool"),
+    ("coverage_state", "text", "text"),
+    ("missing_inputs", "ARRAY", "_text"),
+    ("candidate_sources", "ARRAY", "_text"),
+    ("computed_at", "timestamp with time zone", "timestamptz"),
+)
+
+ETF_CONSTITUENT_COLUMNS = (
+    ("symbol", "text", "text"),
+    ("etf_symbol", "text", "text"),
+    ("source", "text", "text"),
+)
+
+TICKER_READINESS_DEFINITION = """
+select
+  symbol,
+  name,
+  registry_key,
+  registry_status,
+  validation_status,
+  promotion_status,
+  validation_reason,
+  has_prices,
+  price_row_count,
+  first_price_date,
+  last_price_date,
+  has_technicals,
+  technical_row_count,
+  first_technical_date,
+  last_technical_date,
+  has_fundamentals,
+  has_earnings,
+  has_scorecard,
+  latest_scorecard_as_of,
+  is_tracked,
+  is_scorecard_ready,
+  coverage_state,
+  missing_inputs,
+  candidate_sources,
+  computed_at
+from feature_store.current_ticker_readiness_source
+"""
+
+ETF_CONSTITUENT_DEFINITION = """
+select
+  upper(h.holding_symbol) as symbol,
+  upper(h.etf_ticker) as etf_symbol,
+  'etf_holdings'::text as source
+from source_cache.etf_holdings h
+"""
+
 
 def test_dry_run_plan_detects_old_views_and_public_tables() -> None:
     states = _old_live_states()
@@ -40,6 +112,7 @@ def test_apply_replaces_views_creates_writable_tables_and_copies_rows() -> None:
 
     sql = conn.normalized_sql
     assert "cascade" not in sql
+    assert sql.index("select pg_get_viewdef") < sql.index("drop view if exists feature_store.ticker_readiness")
     assert sql.index("drop view if exists feature_store.ticker_readiness") < sql.index(
         "drop view if exists feature_store.ticker_readiness_etf_constituents"
     )
@@ -57,11 +130,25 @@ def test_apply_replaces_views_creates_writable_tables_and_copies_rows() -> None:
     assert "from public.etf_themes" in sql
     assert "truncate table source_cache.etf_theme_readiness" in sql
     assert "insert into source_cache.etf_theme_readiness" in sql
-    assert "create view feature_store.ticker_readiness_etf_constituents as" in sql
-    assert "create view feature_store.ticker_readiness as" in sql
-    assert sql.index("create view feature_store.ticker_readiness_etf_constituents as") < sql.index(
-        "create view feature_store.ticker_readiness as"
+    assert 'create view "feature_store"."ticker_readiness_etf_constituents" as' in sql
+    assert 'create view "feature_store"."ticker_readiness" as' in sql
+    assert "from feature_store.current_ticker_readiness_source" in sql
+    assert sql.index('create view "feature_store"."ticker_readiness_etf_constituents" as') < sql.index(
+        'create view "feature_store"."ticker_readiness" as'
     )
+
+
+def test_live_like_ticker_readiness_contract_is_preserved_after_apply() -> None:
+    conn = RecordingConnection()
+
+    reconcile.apply_plan(conn, states=_old_live_states(), dependencies=_known_dependency_states())
+
+    assert conn.columns_by_view[("feature_store", "ticker_readiness")] == TICKER_READINESS_COLUMNS
+    assert "registry_key" in conn.normalized_sql
+    assert "candidate_sources" in conn.normalized_sql
+    assert "readiness_status" not in conn.normalized_sql
+    assert "market_data_available" not in conn.normalized_sql
+    assert conn.column_fetch_counts[("feature_store", "ticker_readiness")] >= 2
 
 
 def test_apply_creates_readiness_rows_from_prices_and_technicals_contract() -> None:
@@ -92,6 +179,15 @@ def test_apply_grants_are_conditional_for_worker_and_backend_read_roles() -> Non
     assert "grant select, insert, update, delete on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness to finance_data_ops_worker" in sql
     assert "foreach read_role in array array['finance_backend_read', 'backend_read'] loop" in sql
     assert "grant select on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness to %i" in sql
+
+
+def test_reconciler_does_not_hardcode_feature_store_ticker_readiness_definition() -> None:
+    script = Path("scripts/reconcile_etf_canonical_schema.py").read_text()
+
+    assert "CREATE_TICKER_READINESS_VIEW_SQL" not in script
+    assert "readiness_status" not in script
+    assert "market_data_available" not in script
+    assert "pg_get_viewdef" in script
 
 
 def test_unexpected_dependencies_fail_with_manual_review_and_no_cascade() -> None:
@@ -220,6 +316,15 @@ class RecordingConnection:
         self.current_user = current_user
         self.session_user = session_user or current_user
         self.ddl_capable = ddl_capable
+        self.definitions_by_view = {
+            ("feature_store", "ticker_readiness"): TICKER_READINESS_DEFINITION,
+            ("feature_store", "ticker_readiness_etf_constituents"): ETF_CONSTITUENT_DEFINITION,
+        }
+        self.columns_by_view = {
+            ("feature_store", "ticker_readiness"): TICKER_READINESS_COLUMNS,
+            ("feature_store", "ticker_readiness_etf_constituents"): ETF_CONSTITUENT_COLUMNS,
+        }
+        self.column_fetch_counts: dict[tuple[str, str], int] = {}
 
     def cursor(self) -> "RecordingCursor":
         return RecordingCursor(self)
@@ -246,10 +351,20 @@ class RecordingCursor:
             raise RuntimeError("simulated sql failure")
         if "select current_user" in normalized and "session_user" in normalized:
             self._rows = [(self.conn.current_user, self.conn.session_user, self.conn.ddl_capable)]
+        elif "select pg_get_viewdef" in normalized:
+            key = (str(params[0]), str(params[1])) if params else ("", "")
+            self._rows = [(self.conn.definitions_by_view.get(key, ""),)]
+        elif "from information_schema.columns" in normalized:
+            key = (str(params[0]), str(params[1])) if params else ("", "")
+            self.conn.column_fetch_counts[key] = self.conn.column_fetch_counts.get(key, 0) + 1
+            self._rows = list(self.conn.columns_by_view.get(key, ()))
         self.conn.statements.append(statement)
 
     def fetchone(self) -> tuple[object, ...] | None:
         return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return list(self._rows)
 
 
 def _old_live_states() -> list[reconcile.ObjectState]:
