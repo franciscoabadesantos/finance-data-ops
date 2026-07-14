@@ -120,11 +120,12 @@ Entity identity V0 dry-run:
 ```bash
 python scripts/build_entity_identity.py --source fixtures
 python scripts/build_entity_identity.py --source postgres --symbols SAP,SAP.DE --offline
+python scripts/measure_entity_identity_chain.py --source fixtures
 ```
 
 Entity Layer V0 is side-by-side only. OpenFIGI is the main listing/security identity source; GLEIF/LEI is optional enrichment and is not required for V0. `feature_store.entity_attributes_static` remains a metadata read model and must not be treated as entity master. No product/read path uses `feature_store.entity_master` or `feature_store.entity_listing` yet, no command autonomously onboards symbols, and no price series are merged across listings. Future consumers should migrate only after the entity layer has been validated.
 
-OpenFIGI ticker mapping is not sufficient by itself for company/entity grouping. V0 treats ticker-mapping FIGIs as listing/security identity and emits audit rows when company-level identity is missing. True grouping, such as `SAP`/`SAP.DE`, requires a strong company-level identifier from LEI/GLEIF, a safe ISIN policy, an OpenFIGI issuer/legal-entity field or endpoint, or a future curated/manual review path.
+OpenFIGI ticker mapping is not sufficient by itself for company/entity grouping. V0 treats ticker-mapping FIGIs as listing/security identity and emits audit rows when company-level identity is missing. V0.1 measures the concrete `listing -> ISIN -> LEI -> canonical entity` path using provider ISIN enrichment and GLEIF ISIN-to-LEI mapping. GLEIF coverage is partial, and ADR grouping is empirical because an ADR ISIN can map to the depositary rather than the underlying issuer. `--apply-cache` on the measurement command may write raw cache rows only; entity tables remain unpublished until the acceptance set proves the chain.
 
 ## Prefect orchestration
 

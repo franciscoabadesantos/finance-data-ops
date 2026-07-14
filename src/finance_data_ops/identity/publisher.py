@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from finance_data_ops.identity.audit import audit_rows
+from finance_data_ops.identity.chain import EntityChainMeasurement
 from finance_data_ops.identity.models import EntityListingRecord, EntityRecord, IdentityAuditRecord, IdentityBuildResult
 from finance_data_ops.publish.client import Publisher
 
@@ -35,6 +36,30 @@ def publish_entity_identity(
         audit_rows(result.audits),
     )
     return outputs
+
+
+def publish_entity_identity_raw_caches(
+    *,
+    publisher: Publisher,
+    measurement: EntityChainMeasurement,
+) -> dict[str, Any]:
+    return {
+        "source_cache.openfigi_mapping_raw": publisher.upsert(
+            "source_cache.openfigi_mapping_raw",
+            measurement.openfigi_cache_rows,
+            on_conflict="request_hash",
+        ),
+        "source_cache.listing_isin_raw": publisher.upsert(
+            "source_cache.listing_isin_raw",
+            measurement.isin_cache_rows,
+            on_conflict="symbol,provider",
+        ),
+        "source_cache.gleif_isin_lei_raw": publisher.upsert(
+            "source_cache.gleif_isin_lei_raw",
+            measurement.gleif_cache_rows,
+            on_conflict="isin",
+        ),
+    }
 
 
 def entity_master_rows(records: list[EntityRecord]) -> list[dict[str, Any]]:

@@ -125,11 +125,13 @@ Compatibility note:
 
 - `source_cache.openfigi_mapping_raw` (raw/cache table for OpenFIGI mapping requests and responses)
 - `source_cache.gleif_entity_raw` (optional future LEI enrichment cache)
+- `source_cache.listing_isin_raw` (raw/cache table for provider listing-to-ISIN enrichment)
+- `source_cache.gleif_isin_lei_raw` (raw/cache table for GLEIF ISIN-to-LEI enrichment)
 - `feature_store.entity_master` (canonical company/legal entity read model)
 - `feature_store.entity_listing` (one row per provider/listing symbol mapped to an entity)
 - `feature_store.entity_identity_audit` (append-only audit rows for unresolved, ambiguous, or conflicting identity cases)
 
-Entity identity V0 is side-by-side only. OpenFIGI ticker mapping is the main listing/security identity source, but it is not sufficient alone for company/entity grouping. Ticker-mapping FIGIs identify securities/listings; company grouping requires a strong company-level identifier such as LEI/GLEIF, a safe ISIN policy, an OpenFIGI issuer/legal-entity field or endpoint, or a future curated/manual review path. `feature_store.entity_attributes_static` is still a metadata read model, not entity master. Existing product/read paths, frontend search, `ticker_readiness`, prices, technicals, scorecards, and relationship edges do not consume these tables yet. Listings remain separate price series even when they map to the same entity, and universe growth remains human-supervised.
+Entity identity V0 is side-by-side only. OpenFIGI ticker mapping is the main listing/security identity source, but it is not sufficient alone for company/entity grouping. Ticker-mapping FIGIs identify securities/listings. Company grouping requires the measured `listing -> ISIN -> LEI` path or an equivalent strong company-level identifier. ISIN alone identifies a security/instrument; LEI groups the legal entity. GLEIF coverage is partial, and ADR grouping is empirical because an ADR ISIN can map to the depositary rather than the underlying issuer. `feature_store.entity_attributes_static` is still a metadata read model, not entity master. Existing product/read paths, frontend search, `ticker_readiness`, prices, technicals, scorecards, and relationship edges do not consume these tables yet. Entity tables remain unpublished until the acceptance set proves the chain.
 
 Macro/release asset keys in `data_asset_status` are required:
 

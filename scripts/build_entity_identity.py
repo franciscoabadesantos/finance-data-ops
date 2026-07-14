@@ -63,9 +63,10 @@ def main() -> None:
     summary["source"] = args.source
 
     if args.apply:
-        settings.require_database()
-        publisher = PostgresPublisher(database_dsn=settings.database_dsn)
-        summary["publish"] = publish_entity_identity(publisher=publisher, result=result)
+        raise RuntimeError(
+            "--apply is disabled for Entity Layer V0.1. Use scripts/measure_entity_identity_chain.py "
+            "--apply-cache to write raw cache tables only."
+        )
     else:
         publisher = RecordingPublisher()
         summary["planned_writes"] = {
@@ -82,7 +83,7 @@ def main() -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build side-by-side Entity Layer V0 identity rows.")
-    parser.add_argument("--apply", action="store_true", help="Write new entity identity tables. Omitted means dry-run.")
+    parser.add_argument("--apply", action="store_true", help="Disabled in V0.1; entity table writes are not allowed yet.")
     parser.add_argument("--symbols", action="append", default=[], help="Optional comma-separated symbol subset.")
     parser.add_argument("--source", choices=["fixtures", "postgres", "local"], default="fixtures")
     parser.add_argument("--cache-root", default=None)

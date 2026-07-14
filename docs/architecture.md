@@ -84,6 +84,8 @@ Release timing semantics:
 - `etf_holding_onboarding_identity`
 - `source_cache.openfigi_mapping_raw`
 - `source_cache.gleif_entity_raw`
+- `source_cache.listing_isin_raw`
+- `source_cache.gleif_isin_lei_raw`
 - `feature_store.entity_master`
 - `feature_store.entity_listing`
 - `feature_store.entity_identity_audit`
@@ -92,7 +94,7 @@ Data Ops owns provider symbology for frontier/onboarding candidates. Backend ser
 `etf_holding_onboarding_identity` as a read model and pass through `onboard_symbol`; suffix and listing
 venue rules live in `finance_data_ops.identity`.
 
-Entity identity V0 is an auditable side-by-side layer. A company/entity is not a ticker: one entity can have many listings, and listings retain their own symbol, venue, MIC, currency, country, provider identity, calendar, and price series. OpenFIGI ticker mapping provides listing/security identity; it does not by itself solve company grouping for cases such as `SAP`/`SAP.DE`, `ASML`/`ASML.AS`, or `NVO`/`NOVO-B.CO`. Entity grouping requires a strong company-level identifier from LEI/GLEIF, a safe ISIN policy, an OpenFIGI issuer/legal-entity source, or a future curated/manual review path. No product read path uses the entity layer yet, and no autonomous onboarding or cross-listing price blending is allowed.
+Entity identity V0 is an auditable side-by-side layer. A company/entity is not a ticker: one entity can have many listings, and listings retain their own symbol, venue, MIC, currency, country, provider identity, calendar, and price series. OpenFIGI ticker mapping provides listing/security identity; it does not by itself solve company grouping for cases such as `SAP`/`SAP.DE`, `ASML`/`ASML.AS`, or `NVO`/`NOVO-B.CO`. V0.1 measures `listing -> ISIN -> LEI -> canonical entity`; ISIN alone is security identity, while LEI is the company-level grouping key when present. GLEIF hit rate and ADR behavior must be measured because ADR ISINs can map to depositary entities. No product read path uses the entity layer yet, no entity tables are published from the measurement command, and no autonomous onboarding or cross-listing price blending is allowed.
 
 ## Runtime source-of-truth contract
 

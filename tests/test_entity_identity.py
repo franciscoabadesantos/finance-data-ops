@@ -401,9 +401,13 @@ def test_runtime_schema_contains_entity_layer_tables_indexes_and_grants() -> Non
     for snippet in [
         "create table if not exists source_cache.openfigi_mapping_raw",
         "create table if not exists source_cache.gleif_entity_raw",
+        "create table if not exists source_cache.listing_isin_raw",
+        "create table if not exists source_cache.gleif_isin_lei_raw",
         "create table if not exists feature_store.entity_master",
         "create table if not exists feature_store.entity_listing",
         "create table if not exists feature_store.entity_identity_audit",
+        "idx_listing_isin_raw_isin",
+        "idx_gleif_isin_lei_raw_lei",
         "idx_entity_listing_entity_id",
         "idx_entity_listing_isin",
         "idx_entity_listing_figi",
