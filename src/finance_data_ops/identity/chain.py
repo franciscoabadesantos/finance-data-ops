@@ -79,6 +79,9 @@ def measure_entity_identity_chain(
     gleif_records: list[GleifIsinLeiRecord],
     gleif_lei_isin_records: list[GleifLeiIsinRecord] | None = None,
     gleif_legal_name_records: list[GleifLegalNameRecord] | None = None,
+    gleif_lei_expansion_request_leis: list[str] | None = None,
+    gleif_lei_expansion_request_origin_leis: dict[str, list[str]] | None = None,
+    gleif_lei_expansion_excluded_origin_leis: dict[str, list[str]] | None = None,
     pairs: list[tuple[str, str, str]] | None = None,
     batch_split_retries: int = 0,
 ) -> EntityChainMeasurement:
@@ -90,6 +93,8 @@ def measure_entity_identity_chain(
     legal_name_records = {
         _symbol(record.normalized_query_name): record for record in (gleif_legal_name_records or [])
     }
+    lei_expansion_request_leis = [_symbol(lei) for lei in (gleif_lei_expansion_request_leis or []) if _symbol(lei)]
+    lei_expansion_request_set = set(lei_expansion_request_leis)
     selected_pairs = pairs or _pairs_for_symbols(sorted(candidates_by_symbol))
 
     base_rows = []
@@ -109,6 +114,7 @@ def measure_entity_identity_chain(
         openfigi_by_symbol=openfigi_by_symbol,
         gleif_by_isin=gleif_by_isin,
         lei_expansions=lei_expansions,
+        lei_expansion_request_set=lei_expansion_request_set,
         legal_name_records=legal_name_records,
     )
     rows_by_symbol = {row["symbol"]: row for row in symbol_rows}
@@ -129,6 +135,10 @@ def measure_entity_identity_chain(
         pair_rows=pair_rows,
         batch_split_retries=batch_split_retries,
         lei_expanded_isin_count=lei_expanded_isin_count,
+        lei_expansions=lei_expansions,
+        lei_expansion_request_leis=lei_expansion_request_leis,
+        lei_expansion_request_origin_leis=gleif_lei_expansion_request_origin_leis or {},
+        lei_expansion_excluded_origin_leis=gleif_lei_expansion_excluded_origin_leis or {},
         name_anchor_precision_audit=precision_audit,
     )
     return EntityChainMeasurement(
@@ -430,6 +440,14 @@ def _symbol_row(
         "candidate_headquarters_country": "",
         "candidate_entity_status": "",
         "candidate_registration_status": "",
+        "legal_name_candidate_lei": "",
+        "legal_name_candidate_lei_in_expansion_request": False,
+        "legal_name_candidate_lei_expansion_status": "",
+        "legal_name_candidate_lei_expansion_error": "",
+        "legal_name_candidate_lei_expansion_isin_count": 0,
+        "legal_name_candidate_lei_expansion_isin_sample": [],
+        "legal_name_candidate_compatible_isin_count": 0,
+        "legal_name_candidate_compatible_isin_sample": [],
         "direct_prefix_mismatch_candidate_status": "not_requested",
         "direct_prefix_mismatch_candidate_reject_reason": "",
         "direct_prefix_mismatch_status": "not_requested",
@@ -446,6 +464,7 @@ def _attach_rows_via_lei_expansion(
     openfigi_by_symbol: dict[str, OpenFigiMapping],
     gleif_by_isin: dict[str, GleifIsinLeiRecord],
     lei_expansions: dict[str, GleifLeiIsinRecord],
+    lei_expansion_request_set: set[str],
     legal_name_records: dict[str, GleifLegalNameRecord],
 ) -> list[dict[str, Any]]:
     direct_lei_names: dict[str, str] = {}
@@ -549,6 +568,7 @@ def _attach_rows_via_lei_expansion(
                 candidate=candidate,
                 openfigi=openfigi,
                 lei_expansions=lei_expansions,
+                lei_expansion_request_set=lei_expansion_request_set,
                 legal_name_records=legal_name_records,
             )
             _apply_name_anchor_diagnostics(attached, name_evaluation)
@@ -741,6 +761,7 @@ def _evaluate_name_anchor(
     candidate: ListingCandidate,
     openfigi: OpenFigiMapping | None,
     lei_expansions: dict[str, GleifLeiIsinRecord],
+    lei_expansion_request_set: set[str],
     legal_name_records: dict[str, GleifLegalNameRecord],
 ) -> dict[str, Any]:
     listing_name = _best_listing_name(candidate, openfigi)
@@ -763,6 +784,14 @@ def _evaluate_name_anchor(
         "candidate_headquarters_country": "",
         "candidate_entity_status": "",
         "candidate_registration_status": "",
+        "legal_name_candidate_lei": "",
+        "legal_name_candidate_lei_in_expansion_request": False,
+        "legal_name_candidate_lei_expansion_status": "",
+        "legal_name_candidate_lei_expansion_error": "",
+        "legal_name_candidate_lei_expansion_isin_count": 0,
+        "legal_name_candidate_lei_expansion_isin_sample": [],
+        "legal_name_candidate_compatible_isin_count": 0,
+        "legal_name_candidate_compatible_isin_sample": [],
         "compatible_expanded_isin_count": 0,
         "matched_compatible_isins": [],
         "compatible_isin_gate_status": "not_evaluated",
@@ -839,6 +868,13 @@ def _evaluate_name_anchor(
     for name_candidate in country_candidates:
         lei = _symbol(name_candidate.get("lei"))
         expansion = lei_expansions.get(lei)
+        _copy_legal_name_candidate_expansion_diagnostics(
+            base,
+            candidate=candidate,
+            name_candidate=name_candidate,
+            expansion=expansion,
+            requested=lei in lei_expansion_request_set,
+        )
         if not expansion or expansion.status != "success":
             continue
         candidate_isins = _compatible_isins_for_listing(candidate=candidate, isins=expansion.isin_list)
@@ -881,7 +917,16 @@ def _evaluate_name_anchor(
         )
         return base
 
-    _copy_name_candidate_diagnostics(base, country_candidates[0])
+    first_country_candidate = country_candidates[0]
+    first_lei = _symbol(first_country_candidate.get("lei"))
+    _copy_legal_name_candidate_expansion_diagnostics(
+        base,
+        candidate=candidate,
+        name_candidate=first_country_candidate,
+        expansion=lei_expansions.get(first_lei),
+        requested=first_lei in lei_expansion_request_set,
+    )
+    _copy_name_candidate_diagnostics(base, first_country_candidate)
     base["status"] = "rejected"
     base["reject_reason"] = "gleif_lei_found_but_no_compatible_isin"
     base["compatible_isin_gate_status"] = "rejected"
@@ -898,6 +943,14 @@ def _apply_name_anchor_diagnostics(row: dict[str, Any], evaluation: dict[str, An
         "candidate_headquarters_country",
         "candidate_entity_status",
         "candidate_registration_status",
+        "legal_name_candidate_lei",
+        "legal_name_candidate_lei_in_expansion_request",
+        "legal_name_candidate_lei_expansion_status",
+        "legal_name_candidate_lei_expansion_error",
+        "legal_name_candidate_lei_expansion_isin_count",
+        "legal_name_candidate_lei_expansion_isin_sample",
+        "legal_name_candidate_compatible_isin_count",
+        "legal_name_candidate_compatible_isin_sample",
         "compatible_expanded_isin_count",
         "matched_compatible_isins",
         "derived_listing_country",
@@ -913,6 +966,11 @@ def _apply_name_anchor_diagnostics(row: dict[str, Any], evaluation: dict[str, An
             "compatible_expanded_isin_count",
             "compatible_isin_candidate_count",
             "expected_listing_country_prefix_present",
+            "legal_name_candidate_lei_in_expansion_request",
+            "legal_name_candidate_lei_expansion_isin_count",
+            "legal_name_candidate_compatible_isin_count",
+            "legal_name_candidate_lei_expansion_isin_sample",
+            "legal_name_candidate_compatible_isin_sample",
         }:
             row[key] = evaluation[key]
     row["legal_name_anchor_status"] = evaluation.get("status") or ""
@@ -928,6 +986,35 @@ def _copy_name_candidate_diagnostics(target: dict[str, Any], name_candidate: dic
             "candidate_headquarters_country": _symbol(name_candidate.get("headquarters_country")),
             "candidate_entity_status": _symbol(name_candidate.get("entity_status")),
             "candidate_registration_status": _symbol(name_candidate.get("registration_status")),
+        }
+    )
+
+
+def _copy_legal_name_candidate_expansion_diagnostics(
+    target: dict[str, Any],
+    *,
+    candidate: ListingCandidate,
+    name_candidate: dict[str, Any],
+    expansion: GleifLeiIsinRecord | None,
+    requested: bool,
+) -> None:
+    compatible_isins = (
+        _compatible_isins_for_listing(candidate=candidate, isins=expansion.isin_list)
+        if expansion and expansion.status == "success"
+        else []
+    )
+    target.update(
+        {
+            "legal_name_candidate_lei": _symbol(name_candidate.get("lei")),
+            "legal_name_candidate_lei_in_expansion_request": bool(requested),
+            "legal_name_candidate_lei_expansion_status": (
+                expansion.status if expansion else ("missing_response" if requested else "not_requested")
+            ),
+            "legal_name_candidate_lei_expansion_error": expansion.error_message if expansion else "",
+            "legal_name_candidate_lei_expansion_isin_count": len(expansion.isin_list) if expansion else 0,
+            "legal_name_candidate_lei_expansion_isin_sample": _sample_isins(expansion.isin_list if expansion else []),
+            "legal_name_candidate_compatible_isin_count": len(compatible_isins),
+            "legal_name_candidate_compatible_isin_sample": _sample_isins(compatible_isins),
         }
     )
 
@@ -1003,6 +1090,10 @@ def _summary(
     pair_rows: list[dict[str, Any]],
     batch_split_retries: int,
     lei_expanded_isin_count: int,
+    lei_expansions: dict[str, GleifLeiIsinRecord],
+    lei_expansion_request_leis: list[str],
+    lei_expansion_request_origin_leis: dict[str, list[str]],
+    lei_expansion_excluded_origin_leis: dict[str, list[str]],
     name_anchor_precision_audit: list[dict[str, Any]],
 ) -> dict[str, Any]:
     candidate_count = len(symbol_rows)
@@ -1033,6 +1124,10 @@ def _summary(
     review_count = decision_bucket_counts.get("needs_manual_review", 0)
     accepted_pair_rows = [row for row in pair_rows if not _is_guardrail_pair(row)]
     guardrail_pair_rows = [row for row in pair_rows if _is_guardrail_pair(row)]
+    legal_name_candidate_leis = _unique_ordered(
+        [_symbol(lei) for lei in lei_expansion_request_origin_leis.get("legal_name_candidate", [])]
+    )
+    expansion_request_set = set(lei_expansion_request_leis)
     return {
         "candidate_count": candidate_count,
         "attached_count": len(attached),
@@ -1046,6 +1141,33 @@ def _summary(
         "anchor_isin_count": isin_found,
         "anchor_lei_count": len({_symbol(row.get("direct_lei")) for row in direct_attached if row.get("direct_lei")}),
         "lei_expanded_isin_count": int(lei_expanded_isin_count),
+        "gleif_lei_expansion_requested_count": len(lei_expansion_request_leis),
+        "gleif_lei_expansion_requested_by_origin": {
+            origin: len(_unique_ordered([_symbol(lei) for lei in leis]))
+            for origin, leis in sorted(lei_expansion_request_origin_leis.items())
+        },
+        "gleif_lei_expansion_excluded_by_origin": {
+            origin: len(_unique_ordered([_symbol(lei) for lei in leis]))
+            for origin, leis in sorted(lei_expansion_excluded_origin_leis.items())
+        },
+        "gleif_lei_expansion_excluded_lei_sample_by_origin": {
+            origin: _sample_text(_unique_ordered([_symbol(lei) for lei in leis]))
+            for origin, leis in sorted(lei_expansion_excluded_origin_leis.items())
+        },
+        "gleif_lei_expansion_requested_lei_sample": _sample_text(lei_expansion_request_leis),
+        "gleif_lei_expansion_legal_name_candidate_requested_count": len(
+            [lei for lei in legal_name_candidate_leis if lei in expansion_request_set]
+        ),
+        "gleif_lei_expansion_legal_name_candidate_requested_sample": _sample_text(
+            [lei for lei in legal_name_candidate_leis if lei in expansion_request_set]
+        ),
+        "gleif_lei_expansion_legal_name_candidate_not_requested_count": len(
+            [lei for lei in legal_name_candidate_leis if lei not in expansion_request_set]
+        ),
+        "gleif_lei_expansion_legal_name_candidate_not_requested_sample": _sample_text(
+            [lei for lei in legal_name_candidate_leis if lei not in expansion_request_set]
+        ),
+        "gleif_lei_expansion_status_counts": _record_status_counts(list(lei_expansions.values())),
         "listings_attached_direct_isin": len(direct_attached),
         "listings_attached_direct_isin_prefix_mismatch_name_confirmed": len(direct_prefix_mismatch_attached),
         "listings_attached_via_lei_expansion": len(expansion_attached),
@@ -1417,6 +1539,18 @@ def _compatible_isins_for_listing(*, candidate: ListingCandidate, isins: list[st
 
 def _sample_isins(isins: list[str] | set[str] | tuple[str, ...], *, limit: int = MAX_ISIN_OUTPUT_SAMPLE) -> list[str]:
     return sorted(_symbol(isin) for isin in isins if _symbol(isin))[:limit]
+
+
+def _sample_text(values: list[str] | set[str] | tuple[str, ...], *, limit: int = MAX_ISIN_OUTPUT_SAMPLE) -> list[str]:
+    return sorted(_symbol(value) for value in values if _symbol(value))[:limit]
+
+
+def _record_status_counts(records: list[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        status = str(getattr(record, "status", "") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _unique_ordered(values: list[str]) -> list[str]:

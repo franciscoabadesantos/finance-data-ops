@@ -115,14 +115,13 @@ def main() -> None:
         for candidate in record.candidates
         if candidate.get("lei")
     ]
-    gleif_lei_isin_records = gleif_client.lookup_lei_isins(
-        _gleif_lei_expansion_lookup_leis(
-            isin_records=isin_records,
-            candidates_by_symbol=candidates_by_symbol,
-            direct_lei_by_isin=direct_lei_by_isin,
-            legal_name_candidate_leis=legal_name_candidate_leis,
-        )
+    gleif_lei_expansion_plan = _gleif_lei_expansion_lookup_plan(
+        isin_records=isin_records,
+        candidates_by_symbol=candidates_by_symbol,
+        direct_lei_by_isin=direct_lei_by_isin,
+        legal_name_candidate_leis=legal_name_candidate_leis,
     )
+    gleif_lei_isin_records = gleif_client.lookup_lei_isins(gleif_lei_expansion_plan["request_leis"])
     measurement = measure_entity_identity_chain(
         candidates=candidates,
         openfigi_mappings=openfigi_mappings,
@@ -130,6 +129,9 @@ def main() -> None:
         gleif_records=gleif_records,
         gleif_lei_isin_records=gleif_lei_isin_records,
         gleif_legal_name_records=legal_name_records,
+        gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
+        gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
+        gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
         pairs=acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=openfigi_client.batch_split_retries,
     )
@@ -199,24 +201,52 @@ def _gleif_lei_expansion_lookup_leis(
     direct_lei_by_isin: dict[str, str],
     legal_name_candidate_leis: list[str],
 ) -> list[str]:
+    return _gleif_lei_expansion_lookup_plan(
+        isin_records=isin_records,
+        candidates_by_symbol=candidates_by_symbol,
+        direct_lei_by_isin=direct_lei_by_isin,
+        legal_name_candidate_leis=legal_name_candidate_leis,
+    )["request_leis"]
+
+
+def _gleif_lei_expansion_lookup_plan(
+    *,
+    isin_records,
+    candidates_by_symbol,
+    direct_lei_by_isin: dict[str, str],
+    legal_name_candidate_leis: list[str],
+) -> dict[str, object]:
     out: list[str] = []
     seen: set[str] = set()
+    origin_leis = {
+        "prefix_compatible_direct_anchor": [],
+        "legal_name_candidate": [],
+        "prefix_mismatch_isolated_candidate": [],
+    }
+    excluded_origin_leis = {"prefix_mismatch_isolated_candidate": []}
     for record in isin_records:
         if not _direct_isin_can_skip_legal_name(
             candidate=candidates_by_symbol.get(record.symbol),
             record=record,
             direct_lei_by_isin=direct_lei_by_isin,
         ):
+            if record.status == "suspect" and record.error_message in _PREFIX_MISMATCH_ISIN_REASONS:
+                mismatch_lei = direct_lei_by_isin.get(record.isin)
+                if mismatch_lei and mismatch_lei not in excluded_origin_leis["prefix_mismatch_isolated_candidate"]:
+                    excluded_origin_leis["prefix_mismatch_isolated_candidate"].append(mismatch_lei)
             continue
         lei = direct_lei_by_isin.get(record.isin)
         if lei and lei not in seen:
             out.append(lei)
             seen.add(lei)
+            origin_leis["prefix_compatible_direct_anchor"].append(lei)
     for lei in legal_name_candidate_leis:
+        if lei and lei not in origin_leis["legal_name_candidate"]:
+            origin_leis["legal_name_candidate"].append(lei)
         if lei and lei not in seen:
             out.append(lei)
             seen.add(lei)
-    return out
+    return {"request_leis": out, "origin_leis": origin_leis, "excluded_origin_leis": excluded_origin_leis}
 
 
 if __name__ == "__main__":

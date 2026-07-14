@@ -21,7 +21,7 @@ from finance_data_ops.identity.names import (
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
 from finance_data_ops.publish.client import RecordingPublisher
-from scripts.measure_entity_identity_chain import _gleif_lei_expansion_lookup_leis
+from scripts.measure_entity_identity_chain import _gleif_lei_expansion_lookup_leis, _gleif_lei_expansion_lookup_plan
 
 _PREFIX_MISMATCH_ISIN_REASONS = {
     "provider_returned_alternate_market_instrument",
@@ -55,6 +55,11 @@ def test_acceptance_fixture_chain_reports_symbol_pair_outcomes() -> None:
     assert summary["unresolved_no_lei_count"] == 0
     assert summary["name_anchor_precision_audit_count"] == 6
     assert summary["precision_audit_count"] == 6
+    assert summary["gleif_lei_expansion_requested_count"] == 7
+    assert summary["gleif_lei_expansion_requested_by_origin"]["prefix_compatible_direct_anchor"] == 4
+    assert summary["gleif_lei_expansion_requested_by_origin"]["legal_name_candidate"] == 3
+    assert summary["gleif_lei_expansion_requested_by_origin"]["prefix_mismatch_isolated_candidate"] == 0
+    assert summary["gleif_lei_expansion_status_counts"] == {"success": 7}
     assert summary["attached_count"] == 14
     assert summary["attached_rate"] == 1.0
     assert summary["fixable_free_count"] == 0
@@ -481,6 +486,12 @@ def test_direct_prefix_mismatch_does_not_skip_name_anchor_fallback() -> None:
         assert rows[symbol]["entity_attach_method"] == "name_anchor_confirmed"
         assert rows[symbol]["attachment_provenance"] == "name_anchor_confirmed"
         assert rows[symbol]["attachment_confidence"] == "medium"
+        assert rows[symbol]["legal_name_candidate_lei"]
+        assert rows[symbol]["legal_name_candidate_lei_in_expansion_request"] is True
+        assert rows[symbol]["legal_name_candidate_lei_expansion_status"] == "success"
+        assert rows[symbol]["legal_name_candidate_lei_expansion_isin_count"] > 0
+        assert rows[symbol]["legal_name_candidate_compatible_isin_count"] > 0
+        assert rows[symbol]["legal_name_candidate_compatible_isin_sample"]
     assert measurement.summary["listings_attached_name_anchor_confirmed"] == 5
 
 
@@ -494,6 +505,12 @@ def test_prefix_mismatch_lei_is_excluded_from_main_lei_expansion_lookup() -> Non
     ).enrich_candidates(list(candidates.values()))
     direct_lei_by_isin = {"IE00B4BNMY34": "DIRECTWRONGLEI1"}
 
+    plan = _gleif_lei_expansion_lookup_plan(
+        isin_records=isin_records,
+        candidates_by_symbol=candidates,
+        direct_lei_by_isin=direct_lei_by_isin,
+        legal_name_candidate_leis=["ALKSLEI000001"],
+    )
     lookup_leis = _gleif_lei_expansion_lookup_leis(
         isin_records=isin_records,
         candidates_by_symbol=candidates,
@@ -503,6 +520,8 @@ def test_prefix_mismatch_lei_is_excluded_from_main_lei_expansion_lookup() -> Non
 
     assert lookup_leis == ["ALKSLEI000001"]
     assert "DIRECTWRONGLEI1" not in lookup_leis
+    assert plan["origin_leis"]["prefix_mismatch_isolated_candidate"] == []
+    assert plan["excluded_origin_leis"]["prefix_mismatch_isolated_candidate"] == ["DIRECTWRONGLEI1"]
 
 
 def test_name_anchor_candidate_diagnostics_survive_missing_expansion_and_prefix_mismatch_failure() -> None:
@@ -528,6 +547,12 @@ def test_name_anchor_candidate_diagnostics_survive_missing_expansion_and_prefix_
     assert row["entity_attach_reason"] == "gleif_lei_found_but_no_compatible_isin"
     assert row["candidate_lei"] == "ALKSLEI000001"
     assert row["candidate_legal_name"] == "ALKERMES PLC"
+    assert row["legal_name_candidate_lei"] == "ALKSLEI000001"
+    assert row["legal_name_candidate_lei_in_expansion_request"] is True
+    assert row["legal_name_candidate_lei_expansion_status"] == "not_found"
+    assert row["legal_name_candidate_lei_expansion_isin_count"] == 0
+    assert row["legal_name_candidate_compatible_isin_count"] == 0
+    assert row["legal_name_candidate_compatible_isin_sample"] == []
     assert row["matched_compatible_isins"] == []
     assert row["direct_prefix_mismatch_status"] == "rejected"
     assert row["direct_prefix_mismatch_reject_reason"] == "direct_prefix_mismatch_name_unconfirmed"
@@ -1429,14 +1454,13 @@ def _fixture_measurement(
         for candidate in record.candidates
         if candidate.get("lei")
     ]
-    gleif_lei_isin_records = gleif.lookup_lei_isins(
-        _gleif_lei_expansion_lookup_leis(
-            isin_records=isin_records,
-            candidates_by_symbol=candidates_by_symbol,
-            direct_lei_by_isin=direct_lei_by_isin,
-            legal_name_candidate_leis=legal_name_candidate_leis,
-        )
+    gleif_lei_expansion_plan = _gleif_lei_expansion_lookup_plan(
+        isin_records=isin_records,
+        candidates_by_symbol=candidates_by_symbol,
+        direct_lei_by_isin=direct_lei_by_isin,
+        legal_name_candidate_leis=legal_name_candidate_leis,
     )
+    gleif_lei_isin_records = gleif.lookup_lei_isins(gleif_lei_expansion_plan["request_leis"])
     selected_symbols = [candidate.symbol for candidate in candidates]
     return measure_entity_identity_chain(
         candidates=candidates,
@@ -1445,6 +1469,9 @@ def _fixture_measurement(
         gleif_records=gleif_records,
         gleif_lei_isin_records=gleif_lei_isin_records,
         gleif_legal_name_records=legal_name_records,
+        gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
+        gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
+        gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
         pairs=pairs if pairs is not None else acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=openfigi.batch_split_retries,
     )
