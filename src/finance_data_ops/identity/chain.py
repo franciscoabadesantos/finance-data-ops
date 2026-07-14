@@ -2224,13 +2224,17 @@ def _heuristic_attach_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         conflict_flags = _entity_group_conflict_flags(group_rows)
         deterministic_support = _has_deterministic_attach_support(row)
+        strong_deterministic_isin_support = _has_strong_deterministic_isin_support(row=row, entity_lei=entity_lei)
         conservative_name_match = _has_conservative_name_match(
             row=row,
             normalized_listing_names=normalized_listing_names,
             normalized_legal_name=normalized_legal_name,
         )
         needs_name_match = method in HEURISTIC_ATTACH_METHODS
-        normalization_risk_blocks_publication = needs_name_match and _has_normalization_risk_flags(normalization_flags)
+        normalization_risk_blocks_publication = needs_name_match and _normalization_risk_blocks_publication(
+            normalization_flags=normalization_flags,
+            strong_deterministic_isin_support=strong_deterministic_isin_support,
+        )
         machine_safe = (
             deterministic_support
             and not any(conflict_flags.values())
@@ -2261,6 +2265,7 @@ def _heuristic_attach_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 **normalization_flags,
                 "conservative_name_match": conservative_name_match,
                 "deterministic_support": deterministic_support,
+                "strong_deterministic_isin_support": strong_deterministic_isin_support,
                 "matched_compatible_isins": list(row.get("matched_compatible_isins") or []),
                 "compatible_expanded_isin_count": int(row.get("compatible_expanded_isin_count") or 0),
                 "raw_isin": row.get("raw_isin") or row.get("foreign_issuer_raw_isin") or "",
@@ -2291,6 +2296,7 @@ def _heuristic_attach_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     deterministic_support,
                     conservative_name_match,
                     normalization_flags,
+                    strong_deterministic_isin_support,
                 ),
                 "evidence_payload": _audit_evidence_payload(row),
             }
@@ -2399,6 +2405,18 @@ def _has_normalization_risk_flags(row_or_flags: dict[str, Any]) -> bool:
     )
 
 
+def _normalization_risk_blocks_publication(
+    *,
+    normalization_flags: dict[str, bool],
+    strong_deterministic_isin_support: bool,
+) -> bool:
+    if normalization_flags.get("cjk_name_collapsed_to_latin_acronym") or normalization_flags.get("distinctive_tokens_removed"):
+        return True
+    if normalization_flags.get("normalized_name_too_short") or normalization_flags.get("normalized_name_acronym_only"):
+        return not strong_deterministic_isin_support
+    return False
+
+
 def _has_conservative_name_match(
     *,
     row: dict[str, Any],
@@ -2421,6 +2439,31 @@ def _has_deterministic_attach_support(row: dict[str, Any]) -> bool:
     if method in {"lei_expansion", "name_anchor_confirmed"}:
         return bool(row.get("matched_compatible_isins"))
     return False
+
+
+def _has_strong_deterministic_isin_support(*, row: dict[str, Any], entity_lei: str) -> bool:
+    known_isins = {
+        _symbol(row.get("isin")),
+        _symbol(row.get("raw_isin")),
+        _symbol(row.get("foreign_issuer_raw_isin")),
+    }
+    known_isins = {isin for isin in known_isins if isin}
+    if not known_isins:
+        return False
+    if entity_lei and _symbol(row.get("direct_lei")) == entity_lei:
+        return True
+    if entity_lei and _symbol(row.get("direct_prefix_mismatch_lei")) == entity_lei:
+        return True
+    expanded_or_matched = {
+        _symbol(isin)
+        for isin in (
+            list(row.get("matched_compatible_isins") or [])
+            + list(row.get("expanded_candidate_isins") or [])
+            + list(row.get("lei_expanded_isins") or [])
+        )
+        if _symbol(isin)
+    }
+    return bool(known_isins & expanded_or_matched)
 
 
 def _entity_group_conflict_flags(group_rows: list[dict[str, Any]]) -> dict[str, bool]:
@@ -2454,10 +2497,14 @@ def _audit_review_reason(
     deterministic_support: bool,
     conservative_name_match: bool,
     normalization_flags: dict[str, bool],
+    strong_deterministic_isin_support: bool,
 ) -> str:
     if any(conflict_flags.values()):
         return "conflicting_group_identity"
-    if _has_normalization_risk_flags(normalization_flags):
+    if _normalization_risk_blocks_publication(
+        normalization_flags=normalization_flags,
+        strong_deterministic_isin_support=strong_deterministic_isin_support,
+    ):
         return "name_normalization_requires_review"
     if not deterministic_support:
         return "missing_deterministic_support"

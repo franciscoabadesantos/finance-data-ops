@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from finance_data_ops.identity.chain import (
+    _heuristic_attach_audit,
     acceptance_fixture_candidates,
     acceptance_gleif_fixtures,
     acceptance_gleif_legal_name_fixtures,
@@ -2134,6 +2135,69 @@ def test_short_acronym_name_anchor_blocks_publication_gate_until_reviewed() -> N
     assert measurement.publication_gate["status"] == "blocked_pending_review"
     assert measurement.summary["cjk_apac_heuristic_attach_audit_count"] == 1
     assert measurement.cjk_apac_heuristic_attach_audit[0]["symbol"] == "6701.T"
+
+
+def test_acronym_name_anchor_is_machine_safe_with_direct_isin_lei_support() -> None:
+    audit = _heuristic_attach_audit(
+        [
+            {
+                "symbol": "CSL.AX",
+                "provider_symbol": "CSL.AX",
+                "entity_attach_method": "name_anchor_confirmed",
+                "entity_lei": "529900ECSECK5ZDQTE14",
+                "candidate_lei": "529900ECSECK5ZDQTE14",
+                "candidate_legal_name": "CSL LIMITED",
+                "internal_candidate_name": "CSL LTD",
+                "openfigi_name": "CSL LTD",
+                "listing_name_used_for_legal_name_search": "Csl Limited",
+                "legal_name_anchor_status": "confirmed",
+                "matched_compatible_isins": ["AU000000CSL8"],
+                "raw_isin": "AU000000CSL8",
+                "isin": "AU000000CSL8",
+                "direct_lei": "529900ECSECK5ZDQTE14",
+                "derived_listing_country": "AU",
+                "allowed_isin_prefixes": ["AU"],
+            }
+        ]
+    )
+
+    row = audit[0]
+
+    assert row["normalized_name_too_short"] is True
+    assert row["normalized_name_acronym_only"] is True
+    assert row["strong_deterministic_isin_support"] is True
+    assert row["review_status"] == "machine_verifiably_safe"
+    assert row["review_reason"] == ""
+
+
+def test_acronym_name_anchor_without_known_isin_support_still_requires_review() -> None:
+    audit = _heuristic_attach_audit(
+        [
+            {
+                "symbol": "6701.T",
+                "provider_symbol": "6701.T",
+                "entity_attach_method": "name_anchor_confirmed",
+                "entity_lei": "NEC-CORP-LEI",
+                "candidate_lei": "NEC-CORP-LEI",
+                "candidate_legal_name": "NEC CORPORATION",
+                "internal_candidate_name": "NEC CORP",
+                "openfigi_name": "NEC CORP",
+                "listing_name_used_for_legal_name_search": "Nec Corporation",
+                "legal_name_anchor_status": "confirmed",
+                "matched_compatible_isins": ["JP3733000008"],
+                "derived_listing_country": "JP",
+                "allowed_isin_prefixes": ["JP"],
+            }
+        ]
+    )
+
+    row = audit[0]
+
+    assert row["normalized_name_too_short"] is True
+    assert row["normalized_name_acronym_only"] is True
+    assert row["strong_deterministic_isin_support"] is False
+    assert row["review_status"] == "needs_review"
+    assert row["review_reason"] == "name_normalization_requires_review"
 
 
 def test_side_by_side_publisher_blocks_unreviewed_heuristic_gate() -> None:
