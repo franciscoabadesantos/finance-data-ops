@@ -138,10 +138,45 @@ class IdentityBuildResult:
                 )
         return {
             "resolved_entities": len([e for e in self.entities if e.resolution_status == "resolved"]),
+            "resolved_listings": len([listing for listing in self.listings if listing.resolution_status == "resolved"]),
             "entities": len(self.entities),
             "listings_mapped": len(self.listings),
-            "unresolved_symbols": list(self.unresolved_symbols),
-            "ambiguous_symbols": list(self.ambiguous_symbols),
+            "unresolved_symbols": len(self.unresolved_symbols),
+            "unresolved_symbol_list": list(self.unresolved_symbols),
+            "ambiguous_symbols": len(self.ambiguous_symbols),
+            "ambiguous_symbol_list": list(self.ambiguous_symbols),
+            "audit_suggestions": sum(
+                issue_counts.get(issue_type, 0)
+                for issue_type in (
+                    "possible_same_company_not_resolved",
+                    "same_name_different_security_identifier",
+                    "adr_home_candidate_missing_entity_identifier",
+                    "fuzzy_match_suggestion_not_resolved",
+                )
+            ),
+            "provider_symbol_normalized": issue_counts.get("provider_symbol_normalized", 0),
+            "openfigi_errors": len(
+                [
+                    row
+                    for row in self.openfigi_cache_rows
+                    if str(row.get("status") or "").strip().lower() == "error"
+                ]
+            ),
+            "openfigi_not_found": len(
+                [
+                    row
+                    for row in self.openfigi_cache_rows
+                    if str(row.get("status") or "").strip().lower() == "not_found"
+                ]
+            ),
+            "strong_entity_groups": len(
+                [
+                    entity
+                    for entity in self.entities
+                    if str(entity.metadata.get("identity_key_kind") or "") in {"legal_entity_id", "lei", "isin"}
+                ]
+            ),
+            "security_only_groups": issue_counts.get("security_only_group_not_resolved", 0),
             "primary_listing_decisions": primary_decisions,
             "audit_issue_counts": dict(sorted(issue_counts.items())),
         }

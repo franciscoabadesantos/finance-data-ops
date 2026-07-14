@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import time
 from dataclasses import replace
@@ -16,6 +17,41 @@ from finance_data_ops.identity.models import ListingCandidate, OpenFigiMapping, 
 OPENFIGI_MAPPING_URL = "https://api.openfigi.com/v3/mapping"
 DEFAULT_BATCH_SIZE = 25
 DEFAULT_REQUEST_SLEEP_SECONDS = 6.5
+
+_OPENFIGI_EXCH_CODE_BY_YAHOO_SUFFIX = {
+    ".AX": "AU",
+    ".AS": "NA",
+    ".CO": "DC",
+    ".DE": "GY",
+    ".HK": "HK",
+    ".L": "LN",
+    ".T": "JT",
+    ".TO": "CN",
+}
+
+_OPENFIGI_EXCH_CODE_BY_EXCHANGE = {
+    "AMEX": "US",
+    "ASE": "US",
+    "NASDAQ": "US",
+    "NMS": "US",
+    "NYQ": "US",
+    "NYSE": "US",
+    "PCX": "US",
+    "US": "US",
+}
+
+_OPENFIGI_EXCH_CODE_BY_MIC = {
+    "XAMS": "NA",
+    "XASX": "AU",
+    "XCSE": "DC",
+    "XETR": "GY",
+    "XHKG": "HK",
+    "XLON": "LN",
+    "XNYS": "US",
+    "XNAS": "US",
+    "XTKS": "JT",
+    "XTSE": "CN",
+}
 
 
 class OpenFigiClient:
@@ -92,21 +128,70 @@ class OpenFigiClient:
 
 
 def build_openfigi_request(candidate: ListingCandidate) -> OpenFigiRequest:
+    normalized = normalize_openfigi_request_inputs(
+        provider_symbol=candidate.provider_symbol or candidate.symbol,
+        exchange=candidate.exchange,
+        exchange_mic=candidate.exchange_mic,
+        country=candidate.country,
+        currency=candidate.currency,
+    )
     payload: dict[str, Any] = {
         "idType": "TICKER",
-        "idValue": candidate.provider_symbol or candidate.symbol,
+        "idValue": normalized["openfigi_ticker"],
     }
-    if candidate.exchange_mic:
-        payload["micCode"] = candidate.exchange_mic
-    if candidate.exchange:
-        payload["exchCode"] = candidate.exchange
-    if candidate.currency:
-        payload["currency"] = candidate.currency
-    if candidate.country:
-        payload["marketSecDes"] = candidate.country
-    normalized_payload = {key: value for key, value in payload.items() if str(value or "").strip()}
+    if normalized["mic_code"]:
+        payload["micCode"] = normalized["mic_code"]
+    elif normalized["exch_code"]:
+        payload["exchCode"] = normalized["exch_code"]
+    if normalized["currency"]:
+        payload["currency"] = normalized["currency"]
+    normalized_payload = {key: value for key, value in payload.items() if _clean_text(value)}
     request_hash = hashlib.sha256(json.dumps(normalized_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return OpenFigiRequest(symbol=candidate.symbol, payload=normalized_payload, request_hash=request_hash)
+
+
+def normalize_openfigi_request_inputs(
+    *,
+    provider_symbol: Any,
+    exchange: Any = None,
+    exchange_mic: Any = None,
+    country: Any = None,
+    currency: Any = None,
+) -> dict[str, str]:
+    """Normalize provider/Yahoo listing identity into one OpenFIGI ticker request.
+
+    OpenFIGI rejects payloads with both `micCode` and `exchCode`. We prefer a
+    valid MIC when one is explicitly available; otherwise we fall back to a
+    generic OpenFIGI/Bloomberg exchange code inferred from suffix, MIC, exchange,
+    or country. `marketSecDes` is intentionally omitted for V0.
+    """
+
+    symbol = _clean_text(provider_symbol, upper=True)
+    exchange_text = _clean_text(exchange, upper=True)
+    mic = _clean_text(exchange_mic, upper=True)
+    country_text = _clean_text(country, upper=True)
+    currency_text = _clean_text(currency, upper=True)
+
+    suffix = _matched_yahoo_suffix(symbol)
+    ticker = _ticker_without_suffix(symbol, suffix)
+    suffix_exch_code = _OPENFIGI_EXCH_CODE_BY_YAHOO_SUFFIX.get(suffix, "")
+
+    mic_code = mic if _valid_mic(mic) else ""
+    exch_code = ""
+    if not mic_code:
+        exch_code = (
+            suffix_exch_code
+            or _OPENFIGI_EXCH_CODE_BY_MIC.get(mic, "")
+            or _OPENFIGI_EXCH_CODE_BY_EXCHANGE.get(exchange_text, "")
+            or _OPENFIGI_EXCH_CODE_BY_EXCHANGE.get(country_text, "")
+        )
+
+    return {
+        "openfigi_ticker": ticker,
+        "mic_code": mic_code,
+        "exch_code": exch_code,
+        "currency": currency_text,
+    }
 
 
 def openfigi_cache_rows(mappings: list[OpenFigiMapping]) -> list[dict[str, Any]]:
@@ -162,31 +247,31 @@ def _mapping_from_data(request: OpenFigiRequest, data: dict[str, Any], *, respon
         status="success",
         payload=request.payload,
         response_payload=response_payload,
-        figi=_text(data.get("figi"), upper=True),
-        composite_figi=_text(data.get("compositeFIGI") or data.get("compositeFigi"), upper=True),
-        share_class_figi=_text(data.get("shareClassFIGI") or data.get("shareClassFigi"), upper=True),
-        isin=_text(data.get("isin") or data.get("ID_ISIN"), upper=True),
-        lei=_text(data.get("lei") or data.get("LEI"), upper=True),
-        legal_entity_id=_text(
+        figi=_clean_text(data.get("figi"), upper=True),
+        composite_figi=_clean_text(data.get("compositeFIGI") or data.get("compositeFigi"), upper=True),
+        share_class_figi=_clean_text(data.get("shareClassFIGI") or data.get("shareClassFigi"), upper=True),
+        isin=_clean_text(data.get("isin") or data.get("ID_ISIN"), upper=True),
+        lei=_clean_text(data.get("lei") or data.get("LEI"), upper=True),
+        legal_entity_id=_clean_text(
             data.get("legalEntityId")
             or data.get("entityId")
             or data.get("issuerId")
             or data.get("issuerFigi"),
             upper=True,
         ),
-        ticker=_text(data.get("ticker"), upper=True),
-        name=_text(data.get("name") or data.get("securityDescription")),
-        exchange=_text(data.get("exchCode") or data.get("exchange"), upper=True),
-        exchange_mic=_text(data.get("micCode") or data.get("exchangeMIC") or data.get("exchangeMic"), upper=True),
-        country=_text(data.get("country") or data.get("marketSecDes"), upper=True),
-        currency=_text(data.get("currency"), upper=True),
-        home_country=_text(
+        ticker=_clean_text(data.get("ticker"), upper=True),
+        name=_clean_text(data.get("name") or data.get("securityDescription")),
+        exchange=_clean_text(data.get("exchCode") or data.get("exchange"), upper=True),
+        exchange_mic=_clean_text(data.get("micCode") or data.get("exchangeMIC") or data.get("exchangeMic"), upper=True),
+        country=_clean_text(data.get("country") or data.get("marketSecDes"), upper=True),
+        currency=_clean_text(data.get("currency"), upper=True),
+        home_country=_clean_text(
             data.get("homeCountry")
             or data.get("countryOfIncorporation")
             or data.get("domicileCountry"),
             upper=True,
         ),
-        security_type=_text(data.get("securityType2") or data.get("securityType"), upper=True),
+        security_type=_clean_text(data.get("securityType2") or data.get("securityType"), upper=True),
         metadata=metadata,
     )
 
@@ -218,8 +303,39 @@ def _error_mapping(
     )
 
 
-def _text(value: Any, *, upper: bool = False) -> str:
+def _matched_yahoo_suffix(symbol: str) -> str:
+    for suffix in sorted(_OPENFIGI_EXCH_CODE_BY_YAHOO_SUFFIX, key=len, reverse=True):
+        if symbol.endswith(suffix):
+            return suffix
+    return ""
+
+
+def _ticker_without_suffix(symbol: str, suffix: str) -> str:
+    if not suffix:
+        return symbol
+    ticker = symbol[: -len(suffix)]
+    if suffix == ".CO":
+        return ticker.replace("-", "").replace(".", "")
+    return ticker
+
+
+def _valid_mic(value: str) -> bool:
+    if not value or value in {"XXXX", "XUNK"}:
+        return False
+    return len(value) == 4 and value.isalnum()
+
+
+def _clean_text(value: Any, *, upper: bool = False) -> str:
     if value is None:
         return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    try:
+        if value != value:
+            return ""
+    except Exception:
+        pass
     text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null", "n/a"}:
+        return ""
     return text.upper() if upper else text

@@ -97,43 +97,39 @@ def _parse_symbols(values: list[str]) -> list[str]:
 
 def _example_openfigi_fixtures() -> dict[str, dict[str, Any]]:
     return {
-        "SAP": _fixture("SAP", "SAP SE", "SAP-LEGAL", "BBG000BB5373", "BBG000BB53Q9", "US", "DE", "USD", "XNYS"),
-        "SAP.DE": _fixture("SAP", "SAP SE", "SAP-LEGAL", "BBG000BB5373", "BBG000BB53Q9", "DE", "DE", "EUR", "XETR"),
-        "ASML": _fixture("ASML", "ASML HOLDING NV", "ASML-LEGAL", "BBG000D6VW15", "BBG000D6VW24", "US", "NL", "USD", "XNAS"),
-        "ASML.AS": _fixture("ASML", "ASML HOLDING NV", "ASML-LEGAL", "BBG000D6VW15", "BBG000D6VW24", "NL", "NL", "EUR", "XAMS"),
-        "NVO": _fixture("NVO", "NOVO NORDISK A/S", "NOVO-LEGAL", "BBG000Q1X7V1", "BBG000Q1X7W0", "US", "DK", "USD", "XNYS"),
-        "NOVO-B.CO": _fixture("NOVOB", "NOVO NORDISK A/S", "NOVO-LEGAL", "BBG000Q1X7V1", "BBG000Q1X7W0", "DK", "DK", "DKK", "XCSE"),
-        "TLS": _fixture("TLS", "TELOS CORP", "TELOS-LEGAL", "BBG00TLSUS01", "BBG00TLSUS02", "US", "US", "USD", "XNYS"),
-        "TLS.AX": _fixture("TLS", "TELSTRA GROUP LTD", "TELSTRA-LEGAL", "BBG00TLSAU01", "BBG00TLSAU02", "AU", "AU", "AUD", "XASX"),
-        "GOOG": _fixture("GOOG", "ALPHABET INC", "ALPHABET-LEGAL", "BBG009S3NB21", "BBG009S3NB30", "US", "US", "USD", "XNAS"),
-        "GOOGL": _fixture("GOOGL", "ALPHABET INC", "ALPHABET-LEGAL", "BBG009S39JX6", "BBG009S39JY5", "US", "US", "USD", "XNAS"),
-        "LEN": _fixture("LEN", "LENNAR CORP", "LENNAR-LEGAL", "BBG000C3FGH9", "BBG000C3FGJ8", "US", "US", "USD", "XNYS"),
-        "LENB": _fixture("LENB", "LENNAR CORP", "LENNAR-LEGAL", "BBG000C3FHK1", "BBG000C3FHL0", "US", "US", "USD", "XNYS"),
+        "SAP": _fixture("SAP", "SAP SE-SPONSORED ADR", "BBG000BB53Q9", "BBG000BB5373", "US", "USD", "US"),
+        "SAP.DE": _fixture("SAP", "SAP SE", "BBG000BB53R8", "BBG000BB5382", "GY", "EUR", "DE"),
+        "ASML": _fixture("ASML", "ASML HOLDING NV-NY REG SHS", "BBG000D6VW24", "BBG000D6VW15", "US", "USD", "US"),
+        "ASML.AS": _fixture("ASML", "ASML HOLDING NV", "BBG000D6VW33", "BBG000D6VW26", "NA", "EUR", "NL"),
+        "NVO": _fixture("NVO", "NOVO-NORDISK A/S-SPONS ADR", "BBG000Q1X7W0", "BBG000Q1X7V1", "US", "USD", "US"),
+        "NOVO-B.CO": _fixture("NOVOB", "NOVO NORDISK A/S-B", "BBG000Q1X7X9", "BBG000Q1X7Y8", "DC", "DKK", "DK"),
+        "TLS": _fixture("TLS", "TELOS CORP", "BBG00TLSUS02", "BBG00TLSUS01", "US", "USD", "US"),
+        "TLS.AX": _fixture("TLS", "TELSTRA GROUP LTD", "BBG00TLSAU02", "BBG00TLSAU01", "AU", "AUD", "AU"),
+        "GOOG": _fixture("GOOG", "ALPHABET INC-CL C", "BBG009S3NB30", "BBG009S3NB21", "US", "USD", "US"),
+        "GOOGL": _fixture("GOOGL", "ALPHABET INC-CL A", "BBG009S39JY5", "BBG009S39JX6", "US", "USD", "US"),
+        "LEN": _fixture("LEN", "LENNAR CORP-A", "BBG000C3FGJ8", "BBG000C3FGH9", "US", "USD", "US"),
+        "LENB": _fixture("LENB", "LENNAR CORP-B", "BBG000C3FHL0", "BBG000C3FHK1", "US", "USD", "US"),
     }
 
 
 def _fixture(
     ticker: str,
     name: str,
-    legal_entity_id: str,
-    share_class_figi: str,
     composite_figi: str,
-    country: str,
-    home_country: str,
+    share_class_figi: str,
+    exchange: str,
     currency: str,
-    mic: str,
+    country: str,
 ) -> dict[str, Any]:
     return {
         "ticker": ticker,
         "name": name,
-        "legalEntityId": legal_entity_id,
         "figi": f"{composite_figi}F",
         "compositeFIGI": composite_figi,
         "shareClassFIGI": share_class_figi,
+        "exchCode": exchange,
         "country": country,
-        "homeCountry": home_country,
         "currency": currency,
-        "micCode": mic,
         "securityType2": "Common Stock",
     }
 

@@ -31,6 +31,7 @@ def build_entity_identity(
     unresolved_symbols: list[str] = []
     ambiguous_symbols: list[str] = []
     grouped: dict[tuple[str, str], list[OpenFigiMapping]] = {}
+    security_only_mappings: list[OpenFigiMapping] = []
 
     for symbol in sorted(candidates_by_symbol):
         mapping = mappings_by_symbol.get(symbol)
@@ -65,23 +66,18 @@ def build_entity_identity(
             )
             continue
 
+        normalization_audit = _provider_symbol_normalization_audit(mapping, candidates_by_symbol.get(symbol))
+        if normalization_audit:
+            audits.append(normalization_audit)
+
         group_key = _strong_group_key(mapping)
         if group_key is None:
             unresolved_symbols.append(symbol)
-            audits.append(
-                audit(
-                    "openfigi_missing_strong_identifier",
-                    symbol=symbol,
-                    severity="warning",
-                    figi=mapping.figi,
-                    composite_figi=mapping.composite_figi,
-                    share_class_figi=mapping.share_class_figi,
-                    isin=mapping.isin,
-                )
-            )
+            security_only_mappings.append(mapping)
             continue
         grouped.setdefault(group_key, []).append(mapping)
 
+    audits.extend(_security_only_audits(security_only_mappings, candidates_by_symbol))
     audits.extend(_fuzzy_suggestion_audits(candidates_by_symbol, mappings_by_symbol, unresolved_symbols))
 
     entities: list[EntityRecord] = []
@@ -117,7 +113,6 @@ def _records_for_group(
     entity_id = _entity_id(group_key)
     audits: list[IdentityAuditRecord] = []
     sorted_mappings = sorted(mappings, key=lambda mapping: mapping.symbol)
-    first = sorted_mappings[0]
     home_country = _choose_home_country(sorted_mappings, candidates_by_symbol)
     legal_name = _first_text([mapping.name for mapping in sorted_mappings])
     lei = _first_text([mapping.lei for mapping in sorted_mappings])
@@ -176,7 +171,7 @@ def _listing_record(
         lei=mapping.lei,
         listing_type=mapping.security_type,
         resolution_source="openfigi",
-        resolution_confidence=0.98 if mapping.legal_entity_id or mapping.lei else 0.9,
+        resolution_confidence=0.98 if mapping.legal_entity_id or mapping.lei or mapping.isin else 0.0,
         resolution_status="resolved",
         metadata=metadata,
     )
@@ -186,8 +181,6 @@ def _strong_group_key(mapping: OpenFigiMapping) -> tuple[str, str] | None:
     for key_kind, value in (
         ("legal_entity_id", mapping.legal_entity_id),
         ("lei", mapping.lei),
-        ("share_class_figi", mapping.share_class_figi),
-        ("composite_figi", mapping.composite_figi),
         ("isin", mapping.isin),
     ):
         cleaned = str(value or "").strip().upper()
@@ -205,9 +198,7 @@ def _entity_id(group_key: tuple[str, str]) -> str:
 def _confidence_for_key_kind(kind: str) -> float:
     if kind in {"legal_entity_id", "lei"}:
         return 0.98
-    if kind == "share_class_figi":
-        return 0.92
-    if kind in {"composite_figi", "isin"}:
+    if kind == "isin":
         return 0.9
     return 0.75
 
@@ -225,6 +216,88 @@ def _choose_home_country(
         return non_us[0]
     candidate_countries = [candidates_by_symbol.get(_symbol(mapping.symbol)).country for mapping in mappings if candidates_by_symbol.get(_symbol(mapping.symbol))]
     return _first_text(candidate_countries)
+
+
+def _provider_symbol_normalization_audit(
+    mapping: OpenFigiMapping,
+    candidate: ListingCandidate | None,
+) -> IdentityAuditRecord | None:
+    requested = _symbol(mapping.payload.get("idValue"))
+    provider = _symbol((candidate.provider_symbol if candidate else "") or mapping.symbol)
+    if requested and provider and requested != provider:
+        return audit(
+            "provider_symbol_normalized",
+            symbol=mapping.symbol,
+            severity="info",
+            provider_symbol=provider,
+            openfigi_ticker=requested,
+            request_payload=mapping.payload,
+        )
+    return None
+
+
+def _security_only_audits(
+    mappings: list[OpenFigiMapping],
+    candidates_by_symbol: dict[str, ListingCandidate],
+) -> list[IdentityAuditRecord]:
+    audits: list[IdentityAuditRecord] = []
+    for mapping in mappings:
+        audits.append(
+            audit(
+                "security_only_group_not_resolved",
+                symbol=mapping.symbol,
+                severity="warning",
+                figi=mapping.figi,
+                composite_figi=mapping.composite_figi,
+                share_class_figi=mapping.share_class_figi,
+                reason="missing_legal_entity_id_lei_or_isin",
+            )
+        )
+
+    by_name: dict[str, list[OpenFigiMapping]] = {}
+    for mapping in mappings:
+        candidate = candidates_by_symbol.get(_symbol(mapping.symbol))
+        name = _normalized_name(mapping.name or (candidate.name if candidate else ""))
+        if name:
+            by_name.setdefault(name, []).append(mapping)
+
+    for name, name_mappings in sorted(by_name.items()):
+        unique = sorted(name_mappings, key=lambda mapping: mapping.symbol)
+        if len(unique) < 2:
+            continue
+        security_keys = {_security_key(mapping) for mapping in unique if _security_key(mapping)}
+        if len(security_keys) > 1:
+            symbols = [mapping.symbol for mapping in unique]
+            countries = sorted({mapping.country for mapping in unique if mapping.country})
+            audits.append(
+                audit(
+                    "same_name_different_security_identifier",
+                    severity="info",
+                    normalized_name=name,
+                    symbols=symbols,
+                    security_identifiers=sorted(security_keys),
+                )
+            )
+            audits.append(
+                audit(
+                    "possible_same_company_not_resolved",
+                    severity="info",
+                    normalized_name=name,
+                    symbols=symbols,
+                    reason="no_common_legal_entity_id_lei_or_isin",
+                )
+            )
+            if "US" in countries and any(country != "US" for country in countries):
+                audits.append(
+                    audit(
+                        "adr_home_candidate_missing_entity_identifier",
+                        severity="info",
+                        normalized_name=name,
+                        symbols=symbols,
+                        countries=countries,
+                    )
+                )
+    return audits
 
 
 def _fuzzy_suggestion_audits(
@@ -273,6 +346,18 @@ def _symbol(value: Any) -> str:
 def _bare_symbol(symbol: str) -> str:
     text = _symbol(symbol)
     return text.split(".", maxsplit=1)[0].replace("-", ".")
+
+
+def _security_key(mapping: OpenFigiMapping) -> str:
+    for key_kind, value in (
+        ("share_class_figi", mapping.share_class_figi),
+        ("composite_figi", mapping.composite_figi),
+        ("figi", mapping.figi),
+    ):
+        cleaned = _symbol(value)
+        if cleaned:
+            return f"{key_kind}:{cleaned}"
+    return ""
 
 
 def _normalized_name(value: Any) -> str:

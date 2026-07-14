@@ -3,10 +3,98 @@ from __future__ import annotations
 from pathlib import Path
 
 from finance_data_ops.identity.models import ListingCandidate
-from finance_data_ops.identity.openfigi import OpenFigiClient
+from finance_data_ops.identity.openfigi import OpenFigiClient, build_openfigi_request
 from finance_data_ops.identity.publisher import publish_entity_identity
 from finance_data_ops.identity.resolver import build_entity_identity
+from finance_data_ops.identity.universe import build_candidate_universe_from_frames
 from finance_data_ops.publish.client import RecordingPublisher
+import pandas as pd
+
+
+def test_openfigi_request_omits_nan_and_never_sends_mic_and_exchange() -> None:
+    request = build_openfigi_request(
+        ListingCandidate(
+            symbol="SAP",
+            provider_symbol="SAP",
+            exchange="NYQ",
+            exchange_mic=float("nan"),
+            country="US",
+            currency="nan",
+        )
+    )
+
+    assert request.payload == {"idType": "TICKER", "idValue": "SAP", "exchCode": "US"}
+    assert "micCode" not in request.payload
+    assert "marketSecDes" not in request.payload
+    assert "NAN" not in request.payload.values()
+
+
+def test_openfigi_request_prefers_valid_mic_over_exchange() -> None:
+    request = build_openfigi_request(
+        ListingCandidate(
+            symbol="SAP",
+            provider_symbol="SAP",
+            exchange="NYQ",
+            exchange_mic="XNYS",
+            currency="USD",
+        )
+    )
+
+    assert request.payload == {"idType": "TICKER", "idValue": "SAP", "micCode": "XNYS", "currency": "USD"}
+    assert "exchCode" not in request.payload
+
+
+def test_yahoo_suffixes_normalize_for_openfigi_requests() -> None:
+    cases = {
+        "SAP.DE": ("SAP", "GY"),
+        "ASML.AS": ("ASML", "NA"),
+        "NOVO-B.CO": ("NOVOB", "DC"),
+        "TLS.AX": ("TLS", "AU"),
+        "HSBA.L": ("HSBA", "LN"),
+        "0005.HK": ("0005", "HK"),
+        "7203.T": ("7203", "JT"),
+        "RY.TO": ("RY", "CN"),
+        "MSFT": ("MSFT", "US"),
+    }
+    for provider_symbol, (openfigi_ticker, exch_code) in cases.items():
+        request = build_openfigi_request(
+            ListingCandidate(
+                symbol=provider_symbol,
+                provider_symbol=provider_symbol,
+                exchange="NMS" if provider_symbol == "MSFT" else "",
+                exchange_mic="",
+                currency="USD",
+            )
+        )
+        assert request.payload["idValue"] == openfigi_ticker
+        assert request.payload["exchCode"] == exch_code
+        assert "micCode" not in request.payload
+        assert "marketSecDes" not in request.payload
+
+
+def test_candidate_universe_treats_pandas_nan_as_missing() -> None:
+    candidates = build_candidate_universe_from_frames(
+        ticker_registry=pd.DataFrame(
+            [
+                {
+                    "input_symbol": "SAP.DE",
+                    "normalized_symbol": "nan",
+                    "exchange": float("nan"),
+                    "exchange_mic": pd.NA,
+                    "currency": "NAN",
+                    "region": "eu",
+                    "status": "active",
+                    "promotion_status": "validated_full",
+                    "market_supported": True,
+                }
+            ]
+        )
+    )
+
+    assert candidates[0].symbol == "SAP.DE"
+    assert candidates[0].exchange == ""
+    assert candidates[0].exchange_mic == ""
+    assert candidates[0].currency == ""
 
 
 def test_sap_pair_resolves_to_same_entity() -> None:
@@ -89,6 +177,25 @@ def test_share_classes_are_distinct_listings_under_entity_structure() -> None:
     }
 
 
+def test_security_figis_without_entity_identifier_do_not_resolve_adr_home_pair() -> None:
+    result = _resolve(
+        [_candidate("SAP", country="US"), _candidate("SAP.DE", country="DE")],
+        {
+            "SAP": _security_mapping("SAP", "SAP SE", share="SAP-ADR-SHARE", composite="SAP-ADR-COMP", country="US"),
+            "SAP.DE": _security_mapping("SAP", "SAP SE", share="SAP-DE-SHARE", composite="SAP-DE-COMP", country="DE"),
+        },
+    )
+
+    assert result.entities == []
+    assert result.listings == []
+    assert result.unresolved_symbols == ["SAP", "SAP.DE"]
+    issue_types = {audit.issue_type for audit in result.audits}
+    assert "security_only_group_not_resolved" in issue_types
+    assert "same_name_different_security_identifier" in issue_types
+    assert "possible_same_company_not_resolved" in issue_types
+    assert "adr_home_candidate_missing_entity_identifier" in issue_types
+
+
 def test_openfigi_error_for_one_symbol_does_not_abort_batch() -> None:
     result = _resolve(
         [_candidate("ERR"), _candidate("OK")],
@@ -154,6 +261,19 @@ def test_fuzzy_only_matches_create_audit_rows_not_resolved_mappings() -> None:
     assert any(audit.issue_type == "fuzzy_match_suggestion_not_resolved" for audit in result.audits)
 
 
+def test_provider_symbol_normalization_creates_audit_without_resolution() -> None:
+    result = _resolve(
+        [_candidate("NOVO-B.CO", country="DK")],
+        {
+            "NOVO-B.CO": _security_mapping("NOVOB", "Novo Nordisk A/S", share="NOVO-SHARE", composite="NOVO-COMP", country="DK"),
+        },
+    )
+
+    assert result.entities == []
+    assert result.summary()["provider_symbol_normalized"] == 1
+    assert any(audit.issue_type == "provider_symbol_normalized" for audit in result.audits)
+
+
 def test_publisher_only_targets_entity_layer_tables() -> None:
     result = _resolve(
         [_candidate("OK")],
@@ -195,7 +315,7 @@ def test_runtime_schema_contains_entity_layer_tables_indexes_and_grants() -> Non
         assert snippet in sql
 
 
-def _resolve(candidates: list[ListingCandidate], fixtures: dict[str, dict]) :
+def _resolve(candidates: list[ListingCandidate], fixtures: dict[str, dict]):
     client = OpenFigiClient(fixture_mappings=fixtures)
     mappings = client.map_candidates(candidates)
     return build_entity_identity(candidates=candidates, mappings=mappings)
@@ -244,5 +364,26 @@ def _mapping(
         "homeCountry": home,
         "currency": "USD",
         "micCode": "XNYS",
+        "securityType2": "Common Stock",
+    }
+
+
+def _security_mapping(
+    ticker: str,
+    name: str,
+    *,
+    share: str,
+    composite: str,
+    country: str = "US",
+) -> dict:
+    return {
+        "ticker": ticker,
+        "name": name,
+        "figi": f"{share}-FIGI",
+        "shareClassFIGI": share,
+        "compositeFIGI": composite,
+        "country": country,
+        "currency": "USD",
+        "exchCode": "US" if country == "US" else country,
         "securityType2": "Common Stock",
     }

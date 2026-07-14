@@ -28,7 +28,7 @@ def build_candidate_universe_from_frames(
     by_symbol: dict[str, dict[str, Any]] = {}
 
     for row in _active_registry_rows(ticker_registry):
-        symbol = _symbol(row.get("normalized_symbol") or row.get("input_symbol") or row.get("symbol"))
+        symbol = _first_symbol(row.get("normalized_symbol"), row.get("input_symbol"), row.get("symbol"))
         if symbol:
             _merge_candidate(
                 by_symbol,
@@ -42,17 +42,17 @@ def build_candidate_universe_from_frames(
             )
 
     for row in _tracked_readiness_rows(ticker_readiness):
-        symbol = _symbol(row.get("symbol") or row.get("ticker") or row.get("entity_id"))
+        symbol = _first_symbol(row.get("symbol"), row.get("ticker"), row.get("entity_id"))
         if symbol:
             _merge_candidate(by_symbol, symbol, provider_symbol=symbol, source="ticker_readiness")
 
     for row in _frame_records(etf_holding_identity):
-        symbol = _symbol(row.get("onboard_symbol") or row.get("provider_symbol") or row.get("source_symbol"))
+        symbol = _first_symbol(row.get("onboard_symbol"), row.get("provider_symbol"), row.get("source_symbol"))
         if symbol:
             _merge_candidate(
                 by_symbol,
                 symbol,
-                provider_symbol=_symbol(row.get("provider_symbol") or symbol),
+                provider_symbol=_first_symbol(row.get("provider_symbol"), symbol),
                 exchange=_text(row.get("source_exchange") or row.get("onboard_exchange"), upper=True),
                 exchange_mic=_text(row.get("source_exchange_mic"), upper=True),
                 country=_text(row.get("source_country"), upper=True),
@@ -191,18 +191,18 @@ def read_postgres_candidate_universe(
 
 def fixture_candidate_universe(symbols: list[str] | None = None) -> list[ListingCandidate]:
     rows = [
-        ("SAP", "US", "USD", "XNYS"),
-        ("SAP.DE", "DE", "EUR", "XETR"),
-        ("ASML", "US", "USD", "XNAS"),
-        ("ASML.AS", "NL", "EUR", "XAMS"),
-        ("NVO", "US", "USD", "XNYS"),
-        ("NOVO-B.CO", "DK", "DKK", "XCSE"),
-        ("TLS", "US", "USD", "XNYS"),
-        ("TLS.AX", "AU", "AUD", "XASX"),
-        ("GOOG", "US", "USD", "XNAS"),
-        ("GOOGL", "US", "USD", "XNAS"),
-        ("LEN", "US", "USD", "XNYS"),
-        ("LENB", "US", "USD", "XNYS"),
+        ("SAP", "US", "USD", "NYQ", ""),
+        ("SAP.DE", "DE", "EUR", "", ""),
+        ("ASML", "US", "USD", "NMS", ""),
+        ("ASML.AS", "NL", "EUR", "", ""),
+        ("NVO", "US", "USD", "NYQ", ""),
+        ("NOVO-B.CO", "DK", "DKK", "", ""),
+        ("TLS", "US", "USD", "NYQ", ""),
+        ("TLS.AX", "AU", "AUD", "", ""),
+        ("GOOG", "US", "USD", "NMS", ""),
+        ("GOOGL", "US", "USD", "NMS", ""),
+        ("LEN", "US", "USD", "NYQ", ""),
+        ("LENB", "US", "USD", "NYQ", ""),
     ]
     selected = {_symbol(symbol) for symbol in (symbols or []) if _symbol(symbol)}
     return [
@@ -211,12 +211,13 @@ def fixture_candidate_universe(symbols: list[str] | None = None) -> list[Listing
             provider_symbol=symbol,
             country=country,
             currency=currency,
+            exchange=exchange,
             exchange_mic=mic,
             source="fixtures",
             has_prices=True,
             has_technicals=True,
         )
-        for symbol, country, currency, mic in rows
+        for symbol, country, currency, exchange, mic in rows
         if not selected or symbol in selected
     ]
 
@@ -310,10 +311,11 @@ def _merge_candidate(by_symbol: dict[str, dict[str, Any]], symbol: str, **values
     if source:
         row["sources"].add(source)
     metadata = values.pop("metadata", {}) or {}
-    row["metadata"].update({key: value for key, value in metadata.items() if value})
+    row["metadata"].update({key: value for key, value in metadata.items() if _text(value)})
     for key, value in values.items():
-        if value and not row.get(key):
-            row[key] = value
+        cleaned = _text(value, upper=isinstance(value, str) and value.isupper())
+        if cleaned and not row.get(key):
+            row[key] = cleaned
 
 
 def _symbol_set(frame: pd.DataFrame | None, candidates: tuple[str, ...]) -> set[str]:
@@ -373,8 +375,23 @@ def _symbol(value: Any) -> str:
     return _text(value, upper=True)
 
 
+def _first_symbol(*values: Any) -> str:
+    for value in values:
+        symbol = _symbol(value)
+        if symbol:
+            return symbol
+    return ""
+
+
 def _text(value: Any, *, upper: bool = False) -> str:
     if value is None:
         return ""
+    try:
+        if value != value:
+            return ""
+    except Exception:
+        pass
     text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null", "n/a"}:
+        return ""
     return text.upper() if upper else text
