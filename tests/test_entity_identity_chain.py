@@ -505,6 +505,237 @@ def test_name_anchor_precision_audit_and_isin_samples_are_capped() -> None:
     assert audit["compatible_expanded_isin_count"] == 20
 
 
+def test_name_anchor_does_not_confirm_ns_listing_with_only_us_isins() -> None:
+    measurement = _fixture_measurement(
+        ["RELIANCE.NS"],
+        isin_fixtures={"RELIANCE.NS": {"isin": "-", "source": "fixture_yfinance"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:RELIANCELEI0001": {
+                "legal_name": "RELIANCE INDUSTRIES LIMITED",
+                "isin_list": ["US7594701077", "US759470AB33"],
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:RELIANCE INDUSTRIES": {
+                "candidates": [
+                    {
+                        "lei": "RELIANCELEI0001",
+                        "legal_name": "RELIANCE INDUSTRIES LIMITED",
+                        "legal_country": "IN",
+                        "headquarters_country": "IN",
+                        "jurisdiction": "IN",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            }
+        },
+        extra_candidates=[
+            ListingCandidate(
+                symbol="RELIANCE.NS",
+                provider_symbol="RELIANCE.NS",
+                currency="INR",
+                name="RELIANCE INDUSTRIES LIMITED",
+            ),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["derived_listing_country"] == "IN"
+    assert row["allowed_isin_prefixes"] == ["IN"]
+    assert row["entity_attach_method"] == "unattached_no_anchor"
+    assert row["compatible_expanded_isin_count"] == 0
+    assert row["compatible_isin_gate_status"] == "rejected"
+    assert row["compatible_isin_gate_reject_reason"] == "no_compatible_expanded_isin_for_listing_country"
+    assert "gleif_lei_found_but_no_compatible_isin" in row["entity_attach_reasons"]
+
+
+def test_name_anchor_confirms_ns_listing_only_with_in_compatible_isin() -> None:
+    measurement = _fixture_measurement(
+        ["RELIANCE.NS"],
+        isin_fixtures={"RELIANCE.NS": {"isin": "-", "source": "fixture_yfinance"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:RELIANCELEI0001": {
+                "legal_name": "RELIANCE INDUSTRIES LIMITED",
+                "isin_list": ["US7594701077", "INE002A01018"],
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:RELIANCE INDUSTRIES": {
+                "candidates": [
+                    {
+                        "lei": "RELIANCELEI0001",
+                        "legal_name": "RELIANCE INDUSTRIES LIMITED",
+                        "legal_country": "IN",
+                        "headquarters_country": "IN",
+                        "jurisdiction": "IN",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            }
+        },
+        extra_candidates=[
+            ListingCandidate(
+                symbol="RELIANCE.NS",
+                provider_symbol="RELIANCE.NS",
+                currency="INR",
+                name="RELIANCE INDUSTRIES LIMITED",
+            ),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["entity_attach_method"] == "name_anchor_confirmed"
+    assert row["derived_listing_country"] == "IN"
+    assert row["matched_compatible_isins"] == ["INE002A01018"]
+    assert row["expected_listing_country_prefix_present"] is True
+
+
+def test_name_anchor_confirms_ls_listing_only_with_pt_compatible_isin() -> None:
+    blocked = _fixture_measurement(
+        ["SON.LS"],
+        isin_fixtures={"SON.LS": {"isin": "-", "source": "fixture_yfinance"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:SONAELEI0001": {"legal_name": "SONAE", "isin_list": ["US0000000002"]}
+        },
+        gleif_legal_name_fixtures={
+            "NAME:SONAE": {
+                "candidates": [
+                    {
+                        "lei": "SONAELEI0001",
+                        "legal_name": "SONAE",
+                        "legal_country": "PT",
+                        "headquarters_country": "PT",
+                        "jurisdiction": "PT",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            }
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="SON.LS", provider_symbol="SON.LS", currency="EUR", name="SONAE"),
+        ],
+        pairs=[],
+    )
+    confirmed = _fixture_measurement(
+        ["SON.LS"],
+        isin_fixtures={"SON.LS": {"isin": "-", "source": "fixture_yfinance"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:SONAELEI0001": {"legal_name": "SONAE", "isin_list": ["PTSON0AM0001"]}
+        },
+        gleif_legal_name_fixtures={
+            "NAME:SONAE": {
+                "candidates": [
+                    {
+                        "lei": "SONAELEI0001",
+                        "legal_name": "SONAE",
+                        "legal_country": "PT",
+                        "headquarters_country": "PT",
+                        "jurisdiction": "PT",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            }
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="SON.LS", provider_symbol="SON.LS", currency="EUR", name="SONAE"),
+        ],
+        pairs=[],
+    )
+
+    assert blocked.symbol_rows[0]["derived_listing_country"] == "PT"
+    assert blocked.symbol_rows[0]["allowed_isin_prefixes"] == ["PT"]
+    assert blocked.symbol_rows[0]["entity_attach_method"] == "unattached_no_anchor"
+    assert confirmed.symbol_rows[0]["entity_attach_method"] == "name_anchor_confirmed"
+    assert confirmed.symbol_rows[0]["matched_compatible_isins"] == ["PTSON0AM0001"]
+
+
+def test_hk_listing_prefix_policy_is_explicit_for_cayman_issuer_isin() -> None:
+    measurement = _fixture_measurement(
+        ["0700.HK"],
+        isin_fixtures={"0700.HK": {"isin": "-", "source": "fixture_yfinance"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:TENCENTLEI0001": {
+                "legal_name": "TENCENT HOLDINGS LIMITED",
+                "isin_list": ["KYG875721634"],
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:TENCENT HOLDINGS": {
+                "candidates": [
+                    {
+                        "lei": "TENCENTLEI0001",
+                        "legal_name": "TENCENT HOLDINGS LIMITED",
+                        "legal_country": "KY",
+                        "headquarters_country": "CN",
+                        "jurisdiction": "KY",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            }
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="0700.HK", provider_symbol="0700.HK", currency="HKD", name="TENCENT HOLDINGS LTD"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["derived_listing_country"] == "HK"
+    assert row["allowed_isin_prefixes"] == ["BM", "CN", "GB", "HK", "KY"]
+    assert row["entity_attach_method"] == "name_anchor_confirmed"
+    assert row["matched_compatible_isins"] == ["KYG875721634"]
+    assert row["compatible_isin_gate_status"] == "passed"
+
+
+def test_name_anchor_without_country_or_supported_suffix_needs_manual_review() -> None:
+    measurement = _fixture_measurement(
+        ["LOCALONLY"],
+        isin_fixtures={"LOCALONLY": {"isin": "-", "source": "fixture_yfinance"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:LOCALLEI0001": {"legal_name": "LOCAL ONLY LIMITED", "isin_list": ["US0000000002"]}
+        },
+        gleif_legal_name_fixtures={
+            "NAME:LOCAL ONLY": {
+                "candidates": [
+                    {
+                        "lei": "LOCALLEI0001",
+                        "legal_name": "LOCAL ONLY LIMITED",
+                        "legal_country": "US",
+                        "headquarters_country": "US",
+                        "jurisdiction": "US-DE",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            }
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="LOCALONLY", provider_symbol="LOCALONLY", name="LOCAL ONLY LIMITED"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["allowed_isin_prefixes"] == []
+    assert row["entity_attach_method"] == "unattached_no_anchor"
+    assert row["entity_attach_reason"] == "missing_listing_country_for_isin_gate"
+    assert row["compatible_isin_gate_status"] == "rejected"
+    assert row["decision_bucket"] == "needs_manual_review"
+
+
 def test_yfinance_suspect_isins_are_excluded_from_anchors() -> None:
     measurement = _fixture_measurement(
         ["GOOG", "GOOGL"],

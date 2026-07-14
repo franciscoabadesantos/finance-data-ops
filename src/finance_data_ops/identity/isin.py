@@ -18,20 +18,56 @@ _ALLOWED_ISIN_PREFIXES_BY_SUFFIX = {
     ".CO": {"DK"},
     ".DE": {"DE"},
     ".HK": {"HK", "CN", "KY", "BM", "GB"},
+    ".KQ": {"KR"},
+    ".KS": {"KR"},
     ".L": {"GB", "JE", "GG", "IE"},
+    ".LS": {"PT"},
+    ".MI": {"IT"},
+    ".NS": {"IN"},
+    ".PA": {"FR"},
+    ".SS": {"CN"},
+    ".SZ": {"CN"},
     ".T": {"JP"},
+    ".TA": {"IL"},
     ".TO": {"CA"},
+}
+
+_LISTING_COUNTRY_BY_SUFFIX = {
+    ".AX": "AU",
+    ".AS": "NL",
+    ".CO": "DK",
+    ".DE": "DE",
+    ".HK": "HK",
+    ".KQ": "KR",
+    ".KS": "KR",
+    ".L": "GB",
+    ".LS": "PT",
+    ".MI": "IT",
+    ".NS": "IN",
+    ".PA": "FR",
+    ".SS": "CN",
+    ".SZ": "CN",
+    ".T": "JP",
+    ".TA": "IL",
+    ".TO": "CA",
 }
 
 _ALLOWED_ISIN_PREFIXES_BY_COUNTRY = {
     "AU": {"AU"},
     "CA": {"CA"},
+    "CN": {"CN"},
     "DE": {"DE"},
     "DK": {"DK"},
+    "FR": {"FR"},
     "GB": {"GB", "JE", "GG", "IE"},
     "HK": {"HK", "CN", "KY", "BM", "GB"},
+    "IL": {"IL"},
+    "IN": {"IN"},
+    "IT": {"IT"},
     "JP": {"JP"},
+    "KR": {"KR"},
     "NL": {"NL"},
+    "PT": {"PT"},
     "US": {"US"},
 }
 
@@ -212,6 +248,28 @@ def allowed_isin_prefixes_for_listing(candidate: ListingCandidate) -> set[str]:
     return _allowed_isin_prefixes(candidate)
 
 
+def isin_prefix_policy_for_listing(candidate: ListingCandidate) -> dict[str, Any]:
+    """Return auditable listing country and ISIN-prefix policy for confirmation gates."""
+
+    symbol = _clean_text(candidate.provider_symbol or candidate.symbol, upper=True)
+    for suffix in sorted(_ALLOWED_ISIN_PREFIXES_BY_SUFFIX, key=len, reverse=True):
+        if symbol.endswith(suffix):
+            return {
+                "derived_listing_country": _LISTING_COUNTRY_BY_SUFFIX.get(suffix, ""),
+                "allowed_isin_prefixes": sorted(_ALLOWED_ISIN_PREFIXES_BY_SUFFIX[suffix]),
+                "source": "provider_symbol_suffix",
+                "suffix": suffix,
+            }
+    country = _listing_country(candidate)
+    prefixes = _ALLOWED_ISIN_PREFIXES_BY_COUNTRY.get(country, set())
+    return {
+        "derived_listing_country": country,
+        "allowed_isin_prefixes": sorted(prefixes),
+        "source": "candidate_country" if country else "missing",
+        "suffix": "",
+    }
+
+
 def _valid_isin_check_digit(isin: str) -> bool:
     expanded = ""
     for char in isin:
@@ -229,17 +287,12 @@ def _valid_isin_check_digit(isin: str) -> bool:
 def _isin_matches_listing_context(isin: str, candidate: ListingCandidate) -> bool:
     allowed = _allowed_isin_prefixes(candidate)
     if not allowed:
-        return True
+        return False
     return isin[:2] in allowed
 
 
 def _allowed_isin_prefixes(candidate: ListingCandidate) -> set[str]:
-    symbol = _clean_text(candidate.provider_symbol or candidate.symbol, upper=True)
-    for suffix, prefixes in _ALLOWED_ISIN_PREFIXES_BY_SUFFIX.items():
-        if symbol.endswith(suffix):
-            return set(prefixes)
-    country = _listing_country(candidate)
-    return set(_ALLOWED_ISIN_PREFIXES_BY_COUNTRY.get(country, set()))
+    return set(isin_prefix_policy_for_listing(candidate)["allowed_isin_prefixes"])
 
 
 def _listing_country(candidate: ListingCandidate) -> str:
