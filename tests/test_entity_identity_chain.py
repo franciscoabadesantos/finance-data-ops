@@ -21,6 +21,7 @@ from finance_data_ops.identity.isin import IsinRecord, YFinanceIsinClient, isin_
 from finance_data_ops.identity.names import (
     legal_name_query_from_listing,
     legal_name_query_variants_from_listing,
+    name_normalization_audit_flags,
     normalize_legal_name_conservative,
 )
 from finance_data_ops.identity.openfigi import OpenFigiClient
@@ -351,6 +352,11 @@ def test_legal_name_query_preserves_corporate_suffix_but_confirmation_normalizes
     assert normalize_legal_name_conservative("HOME DEPOT INC/THE") == "HOME DEPOT"
     assert normalize_legal_name_conservative("ELI LILLY AND CO") == "ELI LILLY AND"
     assert normalize_legal_name_conservative("ELI LILLY AND COMPANY") == "ELI LILLY AND"
+    assert normalize_legal_name_conservative("NECキャピタルソリューション株式会社") == "NEC キャピタルソリューション"
+    assert normalize_legal_name_conservative("NEC株式会社") == "NEC"
+    flags = name_normalization_audit_flags("NECキャピタルソリューション株式会社", "NEC")
+    assert flags["cjk_name_collapsed_to_latin_acronym"] is True
+    assert flags["distinctive_tokens_removed"] is True
 
 
 def test_adr_isin_can_map_to_underlying_lei() -> None:
@@ -2031,6 +2037,105 @@ def test_side_by_side_publication_plan_keeps_provisional_single_listing_evidence
     assert plan["feature_store.entity_listing"][0]["resolution_status"] == "provisional"
 
 
+def test_cjk_legal_name_does_not_collapse_to_short_latin_acronym_attach() -> None:
+    measurement = _fixture_measurement(
+        ["6701.T"],
+        extra_candidates=[
+            ListingCandidate(
+                symbol="6701.T",
+                provider_symbol="6701.T",
+                country="JP",
+                currency="JPY",
+                exchange="JP",
+                name="NEC CORP",
+                source="test_fixture",
+            )
+        ],
+        openfigi_fixtures={
+            "6701.T": _security_fixture("6701", "NEC CORP", country="JP"),
+        },
+        isin_fixtures={"6701.T": {"status": "not_found", "error_message": "no_isin"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:353800ZI7YB13OFXXR18": {
+                "lei": "353800ZI7YB13OFXXR18",
+                "legal_name": "NECキャピタルソリューション株式会社",
+                "isin_list": ["JP3164740001"],
+                "status": "success",
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NEC": {
+                "status": "success",
+                "query": "NEC",
+                "candidates": [
+                    _legal_candidate(
+                        "353800ZI7YB13OFXXR18",
+                        "NECキャピタルソリューション株式会社",
+                        country="JP",
+                    )
+                ],
+            }
+        },
+    )
+
+    row = measurement.symbol_rows[0]
+
+    assert normalize_legal_name_conservative("NECキャピタルソリューション株式会社") != "NEC"
+    assert row["entity_attach_method"] == "unattached_no_anchor"
+    assert row["entity_lei"] == ""
+    assert measurement.heuristic_attach_audit == []
+
+
+def test_short_acronym_name_anchor_blocks_publication_gate_until_reviewed() -> None:
+    measurement = _fixture_measurement(
+        ["6701.T"],
+        extra_candidates=[
+            ListingCandidate(
+                symbol="6701.T",
+                provider_symbol="6701.T",
+                country="JP",
+                currency="JPY",
+                exchange="JP",
+                name="NEC CORP",
+                source="test_fixture",
+            )
+        ],
+        openfigi_fixtures={
+            "6701.T": _security_fixture("6701", "NEC CORP", country="JP"),
+        },
+        isin_fixtures={"6701.T": {"status": "not_found", "error_message": "no_isin"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:NEC-CORP-LEI": {
+                "lei": "NEC-CORP-LEI",
+                "legal_name": "NEC CORPORATION",
+                "isin_list": ["JP3733000008"],
+                "status": "success",
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NEC": {
+                "status": "success",
+                "query": "NEC",
+                "candidates": [_legal_candidate("NEC-CORP-LEI", "NEC CORPORATION", country="JP")],
+            }
+        },
+    )
+
+    row = measurement.symbol_rows[0]
+    audit = measurement.heuristic_attach_audit[0]
+
+    assert row["entity_attach_method"] == "name_anchor_confirmed"
+    assert audit["normalized_name_too_short"] is True
+    assert audit["normalized_name_acronym_only"] is True
+    assert audit["review_status"] == "needs_review"
+    assert audit["review_reason"] == "name_normalization_requires_review"
+    assert measurement.publication_gate["status"] == "blocked_pending_review"
+    assert measurement.summary["cjk_apac_heuristic_attach_audit_count"] == 1
+    assert measurement.cjk_apac_heuristic_attach_audit[0]["symbol"] == "6701.T"
+
+
 def test_side_by_side_publisher_blocks_unreviewed_heuristic_gate() -> None:
     measurement = _fixture_measurement(["GOOG", "GOOGL"])
     blocked_gate = {
@@ -2045,6 +2150,7 @@ def test_side_by_side_publisher_blocks_unreviewed_heuristic_gate() -> None:
         summary=measurement.summary,
         name_anchor_precision_audit=measurement.name_anchor_precision_audit,
         heuristic_attach_audit=measurement.heuristic_attach_audit,
+        cjk_apac_heuristic_attach_audit=measurement.cjk_apac_heuristic_attach_audit,
         publication_gate=blocked_gate,
         openfigi_cache_rows=measurement.openfigi_cache_rows,
         isin_cache_rows=measurement.isin_cache_rows,

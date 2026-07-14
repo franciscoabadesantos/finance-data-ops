@@ -56,11 +56,32 @@ _LISTING_PHRASES = [
     "SHS",
 ]
 
+_CJK_RANGES = (
+    ("\u3040", "\u309f"),  # Hiragana
+    ("\u30a0", "\u30ff"),  # Katakana
+    ("\u3400", "\u4dbf"),  # CJK extension A
+    ("\u4e00", "\u9fff"),  # CJK unified ideographs
+    ("\uf900", "\ufaff"),  # CJK compatibility ideographs
+    ("\uac00", "\ud7af"),  # Hangul syllables
+)
+
+_CJK_LEGAL_FORM_SUFFIXES = (
+    "株式会社",
+    "有限会社",
+    "合同会社",
+    "股份有限公司",
+    "有限公司",
+    "有限责任公司",
+    "股份有限会社",
+    "주식회사",
+)
+
 
 def normalize_legal_name_conservative(value: Any) -> str:
     text = _listing_name_base_text(value)
     if not text:
         return ""
+    text = _strip_cjk_legal_form_suffixes(text)
     tokens = [token for token in text.split() if token]
     tokens = _strip_edge_article(tokens)
     while tokens and tokens[-1] in {"A", "B", "C"}:
@@ -70,6 +91,28 @@ def normalize_legal_name_conservative(value: Any) -> str:
         tokens = tokens[: -_suffix_token(tokens)]
         tokens = _strip_edge_article(tokens)
     return " ".join(tokens)
+
+
+def name_normalization_audit_flags(value: Any, normalized: str | None = None) -> dict[str, bool]:
+    raw_text = "" if value is None else str(value).strip()
+    normalized_text = normalized if normalized is not None else normalize_legal_name_conservative(raw_text)
+    raw_has_cjk = contains_cjk(raw_text)
+    normalized_has_cjk = contains_cjk(normalized_text)
+    acronym_only = _is_acronym_only(normalized_text)
+    too_short = _is_too_short_normalized_name(normalized_text)
+    cjk_collapsed = bool(raw_has_cjk and not normalized_has_cjk and acronym_only)
+    distinctive_removed = bool(raw_has_cjk and _has_cjk_distinctive_tokens(raw_text) and not normalized_has_cjk)
+    return {
+        "normalized_name_too_short": too_short,
+        "normalized_name_acronym_only": acronym_only,
+        "cjk_name_collapsed_to_latin_acronym": cjk_collapsed,
+        "distinctive_tokens_removed": distinctive_removed,
+    }
+
+
+def contains_cjk(value: Any) -> bool:
+    text = "" if value is None else str(value)
+    return any(_is_cjk_char(char) for char in text)
 
 
 def legal_name_query_from_listing(value: Any) -> str:
@@ -203,7 +246,9 @@ def _clean_name_text(value: Any) -> str:
     text = text.replace("N.V.", " NV ")
     text = text.replace("A/S", " AS ")
     text = re.sub(r"[-_/.,()]+", " ", text)
-    text = re.sub(r"[^A-Z0-9 ]+", " ", text)
+    text = _space_between_latin_and_cjk(text)
+    text = "".join(char if char.isalnum() or char.isspace() or _is_cjk_char(char) else " " for char in text)
+    text = _space_between_latin_and_cjk(text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -212,3 +257,65 @@ def _suffix_token(tokens: list[str]) -> int:
         if len(tokens) >= size and " ".join(tokens[-size:]) in _CORPORATE_SUFFIXES:
             return size
     return 0
+
+
+def _strip_cjk_legal_form_suffixes(text: str) -> str:
+    out = text.strip()
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _CJK_LEGAL_FORM_SUFFIXES:
+            suffix_spaced = _space_between_latin_and_cjk(suffix).strip()
+            for candidate_suffix in (suffix, suffix_spaced):
+                if out.endswith(candidate_suffix):
+                    out = out[: -len(candidate_suffix)].strip()
+                    changed = True
+                    break
+            if changed:
+                break
+    return out
+
+
+def _space_between_latin_and_cjk(text: str) -> str:
+    if not text:
+        return ""
+    out = []
+    previous = ""
+    for char in text:
+        if previous and ((_is_ascii_alnum(previous) and _is_cjk_char(char)) or (_is_cjk_char(previous) and _is_ascii_alnum(char))):
+            out.append(" ")
+        out.append(char)
+        previous = char
+    return "".join(out)
+
+
+def _is_cjk_char(char: str) -> bool:
+    if not char:
+        return False
+    return any(start <= char <= end for start, end in _CJK_RANGES)
+
+
+def _is_ascii_alnum(char: str) -> bool:
+    return bool(char and char.isascii() and char.isalnum())
+
+
+def _is_acronym_only(value: str) -> bool:
+    tokens = [token for token in str(value or "").split() if token]
+    return bool(tokens) and all(re.fullmatch(r"[A-Z0-9]{2,4}", token) for token in tokens)
+
+
+def _is_too_short_normalized_name(value: str) -> bool:
+    compact = re.sub(r"[^A-Z0-9]+", "", str(value or ""))
+    return bool(compact) and len(compact) <= 3 and not contains_cjk(value)
+
+
+def _has_cjk_distinctive_tokens(value: str) -> bool:
+    text = str(value or "").strip()
+    if not contains_cjk(text):
+        return False
+    stripped = text
+    for suffix in _CJK_LEGAL_FORM_SUFFIXES:
+        if stripped.endswith(suffix):
+            stripped = stripped[: -len(suffix)]
+            break
+    return contains_cjk(stripped)

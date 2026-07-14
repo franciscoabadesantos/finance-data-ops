@@ -138,6 +138,8 @@ Entity identity V0 is side-by-side only. OpenFIGI ticker mapping is the main lis
 
 `entity_listing` carries attach method, attach confidence, review state, evidence payload, and source freshness so future consumers can join `symbol -> entity_id` without re-keying symbol-level prices, technicals, scorecards, or relationship edges. Supported lifecycle states are `resolved`, `provisional`, `needs_manual_review`, `conflict`, `rejected`, and `superseded`, with legacy `ambiguous`/`unresolved`/`manual_review` retained for compatibility. Provisional single-listing candidates may be stored as low-confidence evidence but are not confirmed entity merges. `feature_store.entity_attributes_static` is still a metadata read model, not entity master. Existing product/read paths, frontend search, `ticker_readiness`, prices, technicals, scorecards, and relationship edges do not consume these tables yet.
 
+Publication audit payloads include CJK/APAC normalization risk flags: `normalized_name_too_short`, `normalized_name_acronym_only`, `cjk_name_collapsed_to_latin_acronym`, and `distinctive_tokens_removed`. These flags keep short or collapsed heuristic name anchors out of the machine-safe publication path until reviewed.
+
 Macro/release asset keys in `data_asset_status` are required:
 
 - `macro_observations`

@@ -20,8 +20,10 @@ from finance_data_ops.identity.isin import (
 )
 from finance_data_ops.identity.models import ListingCandidate, OpenFigiMapping
 from finance_data_ops.identity.names import (
+    contains_cjk,
     legal_name_query_from_listing,
     legal_name_query_variants_from_listing,
+    name_normalization_audit_flags,
     normalize_legal_name_conservative,
 )
 from finance_data_ops.identity.openfigi import openfigi_cache_rows
@@ -59,6 +61,8 @@ HEURISTIC_ATTACH_METHODS = {
     "isin_direct_prefix_mismatch_name_confirmed",
 }
 
+APAC_COUNTRIES = {"AU", "CN", "HK", "IL", "IN", "JP", "KR", "SG", "TW"}
+
 
 @dataclass(frozen=True, slots=True)
 class EntityChainMeasurement:
@@ -67,6 +71,7 @@ class EntityChainMeasurement:
     summary: dict[str, Any]
     name_anchor_precision_audit: list[dict[str, Any]]
     heuristic_attach_audit: list[dict[str, Any]]
+    cjk_apac_heuristic_attach_audit: list[dict[str, Any]]
     publication_gate: dict[str, Any]
     openfigi_cache_rows: list[dict[str, Any]]
     isin_cache_rows: list[dict[str, Any]]
@@ -80,6 +85,7 @@ class EntityChainMeasurement:
             "pairs": self.pair_rows,
             "name_anchor_precision_audit": self.name_anchor_precision_audit,
             "heuristic_attach_audit": self.heuristic_attach_audit,
+            "cjk_apac_heuristic_attach_audit": self.cjk_apac_heuristic_attach_audit,
             "publication_gate": self.publication_gate,
             "planned_cache_writes": {
                 "source_cache.openfigi_mapping_raw": len(self.openfigi_cache_rows),
@@ -150,6 +156,7 @@ def measure_entity_identity_chain(
     )
     precision_audit = _name_anchor_precision_audit(symbol_rows)
     heuristic_attach_audit = _heuristic_attach_audit(symbol_rows)
+    cjk_apac_heuristic_attach_audit = _cjk_apac_heuristic_attach_audit(heuristic_attach_audit)
     publication_gate = _publication_gate(heuristic_attach_audit)
     summary = _summary(
         symbol_rows=symbol_rows,
@@ -170,6 +177,7 @@ def measure_entity_identity_chain(
         summary=summary,
         name_anchor_precision_audit=precision_audit,
         heuristic_attach_audit=heuristic_attach_audit,
+        cjk_apac_heuristic_attach_audit=cjk_apac_heuristic_attach_audit,
         publication_gate=publication_gate,
         openfigi_cache_rows=openfigi_cache_rows(openfigi_mappings),
         isin_cache_rows=isin_cache_rows(isin_records),
@@ -1025,7 +1033,7 @@ def _evaluate_name_anchor(
     exact_candidates = [
         name_candidate
         for name_candidate in record.candidates
-        if _symbol(name_candidate.get("normalized_legal_name")) == _symbol(normalized_listing_name)
+        if _symbol(_normalized_legal_name_candidate(name_candidate)) == _symbol(normalized_listing_name)
     ]
     if not exact_candidates:
         foreign_issuer_diagnostics = _foreign_issuer_candidate_diagnostics(
@@ -1833,6 +1841,10 @@ def _summary(
         "heuristic_attach_audit_count": len(
             [row for row in heuristic_attach_audit if row.get("attach_audit_kind") == "heuristic"]
         ),
+        "cjk_apac_heuristic_attach_audit_count": len(_cjk_apac_heuristic_attach_audit(heuristic_attach_audit)),
+        "heuristic_attach_normalization_risk_count": len(
+            [row for row in heuristic_attach_audit if _has_normalization_risk_flags(row)]
+        ),
         "non_direct_attach_audit_count": len(heuristic_attach_audit),
         "publication_gate_status": publication_gate.get("status", ""),
         "publication_gate_review_required_count": publication_gate.get("review_required_count", 0),
@@ -2205,6 +2217,11 @@ def _heuristic_attach_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized_legal_name = normalize_legal_name_conservative(
             str(row.get("candidate_legal_name") or row.get("legal_name") or "")
         )
+        normalization_flags = _attach_normalization_flags(
+            row=row,
+            normalized_listing_names=normalized_listing_names,
+            normalized_legal_name=normalized_legal_name,
+        )
         conflict_flags = _entity_group_conflict_flags(group_rows)
         deterministic_support = _has_deterministic_attach_support(row)
         conservative_name_match = _has_conservative_name_match(
@@ -2213,9 +2230,11 @@ def _heuristic_attach_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             normalized_legal_name=normalized_legal_name,
         )
         needs_name_match = method in HEURISTIC_ATTACH_METHODS
+        normalization_risk_blocks_publication = needs_name_match and _has_normalization_risk_flags(normalization_flags)
         machine_safe = (
             deterministic_support
             and not any(conflict_flags.values())
+            and not normalization_risk_blocks_publication
             and (not needs_name_match or conservative_name_match)
         )
         out.append(
@@ -2239,6 +2258,7 @@ def _heuristic_attach_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "listing_name_used_for_legal_name_search": row.get("listing_name_used_for_legal_name_search") or "",
                 "normalized_listing_names": normalized_listing_names,
                 "normalized_legal_name": normalized_legal_name,
+                **normalization_flags,
                 "conservative_name_match": conservative_name_match,
                 "deterministic_support": deterministic_support,
                 "matched_compatible_isins": list(row.get("matched_compatible_isins") or []),
@@ -2264,11 +2284,32 @@ def _heuristic_attach_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 ),
                 "entity_group_conflict_flags": conflict_flags,
                 "review_status": "machine_verifiably_safe" if machine_safe else "needs_review",
-                "review_reason": "" if machine_safe else _audit_review_reason(conflict_flags, deterministic_support, conservative_name_match),
+                "review_reason": ""
+                if machine_safe
+                else _audit_review_reason(
+                    conflict_flags,
+                    deterministic_support,
+                    conservative_name_match,
+                    normalization_flags,
+                ),
                 "evidence_payload": _audit_evidence_payload(row),
             }
         )
     return out
+
+
+def _cjk_apac_heuristic_attach_audit(heuristic_attach_audit: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in heuristic_attach_audit
+        if row.get("attach_audit_kind") == "heuristic"
+        and (
+            _symbol(row.get("derived_listing_country") or row.get("listing_country")) in APAC_COUNTRIES
+            or contains_cjk(row.get("candidate_legal_name"))
+            or contains_cjk(row.get("openfigi_name"))
+            or contains_cjk(row.get("internal_candidate_name"))
+        )
+    ]
 
 
 def _publication_gate(heuristic_attach_audit: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2310,6 +2351,52 @@ def _audit_normalized_listing_names(row: dict[str, Any]) -> list[str]:
         if value and value not in normalized:
             normalized.append(value)
     return normalized
+
+
+def _attach_normalization_flags(
+    *,
+    row: dict[str, Any],
+    normalized_listing_names: list[str],
+    normalized_legal_name: str,
+) -> dict[str, bool]:
+    legal_name = str(row.get("candidate_legal_name") or row.get("legal_name") or "")
+    legal_flags = name_normalization_audit_flags(legal_name, normalized_legal_name)
+    listing_flags = [
+        name_normalization_audit_flags(name, normalize_legal_name_conservative(name))
+        for name in (
+            row.get("internal_candidate_name"),
+            row.get("openfigi_name"),
+            row.get("listing_name_used_for_legal_name_search"),
+        )
+        if name
+    ]
+    flags = {
+        "normalized_name_too_short": bool(legal_flags["normalized_name_too_short"]),
+        "normalized_name_acronym_only": bool(legal_flags["normalized_name_acronym_only"]),
+        "cjk_name_collapsed_to_latin_acronym": bool(legal_flags["cjk_name_collapsed_to_latin_acronym"]),
+        "distinctive_tokens_removed": bool(legal_flags["distinctive_tokens_removed"]),
+    }
+    if normalized_legal_name and normalized_legal_name in normalized_listing_names:
+        for listing_flag in listing_flags:
+            flags["normalized_name_too_short"] = flags["normalized_name_too_short"] or bool(
+                listing_flag["normalized_name_too_short"]
+            )
+            flags["normalized_name_acronym_only"] = flags["normalized_name_acronym_only"] or bool(
+                listing_flag["normalized_name_acronym_only"]
+            )
+    return flags
+
+
+def _has_normalization_risk_flags(row_or_flags: dict[str, Any]) -> bool:
+    return any(
+        bool(row_or_flags.get(flag))
+        for flag in (
+            "normalized_name_too_short",
+            "normalized_name_acronym_only",
+            "cjk_name_collapsed_to_latin_acronym",
+            "distinctive_tokens_removed",
+        )
+    )
 
 
 def _has_conservative_name_match(
@@ -2366,9 +2453,12 @@ def _audit_review_reason(
     conflict_flags: dict[str, bool],
     deterministic_support: bool,
     conservative_name_match: bool,
+    normalization_flags: dict[str, bool],
 ) -> str:
     if any(conflict_flags.values()):
         return "conflicting_group_identity"
+    if _has_normalization_risk_flags(normalization_flags):
+        return "name_normalization_requires_review"
     if not deterministic_support:
         return "missing_deterministic_support"
     if not conservative_name_match:
@@ -2438,6 +2528,12 @@ def _unique_ordered(values: list[str]) -> list[str]:
 def _names_compatible(listing_name: str, legal_name: str) -> bool:
     normalized_listing = normalize_legal_name_conservative(listing_name)
     return bool(normalized_listing and normalized_listing == normalize_legal_name_conservative(legal_name))
+
+
+def _normalized_legal_name_candidate(name_candidate: dict[str, Any]) -> str:
+    legal_name = str(name_candidate.get("legal_name") or "")
+    normalized = normalize_legal_name_conservative(legal_name)
+    return normalized or str(name_candidate.get("normalized_legal_name") or "")
 
 
 def _tail_without_anchor_examples(rows: list[dict[str, Any]], *, limit: int = 10) -> list[dict[str, str]]:
