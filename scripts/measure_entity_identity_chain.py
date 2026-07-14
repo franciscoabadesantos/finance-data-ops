@@ -84,6 +84,10 @@ def main() -> None:
         fixture_mappings=gleif_fixture_mappings or None,
         offline=args.offline,
         page_size=args.gleif_page_size,
+        request_sleep_seconds=args.gleif_request_sleep_seconds,
+        lei_isin_max_retries=args.gleif_lei_isin_max_retries,
+        retry_backoff_seconds=args.gleif_retry_backoff_seconds,
+        retry_jitter_seconds=args.gleif_retry_jitter_seconds,
     )
     gleif_records = gleif_client.lookup_isins(_gleif_lookup_isins(isin_records))
     direct_lei_by_isin = {record.isin: record.lei for record in gleif_records if record.lei and record.status == "success"}
@@ -162,6 +166,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--request-sleep-seconds", type=float, default=6.5)
     parser.add_argument("--gleif-page-size", type=int, default=200, help="GLEIF page[size] for LEI-to-ISIN expansion.")
+    parser.add_argument(
+        "--gleif-request-sleep-seconds",
+        type=float,
+        default=0.5,
+        help="Sleep between GLEIF LEI-to-ISIN expansion requests.",
+    )
+    parser.add_argument("--gleif-lei-isin-max-retries", type=int, default=3)
+    parser.add_argument("--gleif-retry-backoff-seconds", type=float, default=1.0)
+    parser.add_argument("--gleif-retry-jitter-seconds", type=float, default=0.25)
     return parser
 
 

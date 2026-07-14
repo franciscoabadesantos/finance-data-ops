@@ -211,6 +211,74 @@ def test_gleif_lei_isins_endpoint_paginates_and_parses_expanded_isins() -> None:
     assert record.isin_list == ["US02079K1079", "US02079K3059"]
 
 
+def test_gleif_lei_isins_retries_429_retry_after_then_success() -> None:
+    sleeps: list[float] = []
+    session = _FakeGleifSession(
+        [
+            {"errors": [{"title": "Too Many Requests"}]},
+            {"data": [{"id": "US02079K1079", "type": "isins"}]},
+        ],
+        status_codes=[429, 200],
+        headers=[{"Retry-After": "2"}, {}],
+    )
+    client = GleifIsinLeiClient(
+        session=session,
+        lei_isin_max_retries=2,
+        retry_backoff_seconds=0.1,
+        retry_jitter_seconds=0.0,
+        request_sleep_seconds=0.0,
+        sleep_func=sleeps.append,
+    )
+
+    record = client.lookup_lei_isin("5493006MHB84DD0ZWV18")
+
+    assert record.status == "success"
+    assert record.isin_list == ["US02079K1079"]
+    assert sleeps == [2.0]
+    assert len(session.requested_urls) == 2
+
+
+def test_gleif_lei_isins_persistent_429_is_rate_limited_not_not_found() -> None:
+    sleeps: list[float] = []
+    session = _FakeGleifSession(
+        {"errors": [{"title": "Too Many Requests"}]},
+        status_codes=[429, 429, 429],
+    )
+    client = GleifIsinLeiClient(
+        session=session,
+        lei_isin_max_retries=2,
+        retry_backoff_seconds=0.5,
+        retry_jitter_seconds=0.0,
+        request_sleep_seconds=0.0,
+        sleep_func=sleeps.append,
+    )
+
+    record = client.lookup_lei_isin("5493006MHB84DD0ZWV18")
+
+    assert record.status == "rate_limited"
+    assert record.isin_list == []
+    assert "429 Client Error: Too Many Requests" in record.error_message
+    assert sleeps == [0.5, 1.0]
+    assert len(session.requested_urls) == 3
+
+
+def test_gleif_lei_isins_throttles_between_unique_lei_requests() -> None:
+    sleeps: list[float] = []
+    session = _FakeGleifSession({"data": [{"id": "US02079K1079", "type": "isins"}]})
+    client = GleifIsinLeiClient(
+        session=session,
+        request_sleep_seconds=1.25,
+        retry_jitter_seconds=0.0,
+        sleep_func=sleeps.append,
+    )
+
+    records = client.lookup_lei_isins(["LEI1", "LEI1", "LEI2", "LEI3"])
+
+    assert [record.status for record in records] == ["success", "success", "success"]
+    assert sleeps == [1.25, 1.25]
+    assert len(session.requested_urls) == 3
+
+
 def test_gleif_legal_name_search_tries_variants_until_success() -> None:
     session = _FakeGleifSession(
         [
@@ -558,6 +626,43 @@ def test_name_anchor_candidate_diagnostics_survive_missing_expansion_and_prefix_
     assert row["direct_prefix_mismatch_reject_reason"] == "direct_prefix_mismatch_name_unconfirmed"
     assert row["direct_prefix_mismatch_lei"] == "DIRECTWRONGLEI1"
     assert row["direct_prefix_mismatch_legal_name"] == "UNRELATED HOLDINGS PLC"
+
+
+def test_rate_limited_lei_expansion_is_diagnostic_not_missing_identity() -> None:
+    measurement = _fixture_measurement(
+        ["ALKS"],
+        openfigi_fixtures={"ALKS": _security_fixture("ALKS", "ALKERMES PLC")},
+        isin_fixtures={"ALKS": {"isin": "-", "source": "fixture_yfinance"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:ALKSLEI000001": {
+                "status": "rate_limited",
+                "error_message": "429 Client Error: Too Many Requests",
+                "isin_list": [],
+            },
+        },
+        gleif_legal_name_fixtures={
+            "NAME:ALKERMES": {
+                "candidates": [_legal_candidate("ALKSLEI000001", "ALKERMES PLC", country="US")]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="ALKS", provider_symbol="ALKS", country="US", currency="USD", name="ALKERMES PLC"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["entity_attach_method"] == "unattached_no_anchor"
+    assert row["legal_name_anchor_status"] == "rejected"
+    assert row["legal_name_anchor_reject_reason"] == "gleif_lei_found_but_no_compatible_isin"
+    assert row["legal_name_candidate_lei"] == "ALKSLEI000001"
+    assert row["legal_name_candidate_lei_in_expansion_request"] is True
+    assert row["legal_name_candidate_lei_expansion_status"] == "rate_limited"
+    assert row["legal_name_candidate_lei_expansion_error"] == "429 Client Error: Too Many Requests"
+    assert row["legal_name_candidate_lei_expansion_isin_count"] == 0
+    assert row["matched_compatible_isins"] == []
+    assert measurement.summary["gleif_lei_expansion_status_counts"] == {"rate_limited": 1}
 
 
 def test_tls_tls_ax_remains_non_merged_with_different_lei() -> None:
@@ -1525,9 +1630,18 @@ def _direct_isin_can_skip_legal_name(*, candidate, record, direct_lei_by_isin: d
 
 
 class _FakeGleifSession:
-    def __init__(self, payload: object, status_code: int = 200) -> None:
+    def __init__(
+        self,
+        payload: object,
+        status_code: int = 200,
+        *,
+        status_codes: list[int] | None = None,
+        headers: list[dict[str, str]] | None = None,
+    ) -> None:
         self.payload = payload
         self.status_code = status_code
+        self.status_codes = status_codes or []
+        self.headers = headers or []
         self.requested_url = ""
         self.requested_params = {}
         self.requested_urls: list[str] = []
@@ -1543,18 +1657,22 @@ class _FakeGleifSession:
         if isinstance(payload, list):
             index = min(self._call_count, len(payload) - 1)
             payload = payload[index]
+        status_code = self.status_codes[min(self._call_count, len(self.status_codes) - 1)] if self.status_codes else self.status_code
+        headers = self.headers[min(self._call_count, len(self.headers) - 1)] if self.headers else {}
         self._call_count += 1
-        return _FakeGleifResponse(payload, self.status_code)
+        return _FakeGleifResponse(payload, status_code, headers=headers)
 
 
 class _FakeGleifResponse:
-    def __init__(self, payload: object, status_code: int) -> None:
+    def __init__(self, payload: object, status_code: int, *, headers: dict[str, str] | None = None) -> None:
         self.payload = payload
         self.status_code = status_code
+        self.headers = headers or {}
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
+            message = "429 Client Error: Too Many Requests" if self.status_code == 429 else f"HTTP {self.status_code}"
+            raise RuntimeError(message)
 
     def json(self) -> object:
         return self.payload

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import random
+import time
 from dataclasses import dataclass, replace
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import requests
@@ -12,6 +16,10 @@ from finance_data_ops.identity.names import normalize_legal_name_conservative
 
 GLEIF_LEI_RECORDS_URL = "https://api.gleif.org/api/v1/lei-records"
 DEFAULT_GLEIF_PAGE_SIZE = 200
+DEFAULT_GLEIF_REQUEST_SLEEP_SECONDS = 0.5
+DEFAULT_GLEIF_LEI_ISIN_MAX_RETRIES = 3
+DEFAULT_GLEIF_RETRY_BACKOFF_SECONDS = 1.0
+DEFAULT_GLEIF_RETRY_JITTER_SECONDS = 0.25
 MAX_GLEIF_PAGES = 100
 
 
@@ -48,6 +56,10 @@ class GleifLegalNameRecord:
     source: str = "gleif_legal_name"
 
 
+class GleifRateLimitError(RuntimeError):
+    """GLEIF returned HTTP 429 after configured retries."""
+
+
 class GleifIsinLeiClient:
     def __init__(
         self,
@@ -57,12 +69,22 @@ class GleifIsinLeiClient:
         session: requests.Session | None = None,
         page_size: int = DEFAULT_GLEIF_PAGE_SIZE,
         max_pages: int = MAX_GLEIF_PAGES,
+        request_sleep_seconds: float = DEFAULT_GLEIF_REQUEST_SLEEP_SECONDS,
+        lei_isin_max_retries: int = DEFAULT_GLEIF_LEI_ISIN_MAX_RETRIES,
+        retry_backoff_seconds: float = DEFAULT_GLEIF_RETRY_BACKOFF_SECONDS,
+        retry_jitter_seconds: float = DEFAULT_GLEIF_RETRY_JITTER_SECONDS,
+        sleep_func: Any = time.sleep,
     ) -> None:
         self.fixture_mappings = {str(k).strip().upper(): v for k, v in (fixture_mappings or {}).items()}
         self.offline = bool(offline)
         self.session = session or requests.Session()
         self.page_size = max(1, min(int(page_size), 200))
         self.max_pages = max(1, int(max_pages))
+        self.request_sleep_seconds = max(0.0, float(request_sleep_seconds))
+        self.lei_isin_max_retries = max(0, int(lei_isin_max_retries))
+        self.retry_backoff_seconds = max(0.0, float(retry_backoff_seconds))
+        self.retry_jitter_seconds = max(0.0, float(retry_jitter_seconds))
+        self.sleep_func = sleep_func
 
     def lookup_isins(self, isins: list[str]) -> list[GleifIsinLeiRecord]:
         out = []
@@ -104,12 +126,16 @@ class GleifIsinLeiClient:
     def lookup_lei_isins(self, leis: list[str]) -> list[GleifLeiIsinRecord]:
         out = []
         seen: set[str] = set()
+        request_count = 0
         for raw_lei in leis:
             lei = _clean_text(raw_lei, upper=True)
             if not lei or lei in seen:
                 continue
             seen.add(lei)
+            if request_count and self.request_sleep_seconds and not self.fixture_mappings and not self.offline:
+                self.sleep_func(self.request_sleep_seconds)
             out.append(self.lookup_lei_isin(lei))
+            request_count += 1
         return out
 
     def lookup_lei_isin(self, lei: str) -> GleifLeiIsinRecord:
@@ -127,12 +153,7 @@ class GleifIsinLeiClient:
         page_number = 1
         try:
             while page_number <= self.max_pages:
-                response = self.session.get(
-                    f"{GLEIF_LEI_RECORDS_URL}/{cleaned_lei}/isins",
-                    params={"page[size]": self.page_size, "page[number]": page_number},
-                    timeout=30,
-                )
-                response.raise_for_status()
+                response = self._get_lei_isin_page_with_retry(cleaned_lei=cleaned_lei, page_number=page_number)
                 payload = response.json()
                 if isinstance(payload, dict):
                     pages.append(payload)
@@ -156,6 +177,15 @@ class GleifIsinLeiClient:
                 source="gleif_lei_record_isins",
             )
         except Exception as exc:
+            if _is_rate_limit_exception(exc):
+                return GleifLeiIsinRecord(
+                    lei=cleaned_lei,
+                    isin_list=[],
+                    response_payload={"pages": pages} if pages else None,
+                    status="rate_limited",
+                    error_message=str(exc),
+                    source="gleif_lei_record_isins",
+                )
             return GleifLeiIsinRecord(
                 lei=cleaned_lei,
                 isin_list=[],
@@ -164,6 +194,29 @@ class GleifIsinLeiClient:
                 error_message=str(exc),
                 source="gleif_lei_record_isins",
             )
+
+    def _get_lei_isin_page_with_retry(self, *, cleaned_lei: str, page_number: int) -> requests.Response:
+        attempt = 0
+        while True:
+            response = self.session.get(
+                f"{GLEIF_LEI_RECORDS_URL}/{cleaned_lei}/isins",
+                params={"page[size]": self.page_size, "page[number]": page_number},
+                timeout=30,
+            )
+            if getattr(response, "status_code", None) != 429:
+                response.raise_for_status()
+                return response
+            if attempt >= self.lei_isin_max_retries:
+                raise GleifRateLimitError(_rate_limit_message(response=response, attempt=attempt))
+            delay = _retry_delay_seconds(
+                response=response,
+                attempt=attempt,
+                backoff_seconds=self.retry_backoff_seconds,
+                jitter_seconds=self.retry_jitter_seconds,
+            )
+            if delay > 0:
+                self.sleep_func(delay)
+            attempt += 1
 
     def search_legal_names(self, names: list[str]) -> list[GleifLegalNameRecord]:
         by_normalized: dict[str, GleifLegalNameRecord] = {}
@@ -365,6 +418,49 @@ def gleif_lei_isin_cache_rows(records: list[GleifLeiIsinRecord]) -> list[dict[st
         }
         for record in records
     ]
+
+
+def _is_rate_limit_exception(exc: Exception) -> bool:
+    return isinstance(exc, GleifRateLimitError) or "429" in str(exc) or "Too Many Requests" in str(exc)
+
+
+def _retry_delay_seconds(
+    *,
+    response: Any,
+    attempt: int,
+    backoff_seconds: float,
+    jitter_seconds: float,
+) -> float:
+    retry_after = _retry_after_seconds(response)
+    if retry_after is not None:
+        return retry_after
+    return backoff_seconds * (2**attempt) + (random.uniform(0, jitter_seconds) if jitter_seconds else 0.0)
+
+
+def _retry_after_seconds(response: Any) -> float | None:
+    headers = getattr(response, "headers", {}) or {}
+    value = headers.get("Retry-After") if hasattr(headers, "get") else None
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(text)
+        now = datetime.now(tz=retry_at.tzinfo) if retry_at.tzinfo else datetime.now()
+        return max(0.0, (retry_at - now).total_seconds())
+    except Exception:
+        return None
+
+
+def _rate_limit_message(*, response: Any, attempt: int) -> str:
+    retry_after = getattr(response, "headers", {}).get("Retry-After") if hasattr(getattr(response, "headers", {}), "get") else None
+    suffix = f"; retry_after={retry_after}" if retry_after else ""
+    return f"429 Client Error: Too Many Requests for GLEIF LEI->ISIN expansion after {attempt + 1} attempts{suffix}"
 
 
 def _record_from_gleif_payload(isin: str, payload: Any) -> GleifIsinLeiRecord:
