@@ -88,6 +88,7 @@ def main() -> None:
         record.symbol
         for record in isin_records
         if record.isin and record.status == "success" and direct_lei_by_isin.get(record.isin)
+        and record.error_message != "isin_prefix_mismatch"
     }
     legal_name_records = gleif_client.search_legal_names(
         [

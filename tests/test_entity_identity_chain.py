@@ -403,6 +403,92 @@ def test_shop_prefix_mismatch_without_name_confirmation_stays_manual_review() ->
     assert measurement.summary["manual_review_by_listing_group_kind"] == {"single_listing": 1}
 
 
+def test_direct_prefix_mismatch_does_not_skip_name_anchor_fallback() -> None:
+    symbols = ["ALKS", "BCRX", "BE", "COIN", "CSL.AX"]
+    measurement = _fixture_measurement(
+        symbols,
+        openfigi_fixtures={
+            "ALKS": _security_fixture("ALKS", "ALKERMES PLC"),
+            "BCRX": _security_fixture("BCRX", "BIOCRYST PHARMACEUTICALS INC"),
+            "BE": _security_fixture("BE", "BLOOM ENERGY CORP"),
+            "COIN": _security_fixture("COIN", "COINBASE GLOBAL INC"),
+            "CSL.AX": _security_fixture("CSL", "CSL LTD", country="AU"),
+        },
+        isin_fixtures={
+            "ALKS": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"},
+            "BCRX": {"isin": "DE000A2PSR20", "source": "fixture_yfinance"},
+            "BE": {"isin": "KYG290181018", "source": "fixture_yfinance"},
+            "COIN": {"isin": "CA8849038085", "source": "fixture_yfinance"},
+            "CSL.AX": {"isin": "GB00BMXNWH07", "source": "fixture_yfinance"},
+        },
+        gleif_fixtures={
+            "IE00B4BNMY34": {"lei": "DIRECTWRONGLEI1", "legal_name": "UNRELATED HOLDINGS PLC"},
+            "DE000A2PSR20": {"lei": "DIRECTWRONGLEI2", "legal_name": "UNRELATED HOLDINGS PLC"},
+            "KYG290181018": {"lei": "DIRECTWRONGLEI3", "legal_name": "UNRELATED HOLDINGS PLC"},
+            "CA8849038085": {"lei": "DIRECTWRONGLEI4", "legal_name": "UNRELATED HOLDINGS PLC"},
+            "GB00BMXNWH07": {"lei": "DIRECTWRONGLEI5", "legal_name": "UNRELATED HOLDINGS PLC"},
+        },
+        gleif_lei_isin_fixtures={
+            "LEI:DIRECTWRONGLEI1": {"legal_name": "UNRELATED HOLDINGS PLC", "isin_list": ["IE00B4BNMY34"]},
+            "LEI:DIRECTWRONGLEI2": {"legal_name": "UNRELATED HOLDINGS PLC", "isin_list": ["DE000A2PSR20"]},
+            "LEI:DIRECTWRONGLEI3": {"legal_name": "UNRELATED HOLDINGS PLC", "isin_list": ["KYG290181018"]},
+            "LEI:DIRECTWRONGLEI4": {"legal_name": "UNRELATED HOLDINGS PLC", "isin_list": ["CA8849038085"]},
+            "LEI:DIRECTWRONGLEI5": {"legal_name": "UNRELATED HOLDINGS PLC", "isin_list": ["GB00BMXNWH07"]},
+            "LEI:ALKSLEI000001": {"legal_name": "ALKERMES PLC", "isin_list": ["US01642T1088"]},
+            "LEI:BCRXLEI000001": {
+                "legal_name": "BIOCRYST PHARMACEUTICALS INC",
+                "isin_list": ["US09058V1035"],
+            },
+            "LEI:BELEI0000001": {"legal_name": "BLOOM ENERGY CORPORATION", "isin_list": ["US0937121079"]},
+            "LEI:COINLEI000001": {"legal_name": "COINBASE GLOBAL INC", "isin_list": ["US19260Q1076"]},
+            "LEI:CSLLEI0000001": {"legal_name": "CSL LIMITED", "isin_list": ["AU000000CSL8"]},
+        },
+        gleif_legal_name_fixtures={
+            "NAME:ALKERMES": {
+                "candidates": [_legal_candidate("ALKSLEI000001", "ALKERMES PLC", country="US")]
+            },
+            "NAME:BIOCRYST PHARMACEUTICALS": {
+                "candidates": [
+                    _legal_candidate("BCRXLEI000001", "BIOCRYST PHARMACEUTICALS INC", country="US")
+                ]
+            },
+            "NAME:BLOOM ENERGY": {
+                "candidates": [_legal_candidate("BELEI0000001", "BLOOM ENERGY CORPORATION", country="US")]
+            },
+            "NAME:COINBASE GLOBAL": {
+                "candidates": [_legal_candidate("COINLEI000001", "COINBASE GLOBAL INC", country="US")]
+            },
+            "NAME:CSL": {
+                "candidates": [_legal_candidate("CSLLEI0000001", "CSL LIMITED", country="AU")]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="ALKS", provider_symbol="ALKS", country="US", currency="USD", name="ALKERMES PLC"),
+            ListingCandidate(
+                symbol="BCRX",
+                provider_symbol="BCRX",
+                country="US",
+                currency="USD",
+                name="BIOCRYST PHARMACEUTICALS INC",
+            ),
+            ListingCandidate(symbol="BE", provider_symbol="BE", country="US", currency="USD", name="BLOOM ENERGY CORP"),
+            ListingCandidate(symbol="COIN", provider_symbol="COIN", country="US", currency="USD", name="COINBASE GLOBAL INC"),
+            ListingCandidate(symbol="CSL.AX", provider_symbol="CSL.AX", country="AU", currency="AUD", name="CSL LTD"),
+        ],
+        pairs=[],
+    )
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+
+    for symbol in symbols:
+        assert rows[symbol]["isin_status"] == "success"
+        assert rows[symbol]["isin_prefix_diagnostic"] == "isin_prefix_mismatch"
+        assert rows[symbol]["direct_isin_attach_reject_reason"] == "direct_isin_prefix_mismatch_name_unconfirmed"
+        assert rows[symbol]["entity_attach_method"] == "name_anchor_confirmed"
+        assert rows[symbol]["attachment_provenance"] == "name_anchor_confirmed"
+        assert rows[symbol]["attachment_confidence"] == "medium"
+    assert measurement.summary["listings_attached_name_anchor_confirmed"] == 5
+
+
 def test_tls_tls_ax_remains_non_merged_with_different_lei() -> None:
     measurement = _fixture_measurement(
         ["TLS", "TLS.AX"],
@@ -1276,6 +1362,7 @@ def _fixture_measurement(
         record.symbol
         for record in isin_records
         if record.isin and record.status == "success" and direct_lei_by_isin.get(record.isin)
+        and record.error_message != "isin_prefix_mismatch"
     }
     legal_name_records = gleif.search_legal_names(
         [
@@ -1320,6 +1407,18 @@ def _security_fixture(ticker: str, name: str, *, country: str = "US") -> dict:
         "country": country,
         "currency": "USD",
         "securityType2": "Common Stock",
+    }
+
+
+def _legal_candidate(lei: str, legal_name: str, *, country: str) -> dict:
+    return {
+        "lei": lei,
+        "legal_name": legal_name,
+        "legal_country": country,
+        "headquarters_country": country,
+        "jurisdiction": country,
+        "entity_status": "ACTIVE",
+        "registration_status": "ISSUED",
     }
 
 
