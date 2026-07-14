@@ -13,7 +13,11 @@ from finance_data_ops.identity.chain import (
 from finance_data_ops.identity.models import ListingCandidate
 from finance_data_ops.identity.gleif import GleifIsinLeiClient
 from finance_data_ops.identity.isin import YFinanceIsinClient
-from finance_data_ops.identity.names import legal_name_query_from_listing, normalize_legal_name_conservative
+from finance_data_ops.identity.names import (
+    legal_name_query_from_listing,
+    legal_name_query_variants_from_listing,
+    normalize_legal_name_conservative,
+)
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
 from finance_data_ops.publish.client import RecordingPublisher
@@ -180,12 +184,57 @@ def test_gleif_lei_isins_endpoint_paginates_and_parses_expanded_isins() -> None:
     assert record.isin_list == ["US02079K1079", "US02079K3059"]
 
 
+def test_gleif_legal_name_search_tries_variants_until_success() -> None:
+    session = _FakeGleifSession(
+        [
+            {"data": []},
+            {
+                "data": [
+                    {
+                        "id": "HDLEI000000001",
+                        "attributes": {
+                            "lei": "HDLEI000000001",
+                            "entity": {
+                                "legalName": {"name": "THE HOME DEPOT, INC."},
+                                "legalAddress": {"country": "US"},
+                                "headquartersAddress": {"country": "US"},
+                                "jurisdiction": "US-DE",
+                                "status": "ACTIVE",
+                            },
+                            "registration": {"status": "ISSUED"},
+                        },
+                    }
+                ]
+            },
+        ]
+    )
+    client = GleifIsinLeiClient(session=session)
+
+    records = client.search_legal_names(["Home Depot Inc The", "The Home Depot Inc"])
+
+    assert len(records) == 1
+    assert records[0].status == "success"
+    assert records[0].candidates[0]["lei"] == "HDLEI000000001"
+    assert session.requested_params_list[0]["filter[entity.legalName]"] == "Home Depot Inc The"
+    assert session.requested_params_list[1]["filter[entity.legalName]"] == "The Home Depot Inc"
+
+
 def test_legal_name_query_preserves_corporate_suffix_but_confirmation_normalizes_it() -> None:
     assert legal_name_query_from_listing("ALPHABET INC-CL C") == "Alphabet Inc"
     assert legal_name_query_from_listing("LENNAR CORP-A") == "Lennar Corporation"
     assert legal_name_query_from_listing("HSBC HOLDINGS PLC") == "Hsbc Holdings Plc"
+    assert legal_name_query_from_listing("ELI LILLY & CO") == "Eli Lilly And Company"
+    assert legal_name_query_variants_from_listing("HOME DEPOT INC/THE")[:3] == [
+        "Home Depot Inc The",
+        "Home Depot Inc",
+        "The Home Depot Inc",
+    ]
     assert normalize_legal_name_conservative("ALPHABET INC-CL C") == "ALPHABET"
     assert normalize_legal_name_conservative("ALPHABET INC.") == "ALPHABET"
+    assert normalize_legal_name_conservative("THE HOME DEPOT INC.") == "HOME DEPOT"
+    assert normalize_legal_name_conservative("HOME DEPOT INC/THE") == "HOME DEPOT"
+    assert normalize_legal_name_conservative("ELI LILLY AND CO") == "ELI LILLY AND"
+    assert normalize_legal_name_conservative("ELI LILLY AND COMPANY") == "ELI LILLY AND"
 
 
 def test_adr_isin_can_map_to_underlying_lei() -> None:
@@ -503,6 +552,130 @@ def test_name_anchor_precision_audit_and_isin_samples_are_capped() -> None:
     assert audit["symbol"] == "MEGA"
     assert audit["matched_gleif_legal_name"] == "MEGA CORPORATION"
     assert audit["compatible_expanded_isin_count"] == 20
+    assert audit["compatible_isin_candidate_count"] == 20
+    assert len(audit["compatible_isin_candidate_sample"]) == 10
+
+
+def test_openfigi_success_name_variants_can_confirm_legal_name_anchor() -> None:
+    measurement = _fixture_measurement(
+        ["HD", "LLY"],
+        openfigi_fixtures={
+            "HD": {
+                "ticker": "HD",
+                "name": "HOME DEPOT INC/THE",
+                "figi": "HD-FIGI",
+                "compositeFIGI": "HD-COMP",
+                "shareClassFIGI": "HD-SHARE",
+                "country": "US",
+                "securityType2": "Common Stock",
+            },
+            "LLY": {
+                "ticker": "LLY",
+                "name": "ELI LILLY & CO",
+                "figi": "LLY-FIGI",
+                "compositeFIGI": "LLY-COMP",
+                "shareClassFIGI": "LLY-SHARE",
+                "country": "US",
+                "securityType2": "Common Stock",
+            },
+        },
+        isin_fixtures={
+            "HD": {"isin": "-", "source": "fixture_yfinance"},
+            "LLY": {"isin": "-", "source": "fixture_yfinance"},
+        },
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:HDLEI000000001": {"legal_name": "THE HOME DEPOT, INC.", "isin_list": ["US4370761029"]},
+            "LEI:LLYLEI00000001": {"legal_name": "ELI LILLY AND COMPANY", "isin_list": ["US5324571083"]},
+        },
+        gleif_legal_name_fixtures={
+            "NAME:HOME DEPOT": {
+                "candidates": [
+                    {
+                        "lei": "HDLEI000000001",
+                        "legal_name": "THE HOME DEPOT, INC.",
+                        "legal_country": "US",
+                        "headquarters_country": "US",
+                        "jurisdiction": "US-DE",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            },
+            "NAME:ELI LILLY AND": {
+                "candidates": [
+                    {
+                        "lei": "LLYLEI00000001",
+                        "legal_name": "ELI LILLY AND COMPANY",
+                        "legal_country": "US",
+                        "headquarters_country": "US",
+                        "jurisdiction": "US-IN",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="HD", provider_symbol="HD", country="US", currency="USD"),
+            ListingCandidate(symbol="LLY", provider_symbol="LLY", country="US", currency="USD"),
+        ],
+        pairs=[],
+    )
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+
+    assert rows["HD"]["entity_attach_method"] == "name_anchor_confirmed"
+    assert rows["HD"]["listing_name_used_for_legal_name_search"] == "Home Depot Inc The"
+    assert rows["HD"]["matched_compatible_isins"] == ["US4370761029"]
+    assert rows["LLY"]["entity_attach_method"] == "name_anchor_confirmed"
+    assert rows["LLY"]["listing_name_used_for_legal_name_search"] == "Eli Lilly And Company"
+    assert rows["LLY"]["matched_compatible_isins"] == ["US5324571083"]
+
+
+def test_internal_name_can_drive_legal_name_anchor_when_openfigi_not_found() -> None:
+    measurement = _fixture_measurement(
+        ["005930.KS"],
+        openfigi_fixtures={"005930.KS": {"error": "No identifier found."}},
+        isin_fixtures={"005930.KS": {"isin": "-", "source": "fixture_yfinance"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:SAMSUNGLEI0001": {
+                "legal_name": "SAMSUNG ELECTRONICS CO., LTD.",
+                "isin_list": ["KR7005930003"],
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:SAMSUNG ELECTRONICS": {
+                "candidates": [
+                    {
+                        "lei": "SAMSUNGLEI0001",
+                        "legal_name": "SAMSUNG ELECTRONICS CO., LTD.",
+                        "legal_country": "KR",
+                        "headquarters_country": "KR",
+                        "jurisdiction": "KR",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            }
+        },
+        extra_candidates=[
+            ListingCandidate(
+                symbol="005930.KS",
+                provider_symbol="005930.KS",
+                currency="KRW",
+                name="SAMSUNG ELECTRONICS CO LTD",
+            ),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["openfigi_status"] == "not_found"
+    assert row["derived_listing_country"] == "KR"
+    assert row["entity_attach_method"] == "name_anchor_confirmed"
+    assert row["listing_name_used_for_legal_name_search"] == "Samsung Electronics Company Limited"
+    assert row["matched_compatible_isins"] == ["KR7005930003"]
 
 
 def test_name_anchor_does_not_confirm_ns_listing_with_only_us_isins() -> None:
@@ -779,6 +952,7 @@ def _fixture_measurement(
     gleif_fixtures: dict | None = None,
     gleif_lei_isin_fixtures: dict | None = None,
     gleif_legal_name_fixtures: dict | None = None,
+    openfigi_fixtures: dict | None = None,
     extra_candidates: list[ListingCandidate] | None = None,
     pairs: list[tuple[str, str, str]] | None = None,
 ):
@@ -798,7 +972,10 @@ def _fixture_measurement(
                     source="test_fixture",
                 )
             )
-    openfigi = OpenFigiClient(fixture_mappings=acceptance_openfigi_fixtures(), request_sleep_seconds=0)
+    openfigi_fixture_mappings = acceptance_openfigi_fixtures()
+    if openfigi_fixtures:
+        openfigi_fixture_mappings.update(openfigi_fixtures)
+    openfigi = OpenFigiClient(fixture_mappings=openfigi_fixture_mappings, request_sleep_seconds=0)
     openfigi_mappings = openfigi.map_candidates(candidates)
     isin = YFinanceIsinClient(fixture_isins=isin_fixtures or acceptance_isin_fixtures())
     isin_records = isin.enrich_candidates(candidates)
@@ -827,12 +1004,13 @@ def _fixture_measurement(
     }
     legal_name_records = gleif.search_legal_names(
         [
-            legal_name_query_from_listing(
-                (openfigi_by_symbol.get(candidate.symbol).name if openfigi_by_symbol.get(candidate.symbol) else "")
-                or candidate.name
-            )
+            query
             for candidate in candidates
             if candidate.symbol not in direct_lei_symbols
+            for query in legal_name_query_variants_from_listing(
+                (openfigi_by_symbol.get(candidate.symbol).name if openfigi_by_symbol.get(candidate.symbol) else ""),
+                candidate.name,
+            )
         ]
     )
     gleif_lei_isin_records = gleif.lookup_lei_isins(

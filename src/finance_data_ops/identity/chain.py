@@ -19,7 +19,11 @@ from finance_data_ops.identity.isin import (
     isin_prefix_policy_for_listing,
 )
 from finance_data_ops.identity.models import ListingCandidate, OpenFigiMapping
-from finance_data_ops.identity.names import legal_name_query_from_listing, normalize_legal_name_conservative
+from finance_data_ops.identity.names import (
+    legal_name_query_from_listing,
+    legal_name_query_variants_from_listing,
+    normalize_legal_name_conservative,
+)
 from finance_data_ops.identity.openfigi import openfigi_cache_rows
 
 ACCEPTANCE_PAIRS = [
@@ -335,7 +339,8 @@ def _symbol_row(
     direct_lei = gleif.lei if gleif else ""
     direct_legal_name = gleif.legal_name if gleif else ""
     listing_name = _best_listing_name(candidate, openfigi)
-    listing_name_query = legal_name_query_from_listing(listing_name)
+    listing_name_queries = _listing_name_search_queries(candidate, openfigi)
+    listing_name_query = listing_name_queries[0] if listing_name_queries else legal_name_query_from_listing(listing_name)
     prefix_policy = isin_prefix_policy_for_listing(candidate)
     allowed_prefixes = list(prefix_policy["allowed_isin_prefixes"])
     return {
@@ -350,6 +355,7 @@ def _symbol_row(
         "openfigi_name": openfigi.name if openfigi else "",
         "internal_candidate_name": candidate.name or "",
         "listing_name_used_for_legal_name_search": listing_name_query,
+        "listing_name_search_queries": listing_name_queries,
         "figi": openfigi.figi if openfigi else "",
         "compositeFIGI": openfigi.composite_figi if openfigi else "",
         "shareClassFIGI": openfigi.share_class_figi if openfigi else "",
@@ -380,8 +386,8 @@ def _symbol_row(
         "compatible_isin_gate_status": "passed" if direct_lei and allowed_prefixes else "not_evaluated",
         "compatible_isin_gate_reject_reason": "",
         "expected_listing_country_prefix_present": False,
-        "compatible_equity_like_isin_count": 0,
-        "compatible_equity_like_isin_candidates": [],
+        "compatible_isin_candidate_count": 0,
+        "compatible_isin_candidate_sample": [],
         "legal_name_anchor_status": "not_requested_direct_isin" if direct_lei else "not_evaluated",
         "legal_name_anchor_reject_reason": "",
         "candidate_lei": "",
@@ -422,11 +428,8 @@ def _attach_rows_via_lei_expansion(
                 attached["compatible_expanded_isin_count"] = len(compatible_isins)
                 attached["matched_compatible_isins"] = _sample_isins(compatible_isins)
                 attached["expected_listing_country_prefix_present"] = bool(compatible_isins)
-                attached["compatible_equity_like_isin_candidates"] = _equity_like_isin_candidates(
-                    compatible_isins=compatible_isins,
-                    direct_isin=_symbol(attached.get("isin")),
-                )
-                attached["compatible_equity_like_isin_count"] = len(attached["compatible_equity_like_isin_candidates"])
+                attached["compatible_isin_candidate_sample"] = _sample_isins(compatible_isins)
+                attached["compatible_isin_candidate_count"] = len(compatible_isins)
                 direct_isin = _symbol(attached.get("isin"))
                 if direct_isin and direct_isin in set(expansion.isin_list):
                     attached["matched_compatible_isins"] = [direct_isin]
@@ -466,16 +469,8 @@ def _attach_rows_via_lei_expansion(
                     "compatible_isin_gate_status": "passed",
                     "compatible_isin_gate_reject_reason": "",
                     "expected_listing_country_prefix_present": True,
-                    "compatible_equity_like_isin_candidates": _equity_like_isin_candidates(
-                        compatible_isins=candidate_isins,
-                        direct_isin=_symbol(attached.get("isin")),
-                    ),
-                    "compatible_equity_like_isin_count": len(
-                        _equity_like_isin_candidates(
-                            compatible_isins=candidate_isins,
-                            direct_isin=_symbol(attached.get("isin")),
-                        )
-                    ),
+                    "compatible_isin_candidate_sample": _sample_isins(candidate_isins),
+                    "compatible_isin_candidate_count": len(candidate_isins),
                     "lei_source": record.source,
                     "lei_status": record.status,
                     "attachment_provenance": "lei_expansion",
@@ -530,16 +525,8 @@ def _attach_rows_via_lei_expansion(
                         "compatible_isin_gate_status": "passed",
                         "compatible_isin_gate_reject_reason": "",
                         "expected_listing_country_prefix_present": True,
-                        "compatible_equity_like_isin_candidates": _equity_like_isin_candidates(
-                            compatible_isins=candidate_isins,
-                            direct_isin=_symbol(attached.get("isin")),
-                        ),
-                        "compatible_equity_like_isin_count": len(
-                            _equity_like_isin_candidates(
-                                compatible_isins=candidate_isins,
-                                direct_isin=_symbol(attached.get("isin")),
-                            )
-                        ),
+                        "compatible_isin_candidate_sample": _sample_isins(candidate_isins),
+                        "compatible_isin_candidate_count": len(candidate_isins),
                         "lei_source": "gleif_legal_name_plus_lei_expansion",
                         "lei_status": record.status,
                         "candidate_lei": record.lei,
@@ -624,12 +611,14 @@ def _evaluate_name_anchor(
     legal_name_records: dict[str, GleifLegalNameRecord],
 ) -> dict[str, Any]:
     listing_name = _best_listing_name(candidate, openfigi)
-    normalized_listing_name = normalize_legal_name_conservative(listing_name)
-    query_name = legal_name_query_from_listing(listing_name)
+    query_names = _listing_name_search_queries(candidate, openfigi)
+    query_name = query_names[0] if query_names else legal_name_query_from_listing(listing_name)
+    normalized_listing_name = normalize_legal_name_conservative(query_name or listing_name)
     prefix_policy = isin_prefix_policy_for_listing(candidate)
     allowed_prefixes = set(prefix_policy["allowed_isin_prefixes"])
     base: dict[str, Any] = {
         "listing_name_used_for_legal_name_search": query_name,
+        "listing_name_search_queries": query_names,
         "status": "not_requested" if not normalized_listing_name else "not_found",
         "reject_reason": "",
         "matches": [],
@@ -646,15 +635,24 @@ def _evaluate_name_anchor(
         "compatible_isin_gate_status": "not_evaluated",
         "compatible_isin_gate_reject_reason": "",
         "expected_listing_country_prefix_present": False,
-        "compatible_equity_like_isin_count": 0,
-        "compatible_equity_like_isin_candidates": [],
+        "compatible_isin_candidate_count": 0,
+        "compatible_isin_candidate_sample": [],
     }
     if not normalized_listing_name:
         base["reject_reason"] = "no_listing_name_for_legal_name_search"
         return base
 
-    record = legal_name_records.get(_symbol(normalized_listing_name))
-    if not record or record.status != "success":
+    record = None
+    for candidate_query in query_names or [query_name]:
+        normalized_query = normalize_legal_name_conservative(candidate_query)
+        candidate_record = legal_name_records.get(_symbol(normalized_query))
+        if candidate_record and candidate_record.status == "success":
+            record = candidate_record
+            query_name = candidate_query
+            normalized_listing_name = normalized_query
+            base["listing_name_used_for_legal_name_search"] = candidate_query
+            break
+    if not record:
         base["status"] = "not_found"
         base["reject_reason"] = "legal_name_search_no_match"
         return base
@@ -728,16 +726,8 @@ def _evaluate_name_anchor(
                 "compatible_isin_gate_status": "passed",
                 "compatible_isin_gate_reject_reason": "",
                 "expected_listing_country_prefix_present": True,
-                "compatible_equity_like_isin_candidates": _equity_like_isin_candidates(
-                    compatible_isins=candidate_isins,
-                    direct_isin="",
-                ),
-                "compatible_equity_like_isin_count": len(
-                    _equity_like_isin_candidates(
-                        compatible_isins=candidate_isins,
-                        direct_isin="",
-                    )
-                ),
+                "compatible_isin_candidate_sample": _sample_isins(candidate_isins),
+                "compatible_isin_candidate_count": len(candidate_isins),
             }
         )
         return base
@@ -779,15 +769,16 @@ def _apply_name_anchor_diagnostics(row: dict[str, Any], evaluation: dict[str, An
         "matched_compatible_isins",
         "derived_listing_country",
         "allowed_isin_prefixes",
+        "listing_name_search_queries",
         "compatible_isin_gate_status",
         "compatible_isin_gate_reject_reason",
         "expected_listing_country_prefix_present",
-        "compatible_equity_like_isin_count",
-        "compatible_equity_like_isin_candidates",
+        "compatible_isin_candidate_count",
+        "compatible_isin_candidate_sample",
     ):
         if evaluation.get(key) or key in {
             "compatible_expanded_isin_count",
-            "compatible_equity_like_isin_count",
+            "compatible_isin_candidate_count",
             "expected_listing_country_prefix_present",
         }:
             row[key] = evaluation[key]
@@ -832,6 +823,15 @@ def _legal_name_candidate_country_compatible(
 
 def _best_listing_name(candidate: ListingCandidate, openfigi: OpenFigiMapping | None) -> str:
     return str((openfigi.name if openfigi and openfigi.name else "") or candidate.name or "").strip()
+
+
+def _listing_name_search_queries(candidate: ListingCandidate, openfigi: OpenFigiMapping | None) -> list[str]:
+    names = []
+    if openfigi and openfigi.name:
+        names.append(openfigi.name)
+    if candidate.name:
+        names.append(candidate.name)
+    return legal_name_query_variants_from_listing(*names)
 
 
 def _raw_isin_from_record(record: IsinRecord | None) -> str:
@@ -1125,15 +1125,14 @@ def _name_anchor_precision_audit(rows: list[dict[str, Any]]) -> list[dict[str, A
                 "matched_compatible_isins": list(row.get("matched_compatible_isins") or []),
                 "compatible_expanded_isin_count": int(row.get("compatible_expanded_isin_count") or 0),
                 "lei_expanded_isin_count": int(row.get("lei_expanded_isin_count") or 0),
-                "compatible_equity_like_isin_candidates": list(
-                    row.get("compatible_equity_like_isin_candidates") or []
-                ),
-                "compatible_equity_like_isin_count": int(row.get("compatible_equity_like_isin_count") or 0),
+                "compatible_isin_candidate_sample": list(row.get("compatible_isin_candidate_sample") or []),
+                "compatible_isin_candidate_count": int(row.get("compatible_isin_candidate_count") or 0),
                 "expected_listing_country_prefix_present": bool(
                     row.get("expected_listing_country_prefix_present")
                 ),
                 "derived_listing_country": row.get("derived_listing_country") or "",
                 "allowed_isin_prefixes": list(row.get("allowed_isin_prefixes") or []),
+                "listing_name_search_queries": list(row.get("listing_name_search_queries") or []),
                 "compatible_isin_gate_status": row.get("compatible_isin_gate_status") or "",
                 "compatible_isin_gate_reject_reason": row.get("compatible_isin_gate_reject_reason") or "",
                 "confidence": row.get("attachment_confidence") or "",
@@ -1148,15 +1147,6 @@ def _compatible_isins_for_listing(*, candidate: ListingCandidate, isins: list[st
     if not allowed_prefixes:
         return []
     return sorted({_symbol(isin) for isin in isins if _symbol(isin)[:2] in allowed_prefixes})
-
-
-def _equity_like_isin_candidates(*, compatible_isins: list[str], direct_isin: str) -> list[str]:
-    direct = _symbol(direct_isin)
-    if direct and direct in set(compatible_isins):
-        return [direct]
-    if len(compatible_isins) == 1:
-        return _sample_isins(compatible_isins)
-    return []
 
 
 def _sample_isins(isins: list[str] | set[str] | tuple[str, ...], *, limit: int = MAX_ISIN_OUTPUT_SAMPLE) -> list[str]:

@@ -166,16 +166,19 @@ class GleifIsinLeiClient:
             )
 
     def search_legal_names(self, names: list[str]) -> list[GleifLegalNameRecord]:
-        out = []
-        seen: set[str] = set()
+        by_normalized: dict[str, GleifLegalNameRecord] = {}
         for raw_name in names:
             query_name = _clean_text(raw_name)
             normalized = normalize_legal_name_conservative(query_name)
-            if not query_name or not normalized or normalized in seen:
+            if not query_name or not normalized:
                 continue
-            seen.add(normalized)
-            out.append(self.search_legal_name(query_name))
-        return out
+            existing = by_normalized.get(normalized)
+            if existing and existing.status == "success":
+                continue
+            record = self.search_legal_name(query_name)
+            if not existing or record.status == "success":
+                by_normalized[normalized] = record
+        return list(by_normalized.values())
 
     def search_legal_name(self, name: str) -> GleifLegalNameRecord:
         query_name = _clean_text(name)

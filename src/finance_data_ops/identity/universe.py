@@ -39,13 +39,34 @@ def build_candidate_universe_from_frames(
                 exchange_mic=_text(row.get("exchange_mic"), upper=True),
                 country=_country_from_region(row.get("region")),
                 currency=_text(row.get("currency"), upper=True),
+                name=_first_text(
+                    row.get("display_name"),
+                    row.get("name"),
+                    row.get("company_name"),
+                    row.get("security_name"),
+                    row.get("long_name"),
+                    row.get("short_name"),
+                ),
                 source="ticker_registry",
             )
 
     for row in _tracked_readiness_rows(ticker_readiness):
         symbol = _first_symbol(row.get("symbol"), row.get("ticker"), row.get("entity_id"))
         if symbol:
-            _merge_candidate(by_symbol, symbol, provider_symbol=symbol, source="ticker_readiness")
+            _merge_candidate(
+                by_symbol,
+                symbol,
+                provider_symbol=symbol,
+                name=_first_text(
+                    row.get("display_name"),
+                    row.get("name"),
+                    row.get("company_name"),
+                    row.get("security_name"),
+                    row.get("long_name"),
+                    row.get("short_name"),
+                ),
+                source="ticker_readiness",
+            )
 
     for row in _frame_records(entity_attributes_static):
         symbol = _first_symbol(row.get("symbol"), row.get("ticker"), row.get("entity_id"))
@@ -163,6 +184,12 @@ def read_postgres_candidate_universe(
                     "exchange",
                     "exchange_mic",
                     "currency",
+                    "display_name",
+                    "name",
+                    "company_name",
+                    "security_name",
+                    "long_name",
+                    "short_name",
                     "status",
                     "promotion_status",
                     "validation_status",
@@ -182,6 +209,12 @@ def read_postgres_candidate_universe(
                     "is_tracked",
                     "market_data_available",
                     "technical_features_available",
+                    "display_name",
+                    "name",
+                    "company_name",
+                    "security_name",
+                    "long_name",
+                    "short_name",
                 ],
             ),
             entity_attributes_static=_query_optional_table(

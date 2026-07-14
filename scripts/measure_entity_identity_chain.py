@@ -29,7 +29,7 @@ from finance_data_ops.identity.chain import (
 )
 from finance_data_ops.identity.gleif import GleifIsinLeiClient
 from finance_data_ops.identity.isin import YFinanceIsinClient
-from finance_data_ops.identity.names import legal_name_query_from_listing
+from finance_data_ops.identity.names import legal_name_query_variants_from_listing
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
 from finance_data_ops.identity.universe import read_postgres_candidate_universe
@@ -91,9 +91,13 @@ def main() -> None:
     }
     legal_name_records = gleif_client.search_legal_names(
         [
-            legal_name_query_from_listing((openfigi_by_symbol.get(candidate.symbol).name if openfigi_by_symbol.get(candidate.symbol) else "") or candidate.name)
+            query
             for candidate in candidates
             if candidate.symbol not in direct_lei_symbols
+            for query in legal_name_query_variants_from_listing(
+                (openfigi_by_symbol.get(candidate.symbol).name if openfigi_by_symbol.get(candidate.symbol) else ""),
+                candidate.name,
+            )
         ]
     )
     legal_name_candidate_leis = [
