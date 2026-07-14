@@ -107,6 +107,7 @@ def measure_entity_identity_chain(
         base_rows=base_rows,
         candidates_by_symbol=candidates_by_symbol,
         openfigi_by_symbol=openfigi_by_symbol,
+        gleif_by_isin=gleif_by_isin,
         lei_expansions=lei_expansions,
         legal_name_records=legal_name_records,
     )
@@ -368,14 +369,6 @@ def _symbol_row(
             direct_entity_legal_name = direct_legal_name
             direct_lei_value = direct_lei
             direct_gate_status = "passed"
-        elif direct_name_confirmed:
-            direct_attach_method = "isin_direct_prefix_mismatch_name_confirmed"
-            direct_attach_reason = "direct_isin_prefix_mismatch_name_confirmed"
-            direct_attach_reasons = ["direct_isin_prefix_mismatch_name_confirmed"]
-            direct_entity_lei = direct_lei
-            direct_entity_legal_name = direct_legal_name
-            direct_lei_value = direct_lei
-            direct_gate_status = "diagnostic_prefix_mismatch"
         else:
             direct_reject_reason = "direct_isin_prefix_mismatch_name_unconfirmed"
             direct_gate_status = "rejected"
@@ -437,6 +430,8 @@ def _symbol_row(
         "candidate_headquarters_country": "",
         "candidate_entity_status": "",
         "candidate_registration_status": "",
+        "direct_prefix_mismatch_candidate_status": "not_requested",
+        "direct_prefix_mismatch_candidate_reject_reason": "",
     }
 
 
@@ -445,11 +440,14 @@ def _attach_rows_via_lei_expansion(
     base_rows: list[dict[str, Any]],
     candidates_by_symbol: dict[str, ListingCandidate],
     openfigi_by_symbol: dict[str, OpenFigiMapping],
+    gleif_by_isin: dict[str, GleifIsinLeiRecord],
     lei_expansions: dict[str, GleifLeiIsinRecord],
     legal_name_records: dict[str, GleifLegalNameRecord],
 ) -> list[dict[str, Any]]:
     direct_lei_names: dict[str, str] = {}
     for row in base_rows:
+        if row.get("entity_attach_method") != "direct_isin":
+            continue
         lei = _symbol(row.get("direct_lei"))
         if lei:
             direct_lei_names.setdefault(lei, str(row.get("legal_name") or ""))
@@ -618,8 +616,83 @@ def _attach_rows_via_lei_expansion(
                         "attachment_confidence": "review",
                     }
                 )
+        if not attached.get("entity_lei") and attached.get("entity_attach_method") == "unattached_no_anchor":
+            _apply_direct_prefix_mismatch_candidate(
+                attached=attached,
+                candidate=candidate,
+                openfigi=openfigi,
+                gleif_by_isin=gleif_by_isin,
+            )
         out.append(attached)
     return out
+
+
+def _apply_direct_prefix_mismatch_candidate(
+    *,
+    attached: dict[str, Any],
+    candidate: ListingCandidate,
+    openfigi: OpenFigiMapping | None,
+    gleif_by_isin: dict[str, GleifIsinLeiRecord],
+) -> None:
+    """Try the isolated prefix-mismatch direct path after baseline paths fail."""
+
+    mismatch_reasons = {
+        "provider_returned_alternate_market_instrument",
+        "provider_listing_mismatch",
+        "isin_prefix_mismatch",
+    }
+    if attached.get("isin_status") != "suspect" or attached.get("isin_error_reason") not in mismatch_reasons:
+        return
+
+    raw_isin = _symbol(attached.get("raw_isin"))
+    if not raw_isin:
+        attached["direct_prefix_mismatch_candidate_status"] = "rejected"
+        attached["direct_prefix_mismatch_candidate_reject_reason"] = "missing_raw_isin"
+        return
+
+    gleif = gleif_by_isin.get(raw_isin)
+    if not gleif or gleif.status != "success" or not gleif.lei:
+        attached["direct_prefix_mismatch_candidate_status"] = "rejected"
+        attached["direct_prefix_mismatch_candidate_reject_reason"] = "direct_prefix_mismatch_no_gleif_lei"
+        return
+
+    if not _direct_isin_name_confirmed(candidate=candidate, openfigi=openfigi, legal_name=gleif.legal_name):
+        attached["direct_prefix_mismatch_candidate_status"] = "rejected"
+        attached["direct_prefix_mismatch_candidate_reject_reason"] = "direct_prefix_mismatch_name_unconfirmed"
+        attached["candidate_lei"] = gleif.lei
+        attached["candidate_legal_name"] = gleif.legal_name
+        attached["decision_bucket"] = "needs_manual_review"
+        return
+
+    attached.update(
+        {
+            "isin": raw_isin,
+            "lei_source": gleif.source,
+            "lei_status": gleif.status,
+            "direct_lei": gleif.lei,
+            "lei": gleif.lei,
+            "legal_name": gleif.legal_name,
+            "lei_role": _lei_role(gleif),
+            "entity_lei": gleif.lei,
+            "entity_legal_name": gleif.legal_name,
+            "entity_attach_method": "isin_direct_prefix_mismatch_name_confirmed",
+            "entity_attach_reason": "direct_isin_prefix_mismatch_name_confirmed",
+            "entity_attach_reasons": ["direct_isin_prefix_mismatch_name_confirmed"],
+            "decision_bucket": "attached",
+            "matched_compatible_isins": [raw_isin],
+            "compatible_isin_gate_status": "diagnostic_prefix_mismatch",
+            "compatible_isin_gate_reject_reason": "",
+            "expected_listing_country_prefix_present": False,
+            "attachment_provenance": "isin_direct_prefix_mismatch_name_confirmed",
+            "attachment_confidence": "high",
+            "direct_isin_name_confirmed": True,
+            "direct_isin_attach_reject_reason": "",
+            "candidate_lei": gleif.lei,
+            "candidate_legal_name": gleif.legal_name,
+            "direct_prefix_mismatch_candidate_status": "confirmed",
+            "direct_prefix_mismatch_candidate_reject_reason": "",
+        }
+    )
 
 
 def _lei_expansion_matches(

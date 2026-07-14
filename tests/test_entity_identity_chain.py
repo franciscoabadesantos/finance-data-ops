@@ -12,7 +12,7 @@ from finance_data_ops.identity.chain import (
 )
 from finance_data_ops.identity.models import ListingCandidate
 from finance_data_ops.identity.gleif import GleifIsinLeiClient
-from finance_data_ops.identity.isin import IsinRecord, YFinanceIsinClient, isin_prefix_policy_for_listing
+from finance_data_ops.identity.isin import YFinanceIsinClient, isin_prefix_policy_for_listing
 from finance_data_ops.identity.names import (
     legal_name_query_from_listing,
     legal_name_query_variants_from_listing,
@@ -22,15 +22,21 @@ from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
 from finance_data_ops.publish.client import RecordingPublisher
 
+_PREFIX_MISMATCH_ISIN_REASONS = {
+    "provider_returned_alternate_market_instrument",
+    "provider_listing_mismatch",
+    "isin_prefix_mismatch",
+}
+
 
 def test_acceptance_fixture_chain_reports_symbol_pair_outcomes() -> None:
     measurement = _fixture_measurement()
     summary = measurement.summary
 
     assert summary["candidate_count"] == 14
-    assert summary["isin_found_count"] == 8
+    assert summary["isin_found_count"] == 4
     assert summary["lei_found_count"] == 4
-    assert summary["anchor_isin_count"] == 8
+    assert summary["anchor_isin_count"] == 4
     assert summary["anchor_lei_count"] == 4
     assert summary["listings_attached_direct_isin"] == 4
     assert summary["listings_attached_via_lei_expansion"] == 4
@@ -127,20 +133,20 @@ def test_live_like_prefix_mismatch_yfinance_isins_are_diagnostic_or_missing() ->
     )
     rows = {row["symbol"]: row for row in measurement.symbol_rows}
 
-    assert rows["GOOG"]["isin_status"] == "success"
-    assert rows["GOOG"]["isin_error_reason"] == "isin_prefix_mismatch"
+    assert rows["GOOG"]["isin_status"] == "suspect"
+    assert rows["GOOG"]["isin_error_reason"] == "provider_returned_alternate_market_instrument"
     assert rows["GOOG"]["isin_prefix_match"] is False
-    assert rows["GOOG"]["isin_prefix_diagnostic"] == "isin_prefix_mismatch"
-    assert rows["GOOG"]["isin"] == "CA02080M1005"
+    assert rows["GOOG"]["isin_prefix_diagnostic"] == ""
+    assert rows["GOOG"]["isin"] == ""
     assert rows["GOOG"]["raw_isin"] == "CA02080M1005"
-    assert rows["ASML.AS"]["isin_status"] == "success"
-    assert rows["ASML.AS"]["isin_prefix_diagnostic"] == "isin_prefix_mismatch"
-    assert rows["0005.HK"]["isin_status"] == "success"
-    assert rows["0005.HK"]["isin_prefix_diagnostic"] == "isin_prefix_mismatch"
+    assert rows["ASML.AS"]["isin_status"] == "suspect"
+    assert rows["ASML.AS"]["isin_error_reason"] == "provider_listing_mismatch"
+    assert rows["0005.HK"]["isin_status"] == "suspect"
+    assert rows["0005.HK"]["isin_error_reason"] == "provider_listing_mismatch"
     assert rows["SAP.DE"]["isin_status"] == "not_found"
     assert rows["SAP.DE"]["isin_error_reason"] == "placeholder_isin"
-    assert measurement.summary["isin_suspect_count"] == 0
-    assert measurement.summary["isin_found_count"] == 4
+    assert measurement.summary["isin_suspect_count"] == 4
+    assert measurement.summary["isin_found_count"] == 0
 
 
 def test_gleif_lei_records_endpoint_fixture_parses_lei_and_legal_name() -> None:
@@ -296,7 +302,7 @@ def test_share_classes_with_different_isins_group_by_same_lei() -> None:
     measurement = _fixture_measurement(["GOOG", "GOOGL", "LEN", "LENB"])
     by_pair = {tuple(row["pair"]): row for row in measurement.pair_rows}
 
-    assert by_pair[("GOOG", "GOOGL")]["left_isin"] == "CA02080M1005"
+    assert by_pair[("GOOG", "GOOGL")]["left_isin"] == ""
     assert by_pair[("GOOG", "GOOGL")]["left_attach_method"] == "name_anchor_confirmed"
     assert by_pair[("GOOG", "GOOGL")]["right_attach_method"] == "name_anchor_confirmed"
     assert by_pair[("GOOG", "GOOGL")]["grouped"] is True
@@ -324,54 +330,41 @@ def test_same_fuzzy_name_with_different_lei_does_not_group() -> None:
     assert measurement.pair_rows[0]["reason"] == "different_lei"
 
 
-def test_direct_isin_prefix_mismatch_attaches_when_lei_name_is_confirmed() -> None:
-    symbols = ["ACN", "BNTX", "DLO", "TRI", "WPM", "NE"]
+def test_isolated_direct_isin_prefix_mismatch_can_attach_after_baseline_paths() -> None:
+    symbols = ["NE"]
     measurement = _fixture_measurement(
         symbols,
         openfigi_fixtures={
-            "ACN": _security_fixture("ACN", "ACCENTURE PLC"),
-            "BNTX": _security_fixture("BNTX", "BIONTECH SE"),
-            "DLO": _security_fixture("DLO", "DLOCAL LTD"),
-            "TRI": _security_fixture("TRI", "THOMSON REUTERS CORP"),
-            "WPM": _security_fixture("WPM", "WHEATON PRECIOUS METALS CORP"),
             "NE": _security_fixture("NE", "NOBLE CORP PLC"),
         },
         isin_fixtures={
-            "ACN": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"},
-            "BNTX": {"isin": "DE000A2PSR20", "source": "fixture_yfinance"},
-            "DLO": {"isin": "KYG290181018", "source": "fixture_yfinance"},
-            "TRI": {"isin": "CA8849038085", "source": "fixture_yfinance"},
-            "WPM": {"isin": "CA9628791027", "source": "fixture_yfinance"},
             "NE": {"isin": "GB00BMXNWH07", "source": "fixture_yfinance"},
         },
         gleif_fixtures={
-            "IE00B4BNMY34": {"lei": "ACNLEI00000001", "legal_name": "ACCENTURE PLC"},
-            "DE000A2PSR20": {"lei": "BNTXLEI0000001", "legal_name": "BIONTECH SE"},
-            "KYG290181018": {"lei": "DLOLEI00000001", "legal_name": "DLOCAL LIMITED"},
-            "CA8849038085": {"lei": "TRILEI00000001", "legal_name": "THOMSON REUTERS CORPORATION"},
-            "CA9628791027": {"lei": "WPMLEI00000001", "legal_name": "WHEATON PRECIOUS METALS CORP."},
             "GB00BMXNWH07": {"lei": "NELEI000000001", "legal_name": "NOBLE CORPORATION PLC"},
         },
         gleif_lei_isin_fixtures={},
         gleif_legal_name_fixtures={},
         extra_candidates=[
-            ListingCandidate(symbol=symbol, provider_symbol=symbol, country="US", currency="USD")
+            ListingCandidate(symbol=symbol, provider_symbol=symbol, country="US", currency="USD", name="NOBLE CORP PLC")
             for symbol in symbols
         ],
         pairs=[],
     )
-    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+    row = measurement.symbol_rows[0]
 
-    for symbol in symbols:
-        assert rows[symbol]["entity_attach_method"] == "isin_direct_prefix_mismatch_name_confirmed"
-        assert rows[symbol]["attachment_provenance"] == "isin_direct_prefix_mismatch_name_confirmed"
-        assert rows[symbol]["attachment_confidence"] == "high"
-        assert rows[symbol]["isin_status"] == "success"
-        assert rows[symbol]["isin_prefix_match"] is False
-        assert rows[symbol]["compatible_isin_gate_status"] == "diagnostic_prefix_mismatch"
-        assert rows[symbol]["decision_bucket"] == "attached"
-    assert measurement.summary["listings_attached_direct_isin_prefix_mismatch_name_confirmed"] == 6
-    assert measurement.summary["attached_count"] == 6
+    assert row["entity_attach_method"] == "isin_direct_prefix_mismatch_name_confirmed"
+    assert row["attachment_provenance"] == "isin_direct_prefix_mismatch_name_confirmed"
+    assert row["attachment_confidence"] == "high"
+    assert row["isin_status"] == "suspect"
+    assert row["isin_error_reason"] == "provider_returned_alternate_market_instrument"
+    assert row["raw_isin"] == "GB00BMXNWH07"
+    assert row["isin"] == "GB00BMXNWH07"
+    assert row["direct_prefix_mismatch_candidate_status"] == "confirmed"
+    assert row["compatible_isin_gate_status"] == "diagnostic_prefix_mismatch"
+    assert row["decision_bucket"] == "attached"
+    assert measurement.summary["listings_attached_direct_isin_prefix_mismatch_name_confirmed"] == 1
+    assert measurement.summary["attached_count"] == 1
 
 
 def test_shop_prefix_mismatch_without_name_confirmation_stays_manual_review() -> None:
@@ -396,9 +389,9 @@ def test_shop_prefix_mismatch_without_name_confirmation_stays_manual_review() ->
 
     assert row["entity_lei"] == ""
     assert row["entity_attach_method"] == "unattached_no_anchor"
-    assert row["direct_lei"] == "SHOPWRONGLEI001"
-    assert row["direct_isin_attach_reject_reason"] == "direct_isin_prefix_mismatch_name_unconfirmed"
-    assert row["entity_attach_reason"] == "direct_isin_prefix_mismatch_name_unconfirmed"
+    assert row["direct_lei"] == ""
+    assert row["direct_prefix_mismatch_candidate_status"] == "rejected"
+    assert row["direct_prefix_mismatch_candidate_reject_reason"] == "direct_prefix_mismatch_name_unconfirmed"
     assert row["decision_bucket"] == "needs_manual_review"
     assert measurement.summary["manual_review_by_listing_group_kind"] == {"single_listing": 1}
 
@@ -415,11 +408,11 @@ def test_direct_prefix_mismatch_does_not_skip_name_anchor_fallback() -> None:
             "CSL.AX": _security_fixture("CSL", "CSL LTD", country="AU"),
         },
         isin_fixtures={
-            "ALKS": _isin_record("ALKS", "IE00B4BNMY34"),
-            "BCRX": _isin_record("BCRX", "DE000A2PSR20"),
-            "BE": _isin_record("BE", "KYG290181018"),
-            "COIN": _isin_record("COIN", "CA8849038085"),
-            "CSL.AX": _isin_record("CSL.AX", "GB00BMXNWH07"),
+            "ALKS": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"},
+            "BCRX": {"isin": "DE000A2PSR20", "source": "fixture_yfinance"},
+            "BE": {"isin": "KYG290181018", "source": "fixture_yfinance"},
+            "COIN": {"isin": "CA8849038085", "source": "fixture_yfinance"},
+            "CSL.AX": {"isin": "GB00BMXNWH07", "source": "fixture_yfinance"},
         },
         gleif_fixtures={
             "IE00B4BNMY34": {"lei": "DIRECTWRONGLEI1", "legal_name": "UNRELATED HOLDINGS PLC"},
@@ -480,9 +473,9 @@ def test_direct_prefix_mismatch_does_not_skip_name_anchor_fallback() -> None:
     rows = {row["symbol"]: row for row in measurement.symbol_rows}
 
     for symbol in symbols:
-        assert rows[symbol]["isin_status"] == "success"
-        assert rows[symbol]["isin_prefix_diagnostic"] == "isin_prefix_mismatch"
-        assert rows[symbol]["direct_isin_attach_reject_reason"] == "direct_isin_prefix_mismatch_name_unconfirmed"
+        assert rows[symbol]["isin_status"] == "suspect"
+        assert rows[symbol]["raw_isin"]
+        assert rows[symbol]["direct_prefix_mismatch_candidate_status"] == "not_requested"
         assert rows[symbol]["legal_name_anchor_status"] == "confirmed"
         assert rows[symbol]["entity_attach_method"] == "name_anchor_confirmed"
         assert rows[symbol]["attachment_provenance"] == "name_anchor_confirmed"
@@ -1283,7 +1276,7 @@ def test_prefix_mismatch_isin_without_gleif_lei_does_not_create_anchor_lei() -> 
         gleif_legal_name_fixtures={},
     )
 
-    assert measurement.summary["anchor_isin_count"] == 1
+    assert measurement.summary["anchor_isin_count"] == 0
     assert measurement.summary["anchor_lei_count"] == 0
     assert measurement.summary["pairs_blocked_no_valid_anchor"] == 1
     assert all(not row["entity_lei"] for row in measurement.symbol_rows)
@@ -1354,9 +1347,7 @@ def _fixture_measurement(
         else acceptance_gleif_legal_name_fixtures()
     )
     gleif = GleifIsinLeiClient(fixture_mappings=fixture_mappings)
-    gleif_records = gleif.lookup_isins(
-        [record.isin for record in isin_records if record.isin and record.status == "success"]
-    )
+    gleif_records = gleif.lookup_isins(_gleif_lookup_isins(isin_records))
     direct_lei_by_isin = {record.isin: record.lei for record in gleif_records if record.lei and record.status == "success"}
     openfigi_by_symbol = {mapping.symbol: mapping for mapping in openfigi_mappings}
     candidates_by_symbol = {candidate.symbol: candidate for candidate in candidates}
@@ -1415,17 +1406,19 @@ def _security_fixture(ticker: str, name: str, *, country: str = "US") -> dict:
     }
 
 
-def _isin_record(symbol: str, isin: str) -> IsinRecord:
-    return IsinRecord(
-        symbol=symbol,
-        provider="fixture_yfinance",
-        request_payload={"provider_symbol": symbol},
-        response_payload={"isin": isin},
-        isin=isin,
-        status="success",
-        error_message="",
-        source="fixture_yfinance",
-    )
+def _gleif_lookup_isins(isin_records) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for record in isin_records:
+        if not record.isin:
+            continue
+        should_lookup = record.status == "success" or (
+            record.status == "suspect" and record.error_message in _PREFIX_MISMATCH_ISIN_REASONS
+        )
+        if should_lookup and record.isin not in seen:
+            out.append(record.isin)
+            seen.add(record.isin)
+    return out
 
 
 def _legal_candidate(lei: str, legal_name: str, *, country: str) -> dict:

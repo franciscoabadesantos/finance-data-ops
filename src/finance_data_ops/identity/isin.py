@@ -193,7 +193,7 @@ class YFinanceIsinClient:
                 response_payload=raw,
                 isin=validation["isin"],
                 status=status,
-                error_message=error_message or validation["reason"],
+                error_message=error_message,
                 source=_clean_text(raw.get("source"), upper=False) or self.provider,
             )
         validation = validate_isin_for_listing(raw, candidate)
@@ -233,7 +233,12 @@ def validate_isin_for_listing(raw_isin: Any, candidate: ListingCandidate) -> dic
     if not _valid_isin_check_digit(isin):
         return {"status": "suspect", "isin": isin, "reason": "invalid_isin_check_digit"}
     if not _isin_matches_listing_context(isin, candidate):
-        return {"status": "success", "isin": isin, "reason": "isin_prefix_mismatch"}
+        reason = (
+            "provider_returned_alternate_market_instrument"
+            if _listing_country(candidate) == "US"
+            else "provider_listing_mismatch"
+        )
+        return {"status": "suspect", "isin": isin, "reason": reason}
     return {"status": "success", "isin": isin, "reason": ""}
 
 

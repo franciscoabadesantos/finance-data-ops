@@ -36,6 +36,12 @@ from finance_data_ops.identity.universe import read_postgres_candidate_universe
 from finance_data_ops.publish.client import PostgresPublisher, RecordingPublisher
 from finance_data_ops.settings import load_settings
 
+_PREFIX_MISMATCH_ISIN_REASONS = {
+    "provider_returned_alternate_market_instrument",
+    "provider_listing_mismatch",
+    "isin_prefix_mismatch",
+}
+
 
 def main() -> None:
     args = _parser().parse_args()
@@ -79,9 +85,7 @@ def main() -> None:
         offline=args.offline,
         page_size=args.gleif_page_size,
     )
-    gleif_records = gleif_client.lookup_isins(
-        [record.isin for record in isin_records if record.isin and record.status == "success"]
-    )
+    gleif_records = gleif_client.lookup_isins(_gleif_lookup_isins(isin_records))
     direct_lei_by_isin = {record.isin: record.lei for record in gleif_records if record.lei and record.status == "success"}
     openfigi_by_symbol = {mapping.symbol: mapping for mapping in openfigi_mappings}
     candidates_by_symbol = {candidate.symbol: candidate for candidate in candidates}
@@ -166,6 +170,21 @@ def _direct_isin_can_skip_legal_name(*, candidate, record, direct_lei_by_isin: d
         return False
     allowed_prefixes = set(isin_prefix_policy_for_listing(candidate)["allowed_isin_prefixes"])
     return bool(allowed_prefixes and record.isin[:2] in allowed_prefixes)
+
+
+def _gleif_lookup_isins(isin_records) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for record in isin_records:
+        if not record.isin:
+            continue
+        should_lookup = record.status == "success" or (
+            record.status == "suspect" and record.error_message in _PREFIX_MISMATCH_ISIN_REASONS
+        )
+        if should_lookup and record.isin not in seen:
+            out.append(record.isin)
+            seen.add(record.isin)
+    return out
 
 
 if __name__ == "__main__":
