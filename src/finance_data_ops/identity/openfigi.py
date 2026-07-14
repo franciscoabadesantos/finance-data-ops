@@ -99,6 +99,7 @@ class OpenFigiClient:
 
     def map_candidates(self, candidates: list[ListingCandidate]) -> list[OpenFigiMapping]:
         self.batch_split_retries = 0
+        candidates_by_symbol = {candidate.symbol: candidate for candidate in candidates}
         requests_by_symbol = [build_openfigi_request(candidate) for candidate in candidates]
         if self.fixture_mappings:
             return [self._mapping_from_fixture(request) for request in requests_by_symbol]
@@ -111,7 +112,7 @@ class OpenFigiClient:
             mappings.extend(self._map_live_batch(batch))
             if start + self.batch_size < len(requests_by_symbol) and self.request_sleep_seconds:
                 time.sleep(self.request_sleep_seconds)
-        return mappings
+        return self._retry_not_found_variants(mappings, candidates_by_symbol)
 
     def _map_live_batch(self, batch: list[OpenFigiRequest]) -> list[OpenFigiMapping]:
         headers = {"Content-Type": "application/json"}
@@ -167,6 +168,31 @@ class OpenFigiClient:
             return _mapping_from_data(request, raw, response_payload={"data": [raw]})
         return _error_mapping(request, f"unsupported_fixture_mapping: {type(raw).__name__}")
 
+    def _retry_not_found_variants(
+        self,
+        mappings: list[OpenFigiMapping],
+        candidates_by_symbol: dict[str, ListingCandidate],
+    ) -> list[OpenFigiMapping]:
+        retried: list[OpenFigiMapping] = []
+        for mapping in mappings:
+            if mapping.status != "not_found":
+                retried.append(mapping)
+                continue
+            candidate = candidates_by_symbol.get(mapping.symbol)
+            if not candidate:
+                retried.append(mapping)
+                continue
+            replacement = None
+            for variant in build_openfigi_request_variants(candidate)[1:]:
+                if self.request_sleep_seconds:
+                    time.sleep(self.request_sleep_seconds)
+                variant_mapping = self._map_live_batch([variant])[0]
+                if variant_mapping.status != "not_found":
+                    replacement = variant_mapping
+                    break
+            retried.append(replacement or mapping)
+        return retried
+
 
 def build_openfigi_request(candidate: ListingCandidate) -> OpenFigiRequest:
     normalized = normalize_openfigi_request_inputs(
@@ -186,9 +212,47 @@ def build_openfigi_request(candidate: ListingCandidate) -> OpenFigiRequest:
         payload["exchCode"] = normalized["exch_code"]
     if normalized["currency"]:
         payload["currency"] = normalized["currency"]
+    return _openfigi_request_from_payload(candidate.symbol, payload)
+
+
+def build_openfigi_request_variants(candidate: ListingCandidate) -> list[OpenFigiRequest]:
+    """Return primary OpenFIGI request plus conservative not-found retry variants.
+
+    Provider symbols remain unchanged. Variants only adjust the OpenFIGI request
+    shape for exchanges where the provider suffix can map to multiple OpenFIGI
+    venues or where OpenFIGI expects a numeric ticker without provider padding.
+    """
+
+    variants = [build_openfigi_request(candidate)]
+    symbol = _clean_text(candidate.provider_symbol or candidate.symbol, upper=True)
+    suffix = _matched_yahoo_suffix(symbol)
+    ticker = symbol[: -len(suffix)] if suffix else symbol
+    primary_payload = dict(variants[0].payload)
+
+    if suffix == ".KS" and primary_payload.get("micCode") == "XKRX":
+        variants.append(_openfigi_request_from_payload(candidate.symbol, {**primary_payload, "micCode": "XKOS"}))
+    elif suffix == ".KQ" and primary_payload.get("micCode") == "XKOS":
+        variants.append(_openfigi_request_from_payload(candidate.symbol, {**primary_payload, "micCode": "XKRX"}))
+
+    if suffix in {".SS", ".SZ"} and ticker.isdigit() and ticker.startswith("0"):
+        variants.append(_openfigi_request_from_payload(candidate.symbol, {**primary_payload, "idValue": str(int(ticker))}))
+
+    out: list[OpenFigiRequest] = []
+    seen: set[str] = set()
+    for variant in variants:
+        key = json.dumps(variant.payload, sort_keys=True, separators=(",", ":"))
+        if key not in seen:
+            seen.add(key)
+            out.append(variant)
+    return out
+
+
+def _openfigi_request_from_payload(symbol: str, payload: dict[str, Any]) -> OpenFigiRequest:
     normalized_payload = {key: value for key, value in payload.items() if _clean_text(value)}
+    if normalized_payload.get("micCode"):
+        normalized_payload.pop("exchCode", None)
     request_hash = hashlib.sha256(json.dumps(normalized_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    return OpenFigiRequest(symbol=candidate.symbol, payload=normalized_payload, request_hash=request_hash)
+    return OpenFigiRequest(symbol=symbol, payload=normalized_payload, request_hash=request_hash)
 
 
 def normalize_openfigi_request_inputs(

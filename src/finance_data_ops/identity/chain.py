@@ -885,11 +885,19 @@ def _summary(
     direct_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "direct_isin"]
     expansion_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "lei_expansion"]
     name_anchor_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "name_anchor_confirmed"]
+    attached = direct_attached + expansion_attached + name_anchor_attached
     ambiguous_unattached = [row for row in symbol_rows if row.get("entity_attach_method") == "unattached_ambiguous"]
     no_anchor_unattached = [row for row in symbol_rows if row.get("entity_attach_method") == "unattached_no_anchor"]
     decision_bucket_counts = _decision_bucket_counts(symbol_rows)
+    fixable_free_count = decision_bucket_counts.get("fixable_free", 0)
+    provider_or_curated_count = decision_bucket_counts.get("requires_provider_or_curated_identity", 0)
+    review_count = decision_bucket_counts.get("needs_manual_review", 0)
+    accepted_pair_rows = [row for row in pair_rows if not _is_guardrail_pair(row)]
+    guardrail_pair_rows = [row for row in pair_rows if _is_guardrail_pair(row)]
     return {
         "candidate_count": candidate_count,
+        "attached_count": len(attached),
+        "attached_rate": _rate(len(attached), candidate_count),
         "isin_found_count": isin_found,
         "isin_found_rate": _rate(isin_found, candidate_count),
         "isin_suspect_count": len(isin_suspect_rows),
@@ -925,10 +933,19 @@ def _summary(
             "compatible_isin_gate_reject_reason",
         ),
         "decision_bucket_counts": decision_bucket_counts,
-        "fixable_free": decision_bucket_counts.get("fixable_free", 0),
-        "requires_provider_or_curated_identity": decision_bucket_counts.get("requires_provider_or_curated_identity", 0),
-        "needs_manual_review": decision_bucket_counts.get("needs_manual_review", 0),
+        "fixable_free": fixable_free_count,
+        "fixable_free_count": fixable_free_count,
+        "fixable_free_rate": _rate(fixable_free_count, candidate_count),
+        "requires_provider_or_curated_identity": provider_or_curated_count,
+        "provider_or_curated_count": provider_or_curated_count,
+        "provider_or_curated_rate": _rate(provider_or_curated_count, candidate_count),
+        "needs_manual_review": review_count,
+        "review_count": review_count,
+        "review_rate": _rate(review_count, candidate_count),
         "name_anchor_precision_audit_count": len(name_anchor_precision_audit),
+        "precision_audit_count": len(name_anchor_precision_audit),
+        "accepted_pairs_passed": bool(accepted_pair_rows) and all(row.get("grouped") for row in accepted_pair_rows),
+        "guardrail_pairs_unmerged": all(not row.get("grouped") for row in guardrail_pair_rows),
         "unresolved_percentage": _rate(len(no_anchor_unattached) + len(ambiguous_unattached), candidate_count),
         "entity_groups_formed": len([symbols for symbols in lei_groups.values() if len(symbols) > 1]),
         "entity_group_symbols": {lei: symbols for lei, symbols in sorted(lei_groups.items()) if len(symbols) > 1},
@@ -946,6 +963,11 @@ def _summary(
         "openfigi_not_found_count": len([row for row in symbol_rows if row.get("openfigi_status") == "not_found"]),
         "batch_split_retries": int(batch_split_retries),
     }
+
+
+def _is_guardrail_pair(row: dict[str, Any]) -> bool:
+    symbols = {_symbol(symbol) for symbol in row.get("pair", [])}
+    return row.get("pair_type") == "bare_collision" or symbols == {"TLS", "TLS.AX"}
 
 
 def _not_grouped_reason(left: dict[str, Any], right: dict[str, Any]) -> str:

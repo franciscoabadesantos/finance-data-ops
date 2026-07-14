@@ -47,6 +47,17 @@ def test_acceptance_fixture_chain_reports_symbol_pair_outcomes() -> None:
     assert summary["unresolved_no_isin_count"] == 6
     assert summary["unresolved_no_lei_count"] == 0
     assert summary["name_anchor_precision_audit_count"] == 6
+    assert summary["precision_audit_count"] == 6
+    assert summary["attached_count"] == 14
+    assert summary["attached_rate"] == 1.0
+    assert summary["fixable_free_count"] == 0
+    assert summary["fixable_free_rate"] == 0.0
+    assert summary["provider_or_curated_count"] == 0
+    assert summary["provider_or_curated_rate"] == 0.0
+    assert summary["review_count"] == 0
+    assert summary["review_rate"] == 0.0
+    assert summary["accepted_pairs_passed"] is True
+    assert summary["guardrail_pairs_unmerged"] is True
     assert measurement.name_anchor_precision_audit
 
     by_pair = {tuple(row["pair"]): row for row in measurement.pair_rows}
@@ -229,6 +240,12 @@ def test_legal_name_query_preserves_corporate_suffix_but_confirmation_normalizes
         "Home Depot Inc",
         "The Home Depot Inc",
     ]
+    assert "Sony Group" in legal_name_query_variants_from_listing("SONY GROUP CORP")
+    assert "Sk Hynix" in legal_name_query_variants_from_listing("SK HYNIX INC")
+    assert "Telos" in legal_name_query_variants_from_listing("TELOS CORPORATION")
+    schlumberger_variants = legal_name_query_variants_from_listing("Schlumberger Nv")
+    assert "Schlumberger N.V." in schlumberger_variants
+    assert "Schlumberger" in schlumberger_variants
     assert normalize_legal_name_conservative("ALPHABET INC-CL C") == "ALPHABET"
     assert normalize_legal_name_conservative("ALPHABET INC.") == "ALPHABET"
     assert normalize_legal_name_conservative("THE HOME DEPOT INC.") == "HOME DEPOT"
@@ -630,6 +647,110 @@ def test_openfigi_success_name_variants_can_confirm_legal_name_anchor() -> None:
     assert rows["LLY"]["entity_attach_method"] == "name_anchor_confirmed"
     assert rows["LLY"]["listing_name_used_for_legal_name_search"] == "Eli Lilly And Company"
     assert rows["LLY"]["matched_compatible_isins"] == ["US5324571083"]
+
+
+def test_local_openfigi_name_suffix_variants_can_confirm_legal_name_anchor() -> None:
+    measurement = _fixture_measurement(
+        ["000660.KS", "6758.T", "TLS"],
+        openfigi_fixtures={
+            "000660.KS": {
+                "ticker": "000660",
+                "name": "SK HYNIX INC",
+                "figi": "HYNIX-FIGI",
+                "compositeFIGI": "HYNIX-COMP",
+                "shareClassFIGI": "HYNIX-SHARE",
+                "country": "KR",
+                "securityType2": "Common Stock",
+            },
+            "6758.T": {
+                "ticker": "6758",
+                "name": "SONY GROUP CORP",
+                "figi": "SONY-FIGI",
+                "compositeFIGI": "SONY-COMP",
+                "shareClassFIGI": "SONY-SHARE",
+                "country": "JP",
+                "securityType2": "Common Stock",
+            },
+            "TLS": {
+                "ticker": "TLS",
+                "name": "TELOS CORPORATION",
+                "figi": "TELOS-FIGI",
+                "compositeFIGI": "TELOS-COMP",
+                "shareClassFIGI": "TELOS-SHARE",
+                "country": "US",
+                "securityType2": "Common Stock",
+            },
+        },
+        isin_fixtures={
+            "000660.KS": {"isin": "-", "source": "fixture_yfinance"},
+            "6758.T": {"isin": "-", "source": "fixture_yfinance"},
+            "TLS": {"isin": "-", "source": "fixture_yfinance"},
+        },
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:SKHYNIXLEI0001": {"legal_name": "SK HYNIX INC.", "isin_list": ["KR7000660001"]},
+            "LEI:SONYLEI000001": {"legal_name": "SONY GROUP CORPORATION", "isin_list": ["JP3435000009"]},
+            "LEI:TELOSLEI00001": {"legal_name": "TELOS CORPORATION", "isin_list": ["US87969B1017"]},
+        },
+        gleif_legal_name_fixtures={
+            "NAME:SK HYNIX": {
+                "candidates": [
+                    {
+                        "lei": "SKHYNIXLEI0001",
+                        "legal_name": "SK HYNIX INC.",
+                        "legal_country": "KR",
+                        "headquarters_country": "KR",
+                        "jurisdiction": "KR",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            },
+            "NAME:SONY GROUP": {
+                "candidates": [
+                    {
+                        "lei": "SONYLEI000001",
+                        "legal_name": "SONY GROUP CORPORATION",
+                        "legal_country": "JP",
+                        "headquarters_country": "JP",
+                        "jurisdiction": "JP",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            },
+            "NAME:TELOS": {
+                "candidates": [
+                    {
+                        "lei": "TELOSLEI00001",
+                        "legal_name": "TELOS CORPORATION",
+                        "legal_country": "US",
+                        "headquarters_country": "US",
+                        "jurisdiction": "US-MD",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="000660.KS", provider_symbol="000660.KS", currency="KRW"),
+            ListingCandidate(symbol="6758.T", provider_symbol="6758.T", currency="JPY"),
+            ListingCandidate(symbol="TLS", provider_symbol="TLS", country="US", currency="USD"),
+        ],
+        pairs=[],
+    )
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+
+    assert rows["000660.KS"]["entity_attach_method"] == "name_anchor_confirmed"
+    assert rows["000660.KS"]["listing_name_used_for_legal_name_search"] == "Sk Hynix Inc"
+    assert rows["000660.KS"]["matched_compatible_isins"] == ["KR7000660001"]
+    assert rows["6758.T"]["entity_attach_method"] == "name_anchor_confirmed"
+    assert rows["6758.T"]["listing_name_used_for_legal_name_search"] == "Sony Group Corporation"
+    assert rows["6758.T"]["matched_compatible_isins"] == ["JP3435000009"]
+    assert rows["TLS"]["entity_attach_method"] == "name_anchor_confirmed"
+    assert rows["TLS"]["listing_name_used_for_legal_name_search"] == "Telos Corporation"
+    assert rows["TLS"]["matched_compatible_isins"] == ["US87969B1017"]
 
 
 def test_internal_name_can_drive_legal_name_anchor_when_openfigi_not_found() -> None:

@@ -25,9 +25,14 @@ _CORPORATE_SUFFIXES = {
 
 _QUERY_ALIASES = {
     "CO": ["COMPANY", "CO"],
+    "COMPANY": ["COMPANY", "CO"],
     "CORP": ["CORPORATION", "CORP"],
+    "CORPORATION": ["CORPORATION", "CORP"],
     "LTD": ["LIMITED", "LTD"],
+    "LIMITED": ["LIMITED", "LTD"],
     "INC": ["INC", "INCORPORATED"],
+    "INCORPORATED": ["INCORPORATED", "INC"],
+    "NV": ["NV", "N.V."],
     "N V": ["NV"],
     "A S": ["AS"],
 }
@@ -80,10 +85,11 @@ def legal_name_query_variants_from_listing(*values: Any) -> list[str]:
             continue
         token_variants = _query_token_variants([token for token in text.split() if token])
         for tokens in token_variants:
-            for article_variant in _article_variants(tokens):
-                query = _title(" ".join(article_variant))
-                if query and query not in variants:
-                    variants.append(query)
+            for candidate_tokens in _query_suffix_variants(tokens):
+                for article_variant in _article_variants(candidate_tokens):
+                    query = _title(" ".join(article_variant))
+                    if query and query not in variants:
+                        variants.append(query)
     return variants
 
 
@@ -125,6 +131,29 @@ def _query_token_variants(tokens: list[str]) -> list[list[str]]:
         if key not in seen:
             seen.add(key)
             out.append(variant)
+    return out
+
+
+def _query_suffix_variants(tokens: list[str]) -> list[list[str]]:
+    variants = [tokens]
+    stripped = _strip_trailing_corporate_suffix(tokens)
+    if stripped != tokens:
+        variants.append(stripped)
+    out: list[list[str]] = []
+    seen: set[str] = set()
+    for variant in variants:
+        key = " ".join(variant)
+        if key and key not in seen:
+            seen.add(key)
+            out.append(variant)
+    return out
+
+
+def _strip_trailing_corporate_suffix(tokens: list[str]) -> list[str]:
+    out = _strip_edge_article(tokens)
+    while out and _suffix_token(out):
+        out = out[: -_suffix_token(out)]
+        out = _strip_edge_article(out)
     return out
 
 

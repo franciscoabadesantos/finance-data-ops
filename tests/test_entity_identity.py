@@ -106,6 +106,34 @@ def test_supported_local_suffixes_use_mic_without_exchange_code() -> None:
         assert "marketSecDes" not in request.payload
 
 
+def test_openfigi_retries_korea_ks_on_kosdaq_without_mutating_provider_symbol() -> None:
+    session = _OpenFigiVariantSession(success_when=lambda payload: payload.get("micCode") == "XKOS")
+    client = OpenFigiClient(api_key="", batch_size=1, request_sleep_seconds=0, session=session)
+
+    mappings = client.map_candidates([_candidate("053800.KS", exchange_mic="", country="KR", currency="KRW")])
+
+    assert mappings[0].status == "success"
+    assert mappings[0].symbol == "053800.KS"
+    assert mappings[0].payload["idValue"] == "053800"
+    assert mappings[0].payload["micCode"] == "XKOS"
+    assert session.payloads[0]["micCode"] == "XKRX"
+    assert session.payloads[1]["micCode"] == "XKOS"
+
+
+def test_openfigi_retries_china_numeric_ticker_without_leading_zeroes() -> None:
+    session = _OpenFigiVariantSession(success_when=lambda payload: payload.get("idValue") == "858")
+    client = OpenFigiClient(api_key="", batch_size=1, request_sleep_seconds=0, session=session)
+
+    mappings = client.map_candidates([_candidate("000858.SZ", exchange_mic="", country="CN", currency="CNY")])
+
+    assert mappings[0].status == "success"
+    assert mappings[0].symbol == "000858.SZ"
+    assert mappings[0].payload["idValue"] == "858"
+    assert mappings[0].payload["micCode"] == "XSHE"
+    assert session.payloads[0]["idValue"] == "000858"
+    assert session.payloads[1]["idValue"] == "858"
+
+
 def test_hong_kong_numeric_ticker_strips_leading_zeroes_only_for_openfigi_request() -> None:
     request = build_openfigi_request(
         ListingCandidate(
@@ -575,6 +603,37 @@ class _PayloadTooLargeThenSuccessSession:
                             "figi": f"{ticker}-FIGI",
                             "compositeFIGI": f"{ticker}-COMP",
                             "shareClassFIGI": f"{ticker}-SHARE",
+                            "securityType2": "Common Stock",
+                        }
+                    ]
+                }
+            ],
+        )
+
+
+class _OpenFigiVariantSession:
+    def __init__(self, *, success_when) -> None:
+        self.success_when = success_when
+        self.payloads: list[dict] = []
+
+    def post(self, _url: str, *, headers: dict, json: list[dict], timeout: int) -> "_FakeOpenFigiResponse":
+        payload = dict(json[0])
+        self.payloads.append(payload)
+        if not self.success_when(payload):
+            return _FakeOpenFigiResponse(200, [{"data": []}])
+        ticker = payload["idValue"]
+        return _FakeOpenFigiResponse(
+            200,
+            [
+                {
+                    "data": [
+                        {
+                            "ticker": ticker,
+                            "name": f"{ticker} CORP",
+                            "figi": f"{ticker}-FIGI",
+                            "compositeFIGI": f"{ticker}-COMP",
+                            "shareClassFIGI": f"{ticker}-SHARE",
+                            "micCode": payload.get("micCode"),
                             "securityType2": "Common Stock",
                         }
                     ]
