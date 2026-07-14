@@ -18,6 +18,7 @@ def build_candidate_universe_from_frames(
     *,
     ticker_registry: pd.DataFrame | None = None,
     ticker_readiness: pd.DataFrame | None = None,
+    entity_attributes_static: pd.DataFrame | None = None,
     etf_holding_identity: pd.DataFrame | None = None,
     market_price_daily: pd.DataFrame | None = None,
     technical_features_daily: pd.DataFrame | None = None,
@@ -45,6 +46,23 @@ def build_candidate_universe_from_frames(
         symbol = _first_symbol(row.get("symbol"), row.get("ticker"), row.get("entity_id"))
         if symbol:
             _merge_candidate(by_symbol, symbol, provider_symbol=symbol, source="ticker_readiness")
+
+    for row in _frame_records(entity_attributes_static):
+        symbol = _first_symbol(row.get("symbol"), row.get("ticker"), row.get("entity_id"))
+        if symbol:
+            _merge_candidate(
+                by_symbol,
+                symbol,
+                provider_symbol=symbol,
+                name=_first_text(
+                    row.get("display_name"),
+                    row.get("name"),
+                    row.get("legal_name"),
+                    row.get("company_name"),
+                    row.get("security_name"),
+                ),
+                source="entity_attributes_static",
+            )
 
     for row in _frame_records(etf_holding_identity):
         symbol = _first_symbol(row.get("onboard_symbol"), row.get("provider_symbol"), row.get("source_symbol"))
@@ -101,6 +119,10 @@ def read_local_candidate_universe(
         ticker_registry=read_parquet_table("ticker_registry", cache_root=cache_root, required=False),
         ticker_readiness=_read_first_local(
             ("feature_store.ticker_readiness", "ticker_readiness"),
+            cache_root=cache_root,
+        ),
+        entity_attributes_static=_read_first_local(
+            ("feature_store.entity_attributes_static", "entity_attributes_static"),
             cache_root=cache_root,
         ),
         etf_holding_identity=_read_first_local(
@@ -160,6 +182,20 @@ def read_postgres_candidate_universe(
                     "is_tracked",
                     "market_data_available",
                     "technical_features_available",
+                ],
+            ),
+            entity_attributes_static=_query_optional_table(
+                conn,
+                "feature_store.entity_attributes_static",
+                [
+                    "symbol",
+                    "ticker",
+                    "entity_id",
+                    "display_name",
+                    "name",
+                    "legal_name",
+                    "company_name",
+                    "security_name",
                 ],
             ),
             etf_holding_identity=_query_optional_table(
@@ -380,6 +416,14 @@ def _first_symbol(*values: Any) -> str:
         symbol = _symbol(value)
         if symbol:
             return symbol
+    return ""
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _text(value)
+        if text:
+            return text
     return ""
 
 

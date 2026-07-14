@@ -27,12 +27,21 @@ ACCEPTANCE_PAIRS = [
     ("LEN", "LENB", "share_class"),
 ]
 
+MAX_ISIN_OUTPUT_SAMPLE = 10
+
+TAIL_DECISION_BUCKETS = {
+    "fixable_free",
+    "requires_provider_or_curated_identity",
+    "needs_manual_review",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class EntityChainMeasurement:
     symbol_rows: list[dict[str, Any]]
     pair_rows: list[dict[str, Any]]
     summary: dict[str, Any]
+    name_anchor_precision_audit: list[dict[str, Any]]
     openfigi_cache_rows: list[dict[str, Any]]
     isin_cache_rows: list[dict[str, Any]]
     gleif_cache_rows: list[dict[str, Any]]
@@ -43,6 +52,7 @@ class EntityChainMeasurement:
             "summary": self.summary,
             "symbols": self.symbol_rows,
             "pairs": self.pair_rows,
+            "name_anchor_precision_audit": self.name_anchor_precision_audit,
             "planned_cache_writes": {
                 "source_cache.openfigi_mapping_raw": len(self.openfigi_cache_rows),
                 "source_cache.listing_isin_raw": len(self.isin_cache_rows),
@@ -93,11 +103,28 @@ def measure_entity_identity_chain(
     )
     rows_by_symbol = {row["symbol"]: row for row in symbol_rows}
     pair_rows = [_pair_row(left, right, pair_type, rows_by_symbol) for left, right, pair_type in selected_pairs]
-    summary = _summary(symbol_rows=symbol_rows, pair_rows=pair_rows, batch_split_retries=batch_split_retries)
+    lei_expanded_isin_count = len(
+        {
+            isin
+            for record in lei_expansions.values()
+            if record.status == "success"
+            for isin in record.isin_list
+            if isin
+        }
+    )
+    precision_audit = _name_anchor_precision_audit(symbol_rows)
+    summary = _summary(
+        symbol_rows=symbol_rows,
+        pair_rows=pair_rows,
+        batch_split_retries=batch_split_retries,
+        lei_expanded_isin_count=lei_expanded_isin_count,
+        name_anchor_precision_audit=precision_audit,
+    )
     return EntityChainMeasurement(
         symbol_rows=symbol_rows,
         pair_rows=pair_rows,
         summary=summary,
+        name_anchor_precision_audit=precision_audit,
         openfigi_cache_rows=openfigi_cache_rows(openfigi_mappings),
         isin_cache_rows=isin_cache_rows(isin_records),
         gleif_cache_rows=gleif_cache_rows(gleif_records),
@@ -302,6 +329,8 @@ def _symbol_row(
     gleif = gleif_by_isin.get(isin)
     direct_lei = gleif.lei if gleif else ""
     direct_legal_name = gleif.legal_name if gleif else ""
+    listing_name = _best_listing_name(candidate, openfigi)
+    listing_name_query = legal_name_query_from_listing(listing_name)
     return {
         "symbol": symbol,
         "provider_symbol": candidate.provider_symbol or symbol,
@@ -310,6 +339,9 @@ def _symbol_row(
         "openfigi_ticker": request_payload.get("idValue") or "",
         "openfigi_exchange": request_payload.get("micCode") or request_payload.get("exchCode") or "",
         "openfigi_status": openfigi.status if openfigi else "missing",
+        "openfigi_name": openfigi.name if openfigi else "",
+        "internal_candidate_name": candidate.name or "",
+        "listing_name_used_for_legal_name_search": listing_name_query,
         "figi": openfigi.figi if openfigi else "",
         "compositeFIGI": openfigi.composite_figi if openfigi else "",
         "shareClassFIGI": openfigi.share_class_figi if openfigi else "",
@@ -329,8 +361,21 @@ def _symbol_row(
         "entity_legal_name": direct_legal_name,
         "entity_attach_method": "direct_isin" if direct_lei else "",
         "entity_attach_reason": "direct_isin_to_lei" if direct_lei else "",
+        "entity_attach_reasons": ["direct_isin_to_lei"] if direct_lei else [],
+        "decision_bucket": "attached" if direct_lei else "",
         "expanded_candidate_isins": [],
         "lei_expanded_isins": [],
+        "lei_expanded_isin_count": 0,
+        "compatible_expanded_isin_count": 0,
+        "matched_compatible_isins": [],
+        "legal_name_anchor_status": "not_requested_direct_isin" if direct_lei else "not_evaluated",
+        "legal_name_anchor_reject_reason": "",
+        "candidate_lei": "",
+        "candidate_legal_name": "",
+        "candidate_legal_country": "",
+        "candidate_headquarters_country": "",
+        "candidate_entity_status": "",
+        "candidate_registration_status": "",
     }
 
 
@@ -354,9 +399,15 @@ def _attach_rows_via_lei_expansion(
         if attached.get("entity_lei"):
             expansion = lei_expansions.get(_symbol(attached.get("entity_lei")))
             if expansion and expansion.status == "success":
-                attached["lei_expanded_isins"] = list(expansion.isin_list)
+                attached["lei_expanded_isins"] = _sample_isins(expansion.isin_list)
+                attached["lei_expanded_isin_count"] = len(expansion.isin_list)
+                direct_isin = _symbol(attached.get("isin"))
+                if direct_isin and direct_isin in set(expansion.isin_list):
+                    attached["compatible_expanded_isin_count"] = 1
+                    attached["matched_compatible_isins"] = [direct_isin]
             attached["attachment_provenance"] = "isin_direct"
             attached["attachment_confidence"] = "high"
+            attached["decision_bucket"] = "attached"
             out.append(attached)
             continue
 
@@ -380,8 +431,13 @@ def _attach_rows_via_lei_expansion(
                     "entity_legal_name": legal_name,
                     "entity_attach_method": "lei_expansion",
                     "entity_attach_reason": "single_compatible_expanded_lei",
-                    "expanded_candidate_isins": candidate_isins,
-                    "lei_expanded_isins": list(record.isin_list),
+                    "entity_attach_reasons": ["single_compatible_expanded_lei"],
+                    "decision_bucket": "attached",
+                    "expanded_candidate_isins": _sample_isins(candidate_isins),
+                    "lei_expanded_isins": _sample_isins(record.isin_list),
+                    "lei_expanded_isin_count": len(record.isin_list),
+                    "compatible_expanded_isin_count": len(candidate_isins),
+                    "matched_compatible_isins": _sample_isins(candidate_isins),
                     "lei_source": record.source,
                     "lei_status": record.status,
                     "attachment_provenance": "lei_expansion",
@@ -393,19 +449,26 @@ def _attach_rows_via_lei_expansion(
                 {
                     "entity_attach_method": "unattached_ambiguous",
                     "entity_attach_reason": "multiple_compatible_expanded_lei",
-                    "expanded_candidate_isins": sorted({isin for _, isins in matches for isin in isins}),
-                    "lei_expanded_isins": sorted({isin for record, _ in matches for isin in record.isin_list}),
+                    "entity_attach_reasons": ["multiple_compatible_expanded_lei"],
+                    "decision_bucket": "needs_manual_review",
+                    "expanded_candidate_isins": _sample_isins(sorted({isin for _, isins in matches for isin in isins})),
+                    "lei_expanded_isins": _sample_isins(sorted({isin for record, _ in matches for isin in record.isin_list})),
+                    "lei_expanded_isin_count": len({isin for record, _ in matches for isin in record.isin_list}),
+                    "compatible_expanded_isin_count": len({isin for _, isins in matches for isin in isins}),
+                    "matched_compatible_isins": _sample_isins(sorted({isin for _, isins in matches for isin in isins})),
                     "attachment_provenance": "needs_review",
                     "attachment_confidence": "review",
                 }
             )
         else:
-            name_matches = _name_anchor_matches(
+            name_evaluation = _evaluate_name_anchor(
                 candidate=candidate,
                 openfigi=openfigi,
                 lei_expansions=lei_expansions,
                 legal_name_records=legal_name_records,
             )
+            _apply_name_anchor_diagnostics(attached, name_evaluation)
+            name_matches = name_evaluation["matches"]
             if len(name_matches) == 1:
                 name_candidate, record, candidate_isins = name_matches[0]
                 attached.update(
@@ -416,8 +479,13 @@ def _attach_rows_via_lei_expansion(
                         "entity_legal_name": name_candidate.get("legal_name") or record.legal_name,
                         "entity_attach_method": "name_anchor_confirmed",
                         "entity_attach_reason": "legal_name_candidate_confirmed_by_lei_isin_expansion",
-                        "expanded_candidate_isins": candidate_isins,
-                        "lei_expanded_isins": list(record.isin_list),
+                        "entity_attach_reasons": ["legal_name_candidate_confirmed_by_lei_isin_expansion"],
+                        "decision_bucket": "attached",
+                        "expanded_candidate_isins": _sample_isins(candidate_isins),
+                        "lei_expanded_isins": _sample_isins(record.isin_list),
+                        "lei_expanded_isin_count": len(record.isin_list),
+                        "compatible_expanded_isin_count": len(candidate_isins),
+                        "matched_compatible_isins": _sample_isins(candidate_isins),
                         "lei_source": "gleif_legal_name_plus_lei_expansion",
                         "lei_status": record.status,
                         "candidate_lei": record.lei,
@@ -428,24 +496,37 @@ def _attach_rows_via_lei_expansion(
                         "candidate_registration_status": name_candidate.get("registration_status") or "",
                         "attachment_provenance": "name_anchor_confirmed",
                         "attachment_confidence": "medium",
+                        "legal_name_anchor_status": "confirmed",
+                        "legal_name_anchor_reject_reason": "",
                     }
                 )
             elif len(name_matches) > 1:
+                candidate_isins = sorted({isin for _, _, isins in name_matches for isin in isins})
                 attached.update(
                     {
                         "entity_attach_method": "unattached_ambiguous",
-                        "entity_attach_reason": "multiple_legal_name_anchor_candidates",
+                        "entity_attach_reason": "legal_name_search_ambiguous",
+                        "entity_attach_reasons": _unattached_reasons(attached, openfigi, name_evaluation),
+                        "decision_bucket": "needs_manual_review",
                         "candidate_lei": ",".join(sorted({record.lei for _, record, _ in name_matches})),
-                        "expanded_candidate_isins": sorted({isin for _, _, isins in name_matches for isin in isins}),
+                        "expanded_candidate_isins": _sample_isins(candidate_isins),
+                        "compatible_expanded_isin_count": len(candidate_isins),
+                        "matched_compatible_isins": _sample_isins(candidate_isins),
                         "attachment_provenance": "needs_review",
                         "attachment_confidence": "review",
+                        "legal_name_anchor_status": "ambiguous",
+                        "legal_name_anchor_reject_reason": "legal_name_search_ambiguous",
                     }
                 )
             else:
+                reasons = _unattached_reasons(attached, openfigi, name_evaluation)
+                reason = _primary_unattached_reason(reasons)
                 attached.update(
                     {
                         "entity_attach_method": "unattached_no_anchor",
-                        "entity_attach_reason": "no_compatible_expanded_lei_anchor",
+                        "entity_attach_reason": reason,
+                        "entity_attach_reasons": reasons,
+                        "decision_bucket": _decision_bucket_for_reasons(reasons),
                         "attachment_provenance": "needs_review",
                         "attachment_confidence": "review",
                     }
@@ -483,30 +564,81 @@ def _lei_expansion_matches(
     return matches
 
 
-def _name_anchor_matches(
+def _evaluate_name_anchor(
     *,
     candidate: ListingCandidate,
     openfigi: OpenFigiMapping | None,
     lei_expansions: dict[str, GleifLeiIsinRecord],
     legal_name_records: dict[str, GleifLegalNameRecord],
-) -> list[tuple[dict[str, Any], GleifLeiIsinRecord, list[str]]]:
+) -> dict[str, Any]:
     listing_name = _best_listing_name(candidate, openfigi)
     normalized_listing_name = normalize_legal_name_conservative(listing_name)
+    query_name = legal_name_query_from_listing(listing_name)
+    base: dict[str, Any] = {
+        "listing_name_used_for_legal_name_search": query_name,
+        "status": "not_requested" if not normalized_listing_name else "not_found",
+        "reject_reason": "",
+        "matches": [],
+        "candidate_lei": "",
+        "candidate_legal_name": "",
+        "candidate_legal_country": "",
+        "candidate_headquarters_country": "",
+        "candidate_entity_status": "",
+        "candidate_registration_status": "",
+        "compatible_expanded_isin_count": 0,
+        "matched_compatible_isins": [],
+    }
+    if not normalized_listing_name:
+        base["reject_reason"] = "no_listing_name_for_legal_name_search"
+        return base
+
     record = legal_name_records.get(_symbol(normalized_listing_name))
     if not record or record.status != "success":
-        return []
+        base["status"] = "not_found"
+        base["reject_reason"] = "legal_name_search_no_match"
+        return base
+
+    exact_candidates = [
+        name_candidate
+        for name_candidate in record.candidates
+        if _symbol(name_candidate.get("normalized_legal_name")) == _symbol(normalized_listing_name)
+    ]
+    if not exact_candidates:
+        base["status"] = "not_found"
+        base["reject_reason"] = "legal_name_search_no_match"
+        return base
+
     allowed_prefixes = allowed_isin_prefixes_for_listing(candidate)
+    status_candidates = [
+        name_candidate
+        for name_candidate in exact_candidates
+        if _legal_name_candidate_status_acceptable(name_candidate)
+    ]
+    if not status_candidates:
+        _copy_name_candidate_diagnostics(base, exact_candidates[0])
+        base["status"] = "rejected"
+        base["reject_reason"] = "legal_name_search_no_match"
+        return base
+
+    country_candidates = [
+        name_candidate
+        for name_candidate in status_candidates
+        if _legal_name_candidate_country_compatible(
+            name_candidate=name_candidate,
+            allowed_prefixes=allowed_prefixes,
+        )
+    ]
+    if not country_candidates:
+        _copy_name_candidate_diagnostics(base, status_candidates[0])
+        base["status"] = "rejected"
+        base["reject_reason"] = "legal_name_match_country_incompatible"
+        return base
+
     matches: list[tuple[dict[str, Any], GleifLeiIsinRecord, list[str]]] = []
-    for name_candidate in record.candidates:
+    for name_candidate in country_candidates:
         lei = _symbol(name_candidate.get("lei"))
         expansion = lei_expansions.get(lei)
         if not expansion or expansion.status != "success":
-            continue
-        if not _legal_name_candidate_acceptable(
-            name_candidate=name_candidate,
-            normalized_listing_name=normalized_listing_name,
-            allowed_prefixes=allowed_prefixes,
-        ):
             continue
         candidate_isins = [
             isin
@@ -516,21 +648,82 @@ def _name_anchor_matches(
         if not candidate_isins:
             continue
         matches.append((name_candidate, expansion, candidate_isins))
-    return matches
+
+    if len(matches) == 1:
+        name_candidate, _, candidate_isins = matches[0]
+        _copy_name_candidate_diagnostics(base, name_candidate)
+        base.update(
+            {
+                "status": "confirmed",
+                "reject_reason": "",
+                "matches": matches,
+                "compatible_expanded_isin_count": len(candidate_isins),
+                "matched_compatible_isins": _sample_isins(candidate_isins),
+            }
+        )
+        return base
+    if len(matches) > 1:
+        all_isins = sorted({isin for _, _, candidate_isins in matches for isin in candidate_isins})
+        base.update(
+            {
+                "status": "ambiguous",
+                "reject_reason": "legal_name_search_ambiguous",
+                "matches": matches,
+                "candidate_lei": ",".join(sorted({record.lei for _, record, _ in matches})),
+                "compatible_expanded_isin_count": len(all_isins),
+                "matched_compatible_isins": _sample_isins(all_isins),
+            }
+        )
+        return base
+
+    _copy_name_candidate_diagnostics(base, country_candidates[0])
+    base["status"] = "rejected"
+    base["reject_reason"] = "gleif_lei_found_but_no_compatible_isin"
+    return base
 
 
-def _legal_name_candidate_acceptable(
+def _apply_name_anchor_diagnostics(row: dict[str, Any], evaluation: dict[str, Any]) -> None:
+    for key in (
+        "listing_name_used_for_legal_name_search",
+        "candidate_lei",
+        "candidate_legal_name",
+        "candidate_legal_country",
+        "candidate_headquarters_country",
+        "candidate_entity_status",
+        "candidate_registration_status",
+        "compatible_expanded_isin_count",
+        "matched_compatible_isins",
+    ):
+        if evaluation.get(key):
+            row[key] = evaluation[key]
+    row["legal_name_anchor_status"] = evaluation.get("status") or ""
+    row["legal_name_anchor_reject_reason"] = evaluation.get("reject_reason") or ""
+
+
+def _copy_name_candidate_diagnostics(target: dict[str, Any], name_candidate: dict[str, Any]) -> None:
+    target.update(
+        {
+            "candidate_lei": _symbol(name_candidate.get("lei")),
+            "candidate_legal_name": str(name_candidate.get("legal_name") or ""),
+            "candidate_legal_country": _symbol(name_candidate.get("legal_country")),
+            "candidate_headquarters_country": _symbol(name_candidate.get("headquarters_country")),
+            "candidate_entity_status": _symbol(name_candidate.get("entity_status")),
+            "candidate_registration_status": _symbol(name_candidate.get("registration_status")),
+        }
+    )
+
+
+def _legal_name_candidate_status_acceptable(name_candidate: dict[str, Any]) -> bool:
+    return _symbol(name_candidate.get("entity_status")) == "ACTIVE" and _symbol(
+        name_candidate.get("registration_status")
+    ) in {"ISSUED", "LAPSED"}
+
+
+def _legal_name_candidate_country_compatible(
     *,
     name_candidate: dict[str, Any],
-    normalized_listing_name: str,
     allowed_prefixes: set[str],
 ) -> bool:
-    if _symbol(name_candidate.get("normalized_legal_name")) != _symbol(normalized_listing_name):
-        return False
-    if _symbol(name_candidate.get("entity_status")) != "ACTIVE":
-        return False
-    if _symbol(name_candidate.get("registration_status")) not in {"ISSUED", "LAPSED"}:
-        return False
     if not allowed_prefixes:
         return True
     countries = {
@@ -576,7 +769,14 @@ def _pair_row(left: str, right: str, pair_type: str, rows_by_symbol: dict[str, d
     }
 
 
-def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any]], batch_split_retries: int) -> dict[str, Any]:
+def _summary(
+    *,
+    symbol_rows: list[dict[str, Any]],
+    pair_rows: list[dict[str, Any]],
+    batch_split_retries: int,
+    lei_expanded_isin_count: int,
+    name_anchor_precision_audit: list[dict[str, Any]],
+) -> dict[str, Any]:
     candidate_count = len(symbol_rows)
     isin_found = len([row for row in symbol_rows if row.get("isin") and row.get("isin_status") == "success"])
     isin_suspect_rows = [row for row in symbol_rows if row.get("isin_status") == "suspect"]
@@ -587,19 +787,12 @@ def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any
         if lei:
             lei_groups.setdefault(lei, []).append(row["symbol"])
     grouped_pairs = [row for row in pair_rows if row.get("grouped")]
-    expanded_isins = sorted(
-        {
-            isin
-            for row in symbol_rows
-            for isin in row.get("lei_expanded_isins", [])
-            if isin
-        }
-    )
     direct_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "direct_isin"]
     expansion_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "lei_expansion"]
     name_anchor_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "name_anchor_confirmed"]
     ambiguous_unattached = [row for row in symbol_rows if row.get("entity_attach_method") == "unattached_ambiguous"]
     no_anchor_unattached = [row for row in symbol_rows if row.get("entity_attach_method") == "unattached_no_anchor"]
+    decision_bucket_counts = _decision_bucket_counts(symbol_rows)
     return {
         "candidate_count": candidate_count,
         "isin_found_count": isin_found,
@@ -610,7 +803,7 @@ def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any
         "lei_found_rate_among_isins": _rate(lei_found, isin_found),
         "anchor_isin_count": isin_found,
         "anchor_lei_count": len({_symbol(row.get("direct_lei")) for row in direct_attached if row.get("direct_lei")}),
-        "lei_expanded_isin_count": len(expanded_isins),
+        "lei_expanded_isin_count": int(lei_expanded_isin_count),
         "listings_attached_direct_isin": len(direct_attached),
         "listings_attached_via_lei_expansion": len(expansion_attached),
         "listings_attached_name_anchor_confirmed": len(name_anchor_attached),
@@ -629,6 +822,13 @@ def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any
         ),
         "tail_without_anchor_count": len(no_anchor_unattached),
         "tail_without_anchor_examples": _tail_without_anchor_examples(no_anchor_unattached),
+        "entity_attach_reason_counts": _field_counts(symbol_rows, "entity_attach_reason"),
+        "entity_attach_reasons_counts": _multi_reason_counts(symbol_rows, "entity_attach_reasons"),
+        "decision_bucket_counts": decision_bucket_counts,
+        "fixable_free": decision_bucket_counts.get("fixable_free", 0),
+        "requires_provider_or_curated_identity": decision_bucket_counts.get("requires_provider_or_curated_identity", 0),
+        "needs_manual_review": decision_bucket_counts.get("needs_manual_review", 0),
+        "name_anchor_precision_audit_count": len(name_anchor_precision_audit),
         "unresolved_percentage": _rate(len(no_anchor_unattached) + len(ambiguous_unattached), candidate_count),
         "entity_groups_formed": len([symbols for symbols in lei_groups.values() if len(symbols) > 1]),
         "entity_group_symbols": {lei: symbols for lei, symbols in sorted(lei_groups.items()) if len(symbols) > 1},
@@ -719,6 +919,125 @@ def _is_adr_like(row: dict[str, Any]) -> bool:
     return "ADR" in text or "DEPOSITARY" in text
 
 
+def _unattached_reasons(
+    row: dict[str, Any],
+    openfigi: OpenFigiMapping | None,
+    name_evaluation: dict[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    if openfigi and openfigi.status == "not_found":
+        reasons.append("openfigi_not_found")
+
+    reject_reason = str(name_evaluation.get("reject_reason") or "")
+    if reject_reason:
+        reasons.append(reject_reason)
+
+    isin_status = str(row.get("isin_status") or "")
+    if isin_status == "success" and not row.get("direct_lei"):
+        reasons.append("valid_isin_no_gleif_lei")
+    elif isin_status == "suspect":
+        reasons.append("yfinance_isin_suspect")
+    elif isin_status in {"missing", "not_found"}:
+        reasons.append("provider_isin_missing")
+    elif isin_status == "error":
+        reasons.append("provider_isin_error")
+
+    if not reasons:
+        reasons.append("needs_manual_review")
+    return _unique_ordered(reasons)
+
+
+def _primary_unattached_reason(reasons: list[str]) -> str:
+    priority = [
+        "legal_name_search_ambiguous",
+        "legal_name_match_country_incompatible",
+        "gleif_lei_found_but_no_compatible_isin",
+        "valid_isin_no_gleif_lei",
+        "openfigi_not_found",
+        "no_listing_name_for_legal_name_search",
+        "legal_name_search_no_match",
+        "yfinance_isin_suspect",
+        "provider_isin_missing",
+        "provider_isin_error",
+    ]
+    for reason in priority:
+        if reason in reasons:
+            return reason
+    return reasons[0] if reasons else "needs_manual_review"
+
+
+def _decision_bucket_for_reasons(reasons: list[str]) -> str:
+    if any(reason in reasons for reason in {"legal_name_search_ambiguous", "multiple_compatible_expanded_lei"}):
+        return "needs_manual_review"
+    if any(
+        reason in reasons
+        for reason in {
+            "legal_name_match_country_incompatible",
+            "multiple_legal_name_anchor_candidates",
+            "needs_manual_review",
+        }
+    ):
+        return "needs_manual_review"
+    if any(
+        reason in reasons
+        for reason in {
+            "valid_isin_no_gleif_lei",
+            "gleif_lei_found_but_no_compatible_isin",
+        }
+    ):
+        return "requires_provider_or_curated_identity"
+    return "fixable_free"
+
+
+def _decision_bucket_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {bucket: 0 for bucket in TAIL_DECISION_BUCKETS}
+    for row in rows:
+        bucket = str(row.get("decision_bucket") or "")
+        if bucket in counts:
+            counts[bucket] += 1
+    return {key: value for key, value in sorted(counts.items()) if value}
+
+
+def _name_anchor_precision_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    for row in rows:
+        if row.get("entity_attach_method") != "name_anchor_confirmed":
+            continue
+        out.append(
+            {
+                "symbol": row.get("symbol") or "",
+                "provider_symbol": row.get("provider_symbol") or "",
+                "input_name": row.get("internal_candidate_name") or "",
+                "internal_candidate_name": row.get("internal_candidate_name") or "",
+                "openfigi_name": row.get("openfigi_name") or "",
+                "listing_name_used_for_legal_name_search": row.get("listing_name_used_for_legal_name_search") or "",
+                "matched_gleif_legal_name": row.get("candidate_legal_name") or row.get("legal_name") or "",
+                "lei": row.get("entity_lei") or row.get("lei") or "",
+                "legal_country": row.get("candidate_legal_country") or "",
+                "headquarters_country": row.get("candidate_headquarters_country") or "",
+                "matched_compatible_isins": list(row.get("matched_compatible_isins") or []),
+                "compatible_expanded_isin_count": int(row.get("compatible_expanded_isin_count") or 0),
+                "confidence": row.get("attachment_confidence") or "",
+                "provenance": row.get("attachment_provenance") or "",
+            }
+        )
+    return out
+
+
+def _sample_isins(isins: list[str] | set[str] | tuple[str, ...], *, limit: int = MAX_ISIN_OUTPUT_SAMPLE) -> list[str]:
+    return sorted(_symbol(isin) for isin in isins if _symbol(isin))[:limit]
+
+
+def _unique_ordered(values: list[str]) -> list[str]:
+    out = []
+    seen: set[str] = set()
+    for value in values:
+        if value and value not in seen:
+            out.append(value)
+            seen.add(value)
+    return out
+
+
 def _names_compatible(listing_name: str, legal_name: str) -> bool:
     normalized_listing = normalize_legal_name_conservative(listing_name)
     return bool(normalized_listing and normalized_listing == normalize_legal_name_conservative(legal_name))
@@ -737,6 +1056,7 @@ def _tail_without_anchor_examples(rows: list[dict[str, Any]], *, limit: int = 10
                 "openfigi_exchange": str(row.get("openfigi_exchange") or ""),
                 "isin_status": str(row.get("isin_status") or ""),
                 "reason": str(row.get("entity_attach_reason") or ""),
+                "decision_bucket": str(row.get("decision_bucket") or ""),
             }
         )
         if len(examples) >= limit:
@@ -755,6 +1075,30 @@ def _reason_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
     for row in rows:
         reason = str(row.get("isin_error_reason") or "unknown")
         counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _field_counts(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = str(row.get(field) or "")
+        if not value:
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _multi_reason_counts(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        values = row.get(field) or []
+        if isinstance(values, str):
+            values = [values]
+        for value in values:
+            reason = str(value or "")
+            if not reason:
+                continue
+            counts[reason] = counts.get(reason, 0) + 1
     return dict(sorted(counts.items()))
 
 

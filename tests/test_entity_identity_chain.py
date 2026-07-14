@@ -42,6 +42,8 @@ def test_acceptance_fixture_chain_reports_symbol_pair_outcomes() -> None:
     assert summary["adrs_mapping_to_depositary_or_ambiguous_lei_count"] == 0
     assert summary["unresolved_no_isin_count"] == 6
     assert summary["unresolved_no_lei_count"] == 0
+    assert summary["name_anchor_precision_audit_count"] == 6
+    assert measurement.name_anchor_precision_audit
 
     by_pair = {tuple(row["pair"]): row for row in measurement.pair_rows}
     assert by_pair[("SAP", "SAP.DE")]["grouped"] is True
@@ -72,6 +74,11 @@ def test_symbol_rows_include_required_measurement_fields() -> None:
     assert sap["lei_source"] == "fixture_gleif"
     assert sap["lei"] == "529900D6BF99LW9R2E68"
     assert sap["legal_name"] == "SAP SE"
+    assert sap["openfigi_name"] == "SAP SE-SPONSORED ADR"
+    assert sap["internal_candidate_name"] == "SAP SE-SPONSORED ADR"
+    assert sap["listing_name_used_for_legal_name_search"] == "Sap Se"
+    assert sap["legal_name_anchor_status"] == "not_requested_direct_isin"
+    assert sap["decision_bucket"] == "attached"
 
 
 def test_isin_missing_and_lei_missing_are_measured_separately() -> None:
@@ -328,6 +335,8 @@ def test_lenb_openfigi_not_found_can_still_group_when_name_anchor_is_confirmed()
     assert rows["LENB"]["entity_attach_method"] == "name_anchor_confirmed"
     assert rows["LENB"]["attachment_provenance"] == "name_anchor_confirmed"
     assert rows["LENB"]["attachment_confidence"] == "medium"
+    assert rows["LENB"]["listing_name_used_for_legal_name_search"] == "Lennar Corporation"
+    assert rows["LENB"]["legal_name_anchor_status"] == "confirmed"
     assert measurement.pair_rows[0]["grouped"] is True
 
 
@@ -374,8 +383,126 @@ def test_no_anchor_listing_remains_unresolved() -> None:
     row = measurement.symbol_rows[0]
 
     assert row["entity_attach_method"] == "unattached_no_anchor"
+    assert row["entity_attach_reason"] == "openfigi_not_found"
+    assert row["entity_attach_reasons"] == [
+        "openfigi_not_found",
+        "legal_name_search_no_match",
+        "provider_isin_missing",
+    ]
+    assert row["decision_bucket"] == "fixable_free"
     assert measurement.summary["tail_without_anchor_count"] == 1
     assert measurement.summary["tail_without_anchor_examples"][0]["symbol"] == "ZZZ.L"
+    assert measurement.summary["decision_bucket_counts"]["fixable_free"] == 1
+
+
+def test_valid_isin_without_gleif_lei_rolls_up_to_provider_or_curated_identity() -> None:
+    measurement = _fixture_measurement(
+        ["0700.HK"],
+        isin_fixtures={"0700.HK": {"isin": "KYG875721634", "source": "fixture_yfinance"}},
+        gleif_fixtures={"KYG875721634": {"status": "not_found", "error_message": "no_gleif_isin_mapping"}},
+        gleif_lei_isin_fixtures={},
+        gleif_legal_name_fixtures={},
+        extra_candidates=[
+            ListingCandidate(symbol="0700.HK", provider_symbol="0700.HK", country="HK", currency="HKD", name="TENCENT HOLDINGS LTD"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["isin_status"] == "success"
+    assert row["entity_attach_reason"] == "valid_isin_no_gleif_lei"
+    assert "valid_isin_no_gleif_lei" in row["entity_attach_reasons"]
+    assert row["decision_bucket"] == "requires_provider_or_curated_identity"
+    assert measurement.summary["requires_provider_or_curated_identity"] == 1
+
+
+def test_ambiguous_legal_name_anchor_is_manual_review() -> None:
+    measurement = _fixture_measurement(
+        ["AMB"],
+        isin_fixtures={"AMB": {"isin": "-", "source": "fixture_yfinance"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:ACMELEI00000001": {"legal_name": "ACME CORPORATION", "isin_list": ["US0000000002"]},
+            "LEI:ACMELEI00000002": {"legal_name": "ACME CORPORATION", "isin_list": ["US0000000010"]},
+        },
+        gleif_legal_name_fixtures={
+            "NAME:ACME": {
+                "candidates": [
+                    {
+                        "lei": "ACMELEI00000001",
+                        "legal_name": "ACME CORPORATION",
+                        "legal_country": "US",
+                        "headquarters_country": "US",
+                        "jurisdiction": "US-DE",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    },
+                    {
+                        "lei": "ACMELEI00000002",
+                        "legal_name": "ACME CORPORATION",
+                        "legal_country": "US",
+                        "headquarters_country": "US",
+                        "jurisdiction": "US-DE",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    },
+                ]
+            }
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="AMB", provider_symbol="AMB", country="US", currency="USD", name="ACME CORP-A"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["entity_attach_method"] == "unattached_ambiguous"
+    assert row["entity_attach_reason"] == "legal_name_search_ambiguous"
+    assert row["legal_name_anchor_status"] == "ambiguous"
+    assert row["decision_bucket"] == "needs_manual_review"
+    assert measurement.summary["needs_manual_review"] == 1
+
+
+def test_name_anchor_precision_audit_and_isin_samples_are_capped() -> None:
+    expanded_isins = [f"US{index:09d}{index % 10}" for index in range(20)]
+    measurement = _fixture_measurement(
+        ["MEGA"],
+        isin_fixtures={"MEGA": {"isin": "-", "source": "fixture_yfinance"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:MEGALEI00000001": {"legal_name": "MEGA CORPORATION", "isin_list": expanded_isins}
+        },
+        gleif_legal_name_fixtures={
+            "NAME:MEGA": {
+                "candidates": [
+                    {
+                        "lei": "MEGALEI00000001",
+                        "legal_name": "MEGA CORPORATION",
+                        "legal_country": "US",
+                        "headquarters_country": "US",
+                        "jurisdiction": "US-DE",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            }
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="MEGA", provider_symbol="MEGA", country="US", currency="USD", name="MEGA CORP-A"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+    audit = measurement.name_anchor_precision_audit[0]
+
+    assert row["entity_attach_method"] == "name_anchor_confirmed"
+    assert row["lei_expanded_isin_count"] == 20
+    assert row["compatible_expanded_isin_count"] == 20
+    assert len(row["lei_expanded_isins"]) == 10
+    assert len(row["matched_compatible_isins"]) == 10
+    assert audit["symbol"] == "MEGA"
+    assert audit["matched_gleif_legal_name"] == "MEGA CORPORATION"
+    assert audit["compatible_expanded_isin_count"] == 20
 
 
 def test_yfinance_suspect_isins_are_excluded_from_anchors() -> None:

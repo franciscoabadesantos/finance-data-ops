@@ -31,6 +31,18 @@ _OPENFIGI_EXCH_CODE_BY_YAHOO_SUFFIX = {
     ".TO": "CN",
 }
 
+_OPENFIGI_MIC_BY_YAHOO_SUFFIX = {
+    ".KQ": "XKOS",
+    ".KS": "XKRX",
+    ".LS": "XLIS",
+    ".MI": "XMIL",
+    ".NS": "XNSE",
+    ".PA": "XPAR",
+    ".SS": "XSHG",
+    ".SZ": "XSHE",
+    ".TA": "XTAE",
+}
+
 _OPENFIGI_EXCH_CODE_BY_EXCHANGE = {
     "AMEX": "US",
     "ASE": "US",
@@ -49,8 +61,17 @@ _OPENFIGI_EXCH_CODE_BY_MIC = {
     "XETR": "GY",
     "XHKG": "HK",
     "XLON": "LN",
+    "XLIS": "PL",
+    "XMIL": "IM",
+    "XKOS": "KQ",
+    "XKRX": "KP",
     "XNYS": "US",
     "XNAS": "US",
+    "XNSE": "IN",
+    "XPAR": "FP",
+    "XSHE": "CS",
+    "XSHG": "CG",
+    "XTAE": "IT",
     "XTKS": "JT",
     "XTSE": "CN",
 }
@@ -195,8 +216,9 @@ def normalize_openfigi_request_inputs(
     suffix = _matched_yahoo_suffix(symbol)
     ticker = _ticker_without_suffix(symbol, suffix)
     suffix_exch_code = _OPENFIGI_EXCH_CODE_BY_YAHOO_SUFFIX.get(suffix, "")
+    suffix_mic_code = _OPENFIGI_MIC_BY_YAHOO_SUFFIX.get(suffix, "")
 
-    mic_code = mic if _valid_mic(mic) else ""
+    mic_code = mic if _valid_mic(mic) else suffix_mic_code
     exch_code = ""
     if not mic_code:
         exch_code = (
@@ -325,7 +347,8 @@ def _error_mapping(
 
 
 def _matched_yahoo_suffix(symbol: str) -> str:
-    for suffix in sorted(_OPENFIGI_EXCH_CODE_BY_YAHOO_SUFFIX, key=len, reverse=True):
+    suffixes = set(_OPENFIGI_EXCH_CODE_BY_YAHOO_SUFFIX) | set(_OPENFIGI_MIC_BY_YAHOO_SUFFIX)
+    for suffix in sorted(suffixes, key=len, reverse=True):
         if symbol.endswith(suffix):
             return suffix
     return ""

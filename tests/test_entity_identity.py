@@ -78,6 +78,34 @@ def test_yahoo_suffixes_normalize_for_openfigi_requests() -> None:
         assert "marketSecDes" not in request.payload
 
 
+def test_supported_local_suffixes_use_mic_without_exchange_code() -> None:
+    cases = {
+        "005930.KS": ("005930", "XKRX"),
+        "091990.KQ": ("091990", "XKOS"),
+        "000001.SZ": ("000001", "XSHE"),
+        "600519.SS": ("600519", "XSHG"),
+        "SON.LS": ("SON", "XLIS"),
+        "MC.PA": ("MC", "XPAR"),
+        "NEXI.MI": ("NEXI", "XMIL"),
+        "TEVA.TA": ("TEVA", "XTAE"),
+        "RELIANCE.NS": ("RELIANCE", "XNSE"),
+    }
+    for provider_symbol, (openfigi_ticker, mic_code) in cases.items():
+        request = build_openfigi_request(
+            ListingCandidate(
+                symbol=provider_symbol,
+                provider_symbol=provider_symbol,
+                exchange="",
+                exchange_mic="",
+            )
+        )
+
+        assert request.payload["idValue"] == openfigi_ticker
+        assert request.payload["micCode"] == mic_code
+        assert "exchCode" not in request.payload
+        assert "marketSecDes" not in request.payload
+
+
 def test_hong_kong_numeric_ticker_strips_leading_zeroes_only_for_openfigi_request() -> None:
     request = build_openfigi_request(
         ListingCandidate(
@@ -116,6 +144,23 @@ def test_candidate_universe_treats_pandas_nan_as_missing() -> None:
     assert candidates[0].exchange == ""
     assert candidates[0].exchange_mic == ""
     assert candidates[0].currency == ""
+
+
+def test_candidate_universe_uses_entity_attributes_static_name_metadata() -> None:
+    candidates = build_candidate_universe_from_frames(
+        ticker_readiness=pd.DataFrame([{"symbol": "005930.KS", "tracked": True}]),
+        entity_attributes_static=pd.DataFrame(
+            [
+                {
+                    "entity_id": "005930.KS",
+                    "display_name": "Samsung Electronics Co Ltd",
+                }
+            ]
+        ),
+    )
+
+    assert candidates[0].symbol == "005930.KS"
+    assert candidates[0].name == "Samsung Electronics Co Ltd"
 
 
 def test_openfigi_413_batch_is_split_without_poisoning_whole_batch() -> None:
