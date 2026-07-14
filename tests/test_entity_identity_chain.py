@@ -707,6 +707,17 @@ def test_us_foreign_issuer_acn_attaches_when_legal_name_candidate_is_not_exact_s
     assert row["legal_name_candidate_lei"] == "549300JY6CF6DO4YFQ03"
     assert row["matched_compatible_isins"] == ["IE00B4BNMY34"]
     assert row["compatible_isin_gate_status"] == "foreign_issuer_prefix_mismatch_confirmed"
+    assert row["foreign_issuer_candidate_evaluated"] is True
+    assert row["foreign_issuer_candidate_lei"] == "549300JY6CF6DO4YFQ03"
+    assert row["foreign_issuer_name_match_status"] == "matched"
+    assert row["foreign_issuer_name_match_normalized_listing_names"] == ["ACCENTURE"]
+    assert row["foreign_issuer_name_match_normalized_legal_name"] == "ACCENTURE"
+    assert row["foreign_issuer_lei_expansion_status"] == "success"
+    assert row["foreign_issuer_raw_isin"] == "IE00B4BNMY34"
+    assert row["foreign_issuer_raw_isin_in_expansion"] is True
+    assert row["foreign_issuer_issuer_country_prefixes"] == ["IE"]
+    assert row["foreign_issuer_expanded_issuer_country_isin_count"] == 1
+    assert row["foreign_issuer_final_gate_status"] == "confirmed"
 
 
 def test_us_foreign_issuer_raw_isin_in_lei_expansion_confirms_when_gleif_country_prefix_is_incomplete() -> None:
@@ -758,8 +769,59 @@ def test_us_foreign_issuer_raw_isin_in_lei_expansion_confirms_when_gleif_country
 
     assert rows["DLO"]["entity_attach_method"] == "foreign_issuer_name_anchor_confirmed"
     assert rows["DLO"]["matched_compatible_isins"] == ["KYG290181018"]
+    assert rows["DLO"]["foreign_issuer_raw_isin_in_expansion"] is True
+    assert rows["DLO"]["foreign_issuer_expanded_issuer_country_isin_count"] == 0
     assert rows["TRI"]["entity_attach_method"] == "foreign_issuer_name_anchor_confirmed"
     assert rows["TRI"]["matched_compatible_isins"] == ["CA8849038812"]
+    assert rows["TRI"]["foreign_issuer_raw_isin_in_expansion"] is True
+    assert rows["TRI"]["foreign_issuer_expanded_issuer_country_isin_count"] == 0
+
+
+def test_foreign_issuer_rejection_diagnostics_explain_missing_confirming_isin() -> None:
+    measurement = _fixture_measurement(
+        ["TRI"],
+        openfigi_fixtures={"TRI": _security_fixture("TRI", "THOMSON REUTERS CORP")},
+        isin_fixtures={"TRI": {"isin": "CA8849038812", "source": "fixture_yfinance"}},
+        gleif_fixtures={"CA8849038812": {"status": "not_found", "error_message": "no_lei"}},
+        gleif_lei_isin_fixtures={
+            "LEI:549300561UZND4C7B569": {
+                "legal_name": "THOMSON REUTERS CORPORATION",
+                "isin_list": ["US8849030001"],
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:THOMSON REUTERS": {
+                "candidates": [_legal_candidate("549300561UZND4C7B569", "THOMSON REUTERS CORPORATION", country="CA")]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="TRI", provider_symbol="TRI", country="US", currency="USD", name="THOMSON REUTERS CORP"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["entity_attach_method"] == "unattached_no_anchor"
+    assert row["entity_attach_reason"] == "legal_name_match_country_incompatible"
+    assert row["foreign_issuer_candidate_evaluated"] is True
+    assert row["foreign_issuer_candidate_lei"] == "549300561UZND4C7B569"
+    assert row["foreign_issuer_name_match_status"] == "matched"
+    assert row["foreign_issuer_lei_expansion_status"] == "success"
+    assert row["foreign_issuer_lei_expansion_isin_count"] == 1
+    assert row["foreign_issuer_raw_isin"] == "CA8849038812"
+    assert row["foreign_issuer_raw_isin_in_expansion"] is False
+    assert row["foreign_issuer_issuer_country_prefixes"] == ["CA"]
+    assert row["foreign_issuer_expanded_issuer_country_isin_count"] == 0
+    assert row["foreign_issuer_reject_reason"] == "no_confirming_foreign_issuer_isin"
+    assert row["foreign_issuer_final_gate_status"] == "rejected"
+    assert measurement.summary["foreign_issuer_fallback_evaluated_count"] == 1
+    assert measurement.summary["foreign_issuer_fallback_attached_count"] == 0
+    assert measurement.summary["foreign_issuer_fallback_rejected_count"] == 1
+    assert measurement.summary["foreign_issuer_fallback_reject_reason_counts"] == {
+        "no_confirming_foreign_issuer_isin": 1
+    }
+    assert measurement.summary["foreign_issuer_fallback_expansion_status_counts"] == {"success": 1}
+    assert measurement.summary["foreign_issuer_fallback_raw_isin_in_expansion_counts"] == {"false": 1}
 
 
 def test_us_foreign_issuer_ambiguous_legal_name_candidates_stay_manual_review() -> None:

@@ -454,6 +454,23 @@ def _symbol_row(
         "direct_prefix_mismatch_reject_reason": "",
         "direct_prefix_mismatch_lei": "",
         "direct_prefix_mismatch_legal_name": "",
+        "foreign_issuer_candidate_evaluated": False,
+        "foreign_issuer_candidate_lei": "",
+        "foreign_issuer_candidate_legal_name": "",
+        "foreign_issuer_reject_reason": "",
+        "foreign_issuer_name_match_status": "",
+        "foreign_issuer_name_match_normalized_listing_names": [],
+        "foreign_issuer_name_match_normalized_legal_name": "",
+        "foreign_issuer_lei_expansion_status": "",
+        "foreign_issuer_lei_expansion_error": "",
+        "foreign_issuer_lei_expansion_isin_count": 0,
+        "foreign_issuer_lei_expansion_isin_sample": [],
+        "foreign_issuer_raw_isin": "",
+        "foreign_issuer_raw_isin_in_expansion": False,
+        "foreign_issuer_issuer_country_prefixes": [],
+        "foreign_issuer_expanded_issuer_country_isin_count": 0,
+        "foreign_issuer_expanded_issuer_country_isin_sample": [],
+        "foreign_issuer_final_gate_status": "not_evaluated",
     }
 
 
@@ -853,6 +870,23 @@ def _evaluate_name_anchor(
         "expected_listing_country_prefix_present": False,
         "compatible_isin_candidate_count": 0,
         "compatible_isin_candidate_sample": [],
+        "foreign_issuer_candidate_evaluated": False,
+        "foreign_issuer_candidate_lei": "",
+        "foreign_issuer_candidate_legal_name": "",
+        "foreign_issuer_reject_reason": "",
+        "foreign_issuer_name_match_status": "",
+        "foreign_issuer_name_match_normalized_listing_names": [],
+        "foreign_issuer_name_match_normalized_legal_name": "",
+        "foreign_issuer_lei_expansion_status": "",
+        "foreign_issuer_lei_expansion_error": "",
+        "foreign_issuer_lei_expansion_isin_count": 0,
+        "foreign_issuer_lei_expansion_isin_sample": [],
+        "foreign_issuer_raw_isin": "",
+        "foreign_issuer_raw_isin_in_expansion": False,
+        "foreign_issuer_issuer_country_prefixes": [],
+        "foreign_issuer_expanded_issuer_country_isin_count": 0,
+        "foreign_issuer_expanded_issuer_country_isin_sample": [],
+        "foreign_issuer_final_gate_status": "not_evaluated",
     }
     if not normalized_listing_name:
         base["reject_reason"] = "no_listing_name_for_legal_name_search"
@@ -879,6 +913,18 @@ def _evaluate_name_anchor(
         if _symbol(name_candidate.get("normalized_legal_name")) == _symbol(normalized_listing_name)
     ]
     if not exact_candidates:
+        foreign_issuer_diagnostics = _foreign_issuer_candidate_diagnostics(
+            candidate=candidate,
+            openfigi=openfigi,
+            name_candidates=[
+                name_candidate
+                for name_candidate in record.candidates
+                if _legal_name_candidate_status_acceptable(name_candidate)
+            ],
+            lei_expansions=lei_expansions,
+            raw_isin=raw_isin,
+        )
+        base.update(foreign_issuer_diagnostics)
         foreign_issuer_matches = _foreign_issuer_name_anchor_matches(
             candidate=candidate,
             openfigi=openfigi,
@@ -932,6 +978,14 @@ def _evaluate_name_anchor(
         )
     ]
     if not country_candidates:
+        foreign_issuer_diagnostics = _foreign_issuer_candidate_diagnostics(
+            candidate=candidate,
+            openfigi=openfigi,
+            name_candidates=status_candidates,
+            lei_expansions=lei_expansions,
+            raw_isin=raw_isin,
+        )
+        base.update(foreign_issuer_diagnostics)
         foreign_issuer_matches = _foreign_issuer_name_anchor_matches(
             candidate=candidate,
             openfigi=openfigi,
@@ -1068,6 +1122,163 @@ def _foreign_issuer_name_anchor_matches(
     return matches
 
 
+def _foreign_issuer_candidate_diagnostics(
+    *,
+    candidate: ListingCandidate,
+    openfigi: OpenFigiMapping | None,
+    name_candidates: list[dict[str, Any]],
+    lei_expansions: dict[str, GleifLeiIsinRecord],
+    raw_isin: str,
+) -> dict[str, Any]:
+    diagnostic: dict[str, Any] = {
+        "foreign_issuer_candidate_evaluated": True,
+        "foreign_issuer_candidate_lei": "",
+        "foreign_issuer_candidate_legal_name": "",
+        "foreign_issuer_reject_reason": "",
+        "foreign_issuer_name_match_status": "",
+        "foreign_issuer_name_match_normalized_listing_names": _foreign_issuer_normalized_listing_names(
+            candidate=candidate,
+            openfigi=openfigi,
+        ),
+        "foreign_issuer_name_match_normalized_legal_name": "",
+        "foreign_issuer_lei_expansion_status": "",
+        "foreign_issuer_lei_expansion_error": "",
+        "foreign_issuer_lei_expansion_isin_count": 0,
+        "foreign_issuer_lei_expansion_isin_sample": [],
+        "foreign_issuer_raw_isin": _symbol(raw_isin),
+        "foreign_issuer_raw_isin_in_expansion": False,
+        "foreign_issuer_issuer_country_prefixes": [],
+        "foreign_issuer_expanded_issuer_country_isin_count": 0,
+        "foreign_issuer_expanded_issuer_country_isin_sample": [],
+        "foreign_issuer_final_gate_status": "rejected",
+    }
+    if not _is_us_listing(candidate=candidate, openfigi=openfigi):
+        diagnostic["foreign_issuer_reject_reason"] = "not_us_listing"
+        return diagnostic
+    if not name_candidates:
+        diagnostic["foreign_issuer_reject_reason"] = "no_legal_name_candidate"
+        return diagnostic
+
+    candidate_diagnostics = [
+        _foreign_issuer_single_candidate_diagnostics(
+            candidate=candidate,
+            openfigi=openfigi,
+            name_candidate=name_candidate,
+            expansion=lei_expansions.get(_symbol(name_candidate.get("lei"))),
+            raw_isin=raw_isin,
+        )
+        for name_candidate in name_candidates
+    ]
+    confirmed = [
+        item
+        for item in candidate_diagnostics
+        if item.get("foreign_issuer_final_gate_status") == "confirmed"
+    ]
+    if len(confirmed) == 1:
+        return confirmed[0]
+    if len(confirmed) > 1:
+        chosen = dict(confirmed[0])
+        chosen["foreign_issuer_candidate_lei"] = ",".join(
+            sorted(_symbol(item.get("foreign_issuer_candidate_lei")) for item in confirmed if item.get("foreign_issuer_candidate_lei"))
+        )
+        chosen["foreign_issuer_reject_reason"] = "multiple_foreign_issuer_candidates"
+        chosen["foreign_issuer_final_gate_status"] = "ambiguous"
+        return chosen
+    return candidate_diagnostics[0]
+
+
+def _foreign_issuer_single_candidate_diagnostics(
+    *,
+    candidate: ListingCandidate,
+    openfigi: OpenFigiMapping | None,
+    name_candidate: dict[str, Any],
+    expansion: GleifLeiIsinRecord | None,
+    raw_isin: str,
+) -> dict[str, Any]:
+    normalized_listing_names = _foreign_issuer_normalized_listing_names(
+        candidate=candidate,
+        openfigi=openfigi,
+    )
+    legal_name = str(name_candidate.get("legal_name") or "")
+    normalized_legal_name = _normalize_direct_prefix_mismatch_name(legal_name)
+    name_match = bool(normalized_legal_name and normalized_legal_name in normalized_listing_names)
+    issuer_prefixes = _issuer_isin_prefixes_from_legal_name_candidate(name_candidate)
+    expansion_isins = expansion.isin_list if expansion and expansion.status == "success" else []
+    raw_isin_symbol = _symbol(raw_isin)
+    raw_isin_in_expansion = bool(raw_isin_symbol and raw_isin_symbol in {_symbol(isin) for isin in expansion_isins})
+    issuer_country_isins = sorted(
+        {
+            _symbol(isin)
+            for isin in expansion_isins
+            if _symbol(isin) and issuer_prefixes and _symbol(isin)[:2] in issuer_prefixes
+        }
+    )
+    confirming_isins = (
+        _foreign_issuer_confirming_isins(
+            issuer_prefixes=issuer_prefixes,
+            raw_isin=raw_isin,
+            expanded_isins=expansion_isins,
+        )
+        if expansion and expansion.status == "success"
+        else []
+    )
+    reject_reason = ""
+    final_gate_status = "confirmed"
+    if not name_match:
+        reject_reason = "name_unconfirmed"
+        final_gate_status = "rejected"
+    elif not expansion:
+        reject_reason = "lei_expansion_missing"
+        final_gate_status = "rejected"
+    elif expansion.status != "success":
+        reject_reason = "lei_expansion_not_success"
+        final_gate_status = "rejected"
+    elif not confirming_isins:
+        reject_reason = "no_confirming_foreign_issuer_isin"
+        final_gate_status = "rejected"
+
+    return {
+        "foreign_issuer_candidate_evaluated": True,
+        "foreign_issuer_candidate_lei": _symbol(name_candidate.get("lei")),
+        "foreign_issuer_candidate_legal_name": legal_name,
+        "foreign_issuer_reject_reason": reject_reason,
+        "foreign_issuer_name_match_status": "matched" if name_match else "rejected",
+        "foreign_issuer_name_match_normalized_listing_names": normalized_listing_names,
+        "foreign_issuer_name_match_normalized_legal_name": normalized_legal_name,
+        "foreign_issuer_lei_expansion_status": expansion.status if expansion else "missing_response",
+        "foreign_issuer_lei_expansion_error": expansion.error_message if expansion else "",
+        "foreign_issuer_lei_expansion_isin_count": len(expansion.isin_list) if expansion else 0,
+        "foreign_issuer_lei_expansion_isin_sample": _sample_isins(expansion.isin_list if expansion else []),
+        "foreign_issuer_raw_isin": raw_isin_symbol,
+        "foreign_issuer_raw_isin_in_expansion": raw_isin_in_expansion,
+        "foreign_issuer_issuer_country_prefixes": sorted(issuer_prefixes),
+        "foreign_issuer_expanded_issuer_country_isin_count": len(issuer_country_isins),
+        "foreign_issuer_expanded_issuer_country_isin_sample": _sample_isins(issuer_country_isins),
+        "foreign_issuer_final_gate_status": final_gate_status,
+    }
+
+
+def _foreign_issuer_normalized_listing_names(
+    *,
+    candidate: ListingCandidate,
+    openfigi: OpenFigiMapping | None,
+) -> list[str]:
+    listing_names = []
+    if openfigi and openfigi.name:
+        listing_names.append(openfigi.name)
+    if candidate.name:
+        listing_names.append(candidate.name)
+    if not listing_names:
+        listing_names.append(_best_listing_name(candidate, openfigi))
+    return sorted(
+        {
+            normalized
+            for name in listing_names
+            if (normalized := _normalize_direct_prefix_mismatch_name(name))
+        }
+    )
+
+
 def _foreign_issuer_resolution_from_matches(
     *,
     base: dict[str, Any],
@@ -1170,6 +1381,23 @@ def _apply_name_anchor_diagnostics(row: dict[str, Any], evaluation: dict[str, An
         "expected_listing_country_prefix_present",
         "compatible_isin_candidate_count",
         "compatible_isin_candidate_sample",
+        "foreign_issuer_candidate_evaluated",
+        "foreign_issuer_candidate_lei",
+        "foreign_issuer_candidate_legal_name",
+        "foreign_issuer_reject_reason",
+        "foreign_issuer_name_match_status",
+        "foreign_issuer_name_match_normalized_listing_names",
+        "foreign_issuer_name_match_normalized_legal_name",
+        "foreign_issuer_lei_expansion_status",
+        "foreign_issuer_lei_expansion_error",
+        "foreign_issuer_lei_expansion_isin_count",
+        "foreign_issuer_lei_expansion_isin_sample",
+        "foreign_issuer_raw_isin",
+        "foreign_issuer_raw_isin_in_expansion",
+        "foreign_issuer_issuer_country_prefixes",
+        "foreign_issuer_expanded_issuer_country_isin_count",
+        "foreign_issuer_expanded_issuer_country_isin_sample",
+        "foreign_issuer_final_gate_status",
     ):
         if evaluation.get(key) or key in {
             "compatible_expanded_isin_count",
@@ -1180,6 +1408,14 @@ def _apply_name_anchor_diagnostics(row: dict[str, Any], evaluation: dict[str, An
             "legal_name_candidate_compatible_isin_count",
             "legal_name_candidate_lei_expansion_isin_sample",
             "legal_name_candidate_compatible_isin_sample",
+            "foreign_issuer_candidate_evaluated",
+            "foreign_issuer_lei_expansion_isin_count",
+            "foreign_issuer_raw_isin_in_expansion",
+            "foreign_issuer_expanded_issuer_country_isin_count",
+            "foreign_issuer_name_match_normalized_listing_names",
+            "foreign_issuer_lei_expansion_isin_sample",
+            "foreign_issuer_issuer_country_prefixes",
+            "foreign_issuer_expanded_issuer_country_isin_sample",
         }:
             row[key] = evaluation[key]
     row["legal_name_anchor_status"] = evaluation.get("status") or ""
@@ -1327,6 +1563,12 @@ def _summary(
     foreign_issuer_attached = [
         row for row in symbol_rows if row.get("entity_attach_method") == "foreign_issuer_name_anchor_confirmed"
     ]
+    foreign_issuer_evaluated = [
+        row for row in symbol_rows if bool(row.get("foreign_issuer_candidate_evaluated"))
+    ]
+    foreign_issuer_rejected = [
+        row for row in foreign_issuer_evaluated if row.get("foreign_issuer_final_gate_status") == "rejected"
+    ]
     attached = direct_attached + expansion_attached + name_anchor_attached + foreign_issuer_attached
     ambiguous_unattached = [row for row in symbol_rows if row.get("entity_attach_method") == "unattached_ambiguous"]
     no_anchor_unattached = [row for row in symbol_rows if row.get("entity_attach_method") == "unattached_no_anchor"]
@@ -1383,6 +1625,21 @@ def _summary(
         "listings_attached_direct_isin": len(direct_attached),
         "listings_attached_direct_isin_prefix_mismatch_name_confirmed": len(direct_prefix_mismatch_attached),
         "listings_attached_foreign_issuer_name_anchor_confirmed": len(foreign_issuer_attached),
+        "foreign_issuer_fallback_evaluated_count": len(foreign_issuer_evaluated),
+        "foreign_issuer_fallback_attached_count": len(foreign_issuer_attached),
+        "foreign_issuer_fallback_rejected_count": len(foreign_issuer_rejected),
+        "foreign_issuer_fallback_reject_reason_counts": _field_counts(
+            foreign_issuer_rejected,
+            "foreign_issuer_reject_reason",
+        ),
+        "foreign_issuer_fallback_expansion_status_counts": _field_counts(
+            foreign_issuer_evaluated,
+            "foreign_issuer_lei_expansion_status",
+        ),
+        "foreign_issuer_fallback_raw_isin_in_expansion_counts": _bool_counts(
+            foreign_issuer_evaluated,
+            "foreign_issuer_raw_isin_in_expansion",
+        ),
         "listings_attached_via_lei_expansion": len(expansion_attached),
         "listings_attached_name_anchor_confirmed": len(name_anchor_attached),
         "listings_unattached_no_anchor": len(no_anchor_unattached),
@@ -1863,6 +2120,13 @@ def _field_counts(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
             continue
         counts[value] = counts.get(value, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _bool_counts(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts = {"false": 0, "true": 0}
+    for row in rows:
+        counts["true" if bool(row.get(field)) else "false"] += 1
+    return {key: value for key, value in counts.items() if value}
 
 
 def _multi_reason_counts(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
