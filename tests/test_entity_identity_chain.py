@@ -24,7 +24,11 @@ from finance_data_ops.identity.names import (
     normalize_legal_name_conservative,
 )
 from finance_data_ops.identity.openfigi import OpenFigiClient
-from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
+from finance_data_ops.identity.publisher import (
+    build_side_by_side_entity_publication_plan,
+    publish_entity_identity_raw_caches,
+    publish_entity_identity_side_by_side,
+)
 from finance_data_ops.publish.client import RecordingPublisher
 from scripts.measure_entity_identity_chain import _gleif_lei_expansion_lookup_leis, _gleif_lei_expansion_lookup_plan
 
@@ -60,6 +64,10 @@ def test_acceptance_fixture_chain_reports_symbol_pair_outcomes() -> None:
     assert summary["unresolved_no_lei_count"] == 0
     assert summary["name_anchor_precision_audit_count"] == 6
     assert summary["precision_audit_count"] == 6
+    assert summary["heuristic_attach_audit_count"] == 6
+    assert summary["non_direct_attach_audit_count"] == 10
+    assert summary["publication_gate_status"] == "ready_machine_safe"
+    assert summary["publication_gate_review_required_count"] == 0
     assert summary["gleif_lei_expansion_requested_count"] == 7
     assert summary["gleif_lei_expansion_requested_by_origin"]["prefix_compatible_direct_anchor"] == 4
     assert summary["gleif_lei_expansion_requested_by_origin"]["legal_name_candidate"] == 3
@@ -76,6 +84,8 @@ def test_acceptance_fixture_chain_reports_symbol_pair_outcomes() -> None:
     assert summary["accepted_pairs_passed"] is True
     assert summary["guardrail_pairs_unmerged"] is True
     assert measurement.name_anchor_precision_audit
+    assert measurement.heuristic_attach_audit
+    assert measurement.publication_gate["publication_allowed_without_review"] is True
 
     by_pair = {tuple(row["pair"]): row for row in measurement.pair_rows}
     assert by_pair[("SAP", "SAP.DE")]["grouped"] is True
@@ -1957,6 +1967,97 @@ def test_cache_apply_publishes_only_raw_cache_tables() -> None:
         "source_cache.gleif_lei_isin_raw",
     ]
     assert all(not call["table"].startswith("feature_store.entity_") for call in publisher.upserts)
+    assert publisher.inserts == []
+
+
+def test_publication_readiness_audit_includes_all_non_direct_attaches() -> None:
+    measurement = _fixture_measurement()
+    audited_symbols = {row["symbol"] for row in measurement.heuristic_attach_audit}
+    non_direct_symbols = {
+        row["symbol"]
+        for row in measurement.symbol_rows
+        if row["entity_attach_method"]
+        in {
+            "lei_expansion",
+            "name_anchor_confirmed",
+            "foreign_issuer_name_anchor_confirmed",
+            "isin_direct_prefix_mismatch_name_confirmed",
+        }
+    }
+
+    assert audited_symbols == non_direct_symbols
+    assert all(row["deterministic_support"] for row in measurement.heuristic_attach_audit)
+    assert all(row["review_status"] == "machine_verifiably_safe" for row in measurement.heuristic_attach_audit)
+
+    goog = next(row for row in measurement.heuristic_attach_audit if row["symbol"] == "GOOG")
+    assert goog["attach_method"] == "name_anchor_confirmed"
+    assert goog["conservative_name_match"] is True
+    assert goog["entity_group_symbols"] == ["GOOG", "GOOGL"]
+    assert goog["matched_compatible_isins"]
+
+
+def test_side_by_side_publication_plan_keeps_provisional_single_listing_evidence() -> None:
+    measurement = _fixture_measurement(
+        ["ACME"],
+        extra_candidates=[
+            ListingCandidate(
+                symbol="ACME",
+                provider_symbol="ACME",
+                country="US",
+                currency="USD",
+                exchange="NMS",
+                name="ACME CORP",
+                source="test_fixture",
+            )
+        ],
+        isin_fixtures={"ACME": {"status": "not_found", "error_message": "no_isin"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={},
+        gleif_legal_name_fixtures={
+            "ACME": {
+                "status": "success",
+                "query": "ACME",
+                "candidates": [_legal_candidate("549300ACME000000001", "ACME CORP", country="US")],
+            }
+        },
+    )
+
+    plan = build_side_by_side_entity_publication_plan(measurement)
+
+    assert plan["publication_gate"]["status"] == "ready_machine_safe"
+    assert plan["feature_store.entity_master"][0]["entity_id"] == "provisional:ACME"
+    assert plan["feature_store.entity_master"][0]["resolution_status"] == "provisional"
+    assert plan["feature_store.entity_listing"][0]["attach_method"] == "provisional_single_listing_candidate"
+    assert plan["feature_store.entity_listing"][0]["resolution_status"] == "provisional"
+
+
+def test_side_by_side_publisher_blocks_unreviewed_heuristic_gate() -> None:
+    measurement = _fixture_measurement(["GOOG", "GOOGL"])
+    blocked_gate = {
+        **measurement.publication_gate,
+        "status": "blocked_pending_review",
+        "publication_allowed_without_review": False,
+        "review_required_count": 1,
+    }
+    blocked_measurement = type(measurement)(
+        symbol_rows=measurement.symbol_rows,
+        pair_rows=measurement.pair_rows,
+        summary=measurement.summary,
+        name_anchor_precision_audit=measurement.name_anchor_precision_audit,
+        heuristic_attach_audit=measurement.heuristic_attach_audit,
+        publication_gate=blocked_gate,
+        openfigi_cache_rows=measurement.openfigi_cache_rows,
+        isin_cache_rows=measurement.isin_cache_rows,
+        gleif_cache_rows=measurement.gleif_cache_rows,
+        gleif_lei_isin_cache_rows=measurement.gleif_lei_isin_cache_rows,
+    )
+    publisher = RecordingPublisher()
+
+    result = publish_entity_identity_side_by_side(publisher=publisher, measurement=blocked_measurement)
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "publication_gate_blocked"
+    assert publisher.upserts == []
     assert publisher.inserts == []
 
 

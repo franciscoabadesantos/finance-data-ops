@@ -44,6 +44,21 @@ TAIL_DECISION_BUCKETS = {
     "needs_manual_review",
 }
 
+DIRECT_ATTACH_METHODS = {"direct_isin"}
+
+NON_DIRECT_ATTACH_METHODS = {
+    "lei_expansion",
+    "name_anchor_confirmed",
+    "foreign_issuer_name_anchor_confirmed",
+    "isin_direct_prefix_mismatch_name_confirmed",
+}
+
+HEURISTIC_ATTACH_METHODS = {
+    "name_anchor_confirmed",
+    "foreign_issuer_name_anchor_confirmed",
+    "isin_direct_prefix_mismatch_name_confirmed",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class EntityChainMeasurement:
@@ -51,6 +66,8 @@ class EntityChainMeasurement:
     pair_rows: list[dict[str, Any]]
     summary: dict[str, Any]
     name_anchor_precision_audit: list[dict[str, Any]]
+    heuristic_attach_audit: list[dict[str, Any]]
+    publication_gate: dict[str, Any]
     openfigi_cache_rows: list[dict[str, Any]]
     isin_cache_rows: list[dict[str, Any]]
     gleif_cache_rows: list[dict[str, Any]]
@@ -62,6 +79,8 @@ class EntityChainMeasurement:
             "symbols": self.symbol_rows,
             "pairs": self.pair_rows,
             "name_anchor_precision_audit": self.name_anchor_precision_audit,
+            "heuristic_attach_audit": self.heuristic_attach_audit,
+            "publication_gate": self.publication_gate,
             "planned_cache_writes": {
                 "source_cache.openfigi_mapping_raw": len(self.openfigi_cache_rows),
                 "source_cache.listing_isin_raw": len(self.isin_cache_rows),
@@ -130,6 +149,8 @@ def measure_entity_identity_chain(
         }
     )
     precision_audit = _name_anchor_precision_audit(symbol_rows)
+    heuristic_attach_audit = _heuristic_attach_audit(symbol_rows)
+    publication_gate = _publication_gate(heuristic_attach_audit)
     summary = _summary(
         symbol_rows=symbol_rows,
         pair_rows=pair_rows,
@@ -140,12 +161,16 @@ def measure_entity_identity_chain(
         lei_expansion_request_origin_leis=gleif_lei_expansion_request_origin_leis or {},
         lei_expansion_excluded_origin_leis=gleif_lei_expansion_excluded_origin_leis or {},
         name_anchor_precision_audit=precision_audit,
+        heuristic_attach_audit=heuristic_attach_audit,
+        publication_gate=publication_gate,
     )
     return EntityChainMeasurement(
         symbol_rows=symbol_rows,
         pair_rows=pair_rows,
         summary=summary,
         name_anchor_precision_audit=precision_audit,
+        heuristic_attach_audit=heuristic_attach_audit,
+        publication_gate=publication_gate,
         openfigi_cache_rows=openfigi_cache_rows(openfigi_mappings),
         isin_cache_rows=isin_cache_rows(isin_records),
         gleif_cache_rows=gleif_cache_rows(gleif_records),
@@ -1630,6 +1655,8 @@ def _summary(
     lei_expansion_request_origin_leis: dict[str, list[str]],
     lei_expansion_excluded_origin_leis: dict[str, list[str]],
     name_anchor_precision_audit: list[dict[str, Any]],
+    heuristic_attach_audit: list[dict[str, Any]],
+    publication_gate: dict[str, Any],
 ) -> dict[str, Any]:
     candidate_count = len(symbol_rows)
     isin_found = len([row for row in symbol_rows if row.get("isin") and row.get("isin_status") == "success"])
@@ -1803,6 +1830,13 @@ def _summary(
         "review_rate": _rate(review_count, candidate_count),
         "name_anchor_precision_audit_count": len(name_anchor_precision_audit),
         "precision_audit_count": len(name_anchor_precision_audit),
+        "heuristic_attach_audit_count": len(
+            [row for row in heuristic_attach_audit if row.get("attach_audit_kind") == "heuristic"]
+        ),
+        "non_direct_attach_audit_count": len(heuristic_attach_audit),
+        "publication_gate_status": publication_gate.get("status", ""),
+        "publication_gate_review_required_count": publication_gate.get("review_required_count", 0),
+        "publication_gate_machine_safe_count": publication_gate.get("machine_verifiably_safe_count", 0),
         "accepted_pairs_passed": bool(accepted_pair_rows) and all(row.get("grouped") for row in accepted_pair_rows),
         "guardrail_pairs_unmerged": all(not row.get("grouped") for row in guardrail_pair_rows),
         "unresolved_percentage": _rate(len(no_anchor_unattached) + len(ambiguous_unattached), candidate_count),
@@ -2151,6 +2185,221 @@ def _name_anchor_precision_audit(rows: list[dict[str, Any]]) -> list[dict[str, A
             }
         )
     return out
+
+
+def _heuristic_attach_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    entity_groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        entity_lei = _symbol(row.get("entity_lei") or row.get("lei"))
+        if entity_lei:
+            entity_groups.setdefault(entity_lei, []).append(row)
+
+    for row in rows:
+        method = str(row.get("entity_attach_method") or "")
+        if method not in NON_DIRECT_ATTACH_METHODS:
+            continue
+        entity_lei = _symbol(row.get("entity_lei") or row.get("lei"))
+        group_rows = entity_groups.get(entity_lei, [row])
+        normalized_listing_names = _audit_normalized_listing_names(row)
+        normalized_legal_name = normalize_legal_name_conservative(
+            str(row.get("candidate_legal_name") or row.get("legal_name") or "")
+        )
+        conflict_flags = _entity_group_conflict_flags(group_rows)
+        deterministic_support = _has_deterministic_attach_support(row)
+        conservative_name_match = _has_conservative_name_match(
+            row=row,
+            normalized_listing_names=normalized_listing_names,
+            normalized_legal_name=normalized_legal_name,
+        )
+        needs_name_match = method in HEURISTIC_ATTACH_METHODS
+        machine_safe = (
+            deterministic_support
+            and not any(conflict_flags.values())
+            and (not needs_name_match or conservative_name_match)
+        )
+        out.append(
+            {
+                "symbol": row.get("symbol") or "",
+                "provider_symbol": row.get("provider_symbol") or "",
+                "entity_id": f"lei:{entity_lei}" if entity_lei else "",
+                "entity_lei": entity_lei,
+                "candidate_lei": row.get("candidate_lei") or row.get("foreign_issuer_candidate_lei") or "",
+                "candidate_legal_name": row.get("candidate_legal_name")
+                or row.get("foreign_issuer_candidate_legal_name")
+                or row.get("legal_name")
+                or "",
+                "attach_method": method,
+                "attach_audit_kind": "heuristic" if method in HEURISTIC_ATTACH_METHODS else "deterministic_non_direct",
+                "confidence": row.get("attachment_confidence") or _attachment_confidence(method),
+                "provenance": row.get("attachment_provenance") or method,
+                "input_name": row.get("internal_candidate_name") or "",
+                "internal_candidate_name": row.get("internal_candidate_name") or "",
+                "openfigi_name": row.get("openfigi_name") or "",
+                "listing_name_used_for_legal_name_search": row.get("listing_name_used_for_legal_name_search") or "",
+                "normalized_listing_names": normalized_listing_names,
+                "normalized_legal_name": normalized_legal_name,
+                "conservative_name_match": conservative_name_match,
+                "deterministic_support": deterministic_support,
+                "matched_compatible_isins": list(row.get("matched_compatible_isins") or []),
+                "compatible_expanded_isin_count": int(row.get("compatible_expanded_isin_count") or 0),
+                "raw_isin": row.get("raw_isin") or row.get("foreign_issuer_raw_isin") or "",
+                "isin": row.get("isin") or "",
+                "direct_lei": row.get("direct_lei") or "",
+                "figi": row.get("figi") or "",
+                "composite_figi": row.get("compositeFIGI") or row.get("composite_figi") or "",
+                "share_class_figi": row.get("shareClassFIGI") or row.get("share_class_figi") or "",
+                "listing_country": row.get("country") or "",
+                "derived_listing_country": row.get("derived_listing_country") or "",
+                "allowed_isin_prefixes": list(row.get("allowed_isin_prefixes") or []),
+                "candidate_legal_country": row.get("candidate_legal_country") or "",
+                "candidate_headquarters_country": row.get("candidate_headquarters_country") or "",
+                "entity_group_symbols": sorted([group_row.get("symbol") or "" for group_row in group_rows]),
+                "entity_group_attach_methods": sorted(
+                    {
+                        str(group_row.get("entity_attach_method") or "")
+                        for group_row in group_rows
+                        if group_row.get("entity_attach_method")
+                    }
+                ),
+                "entity_group_conflict_flags": conflict_flags,
+                "review_status": "machine_verifiably_safe" if machine_safe else "needs_review",
+                "review_reason": "" if machine_safe else _audit_review_reason(conflict_flags, deterministic_support, conservative_name_match),
+                "evidence_payload": _audit_evidence_payload(row),
+            }
+        )
+    return out
+
+
+def _publication_gate(heuristic_attach_audit: list[dict[str, Any]]) -> dict[str, Any]:
+    review_required = [row for row in heuristic_attach_audit if row.get("review_status") != "machine_verifiably_safe"]
+    machine_safe = [row for row in heuristic_attach_audit if row.get("review_status") == "machine_verifiably_safe"]
+    heuristic_rows = [row for row in heuristic_attach_audit if row.get("attach_audit_kind") == "heuristic"]
+    conflict_rows = [
+        row
+        for row in heuristic_attach_audit
+        if any(bool(value) for value in dict(row.get("entity_group_conflict_flags") or {}).values())
+    ]
+    return {
+        "status": "ready_machine_safe" if not review_required else "blocked_pending_review",
+        "publication_allowed_without_review": not review_required,
+        "non_direct_attach_count": len(heuristic_attach_audit),
+        "heuristic_attach_count": len(heuristic_rows),
+        "machine_verifiably_safe_count": len(machine_safe),
+        "review_required_count": len(review_required),
+        "group_conflict_count": len(conflict_rows),
+        "review_required_symbols": [row.get("symbol") or "" for row in review_required],
+        "conflict_symbols": [row.get("symbol") or "" for row in conflict_rows],
+        "required_gate": (
+            "all non-direct/heuristic attaches must be reviewed or machine-verifiably safe before side-by-side entity publication"
+        ),
+    }
+
+
+def _audit_normalized_listing_names(row: dict[str, Any]) -> list[str]:
+    names = [
+        row.get("internal_candidate_name"),
+        row.get("openfigi_name"),
+        row.get("listing_name_used_for_legal_name_search"),
+    ]
+    names.extend(row.get("foreign_issuer_name_match_normalized_listing_names") or [])
+    normalized = []
+    for name in names:
+        text = str(name or "")
+        value = text if text == text.upper() and " " not in text else normalize_legal_name_conservative(text)
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _has_conservative_name_match(
+    *,
+    row: dict[str, Any],
+    normalized_listing_names: list[str],
+    normalized_legal_name: str,
+) -> bool:
+    if row.get("legal_name_anchor_status") == "confirmed":
+        return True
+    if row.get("foreign_issuer_name_match_status") == "matched":
+        return True
+    return bool(normalized_legal_name and normalized_legal_name in normalized_listing_names)
+
+
+def _has_deterministic_attach_support(row: dict[str, Any]) -> bool:
+    method = str(row.get("entity_attach_method") or "")
+    if method == "isin_direct_prefix_mismatch_name_confirmed":
+        return bool(row.get("direct_lei") or row.get("direct_prefix_mismatch_lei") or row.get("entity_lei"))
+    if method == "foreign_issuer_name_anchor_confirmed":
+        return bool(row.get("matched_compatible_isins") or row.get("foreign_issuer_raw_isin_in_expansion"))
+    if method in {"lei_expansion", "name_anchor_confirmed"}:
+        return bool(row.get("matched_compatible_isins"))
+    return False
+
+
+def _entity_group_conflict_flags(group_rows: list[dict[str, Any]]) -> dict[str, bool]:
+    leis = {
+        _symbol(row.get("entity_lei") or row.get("lei"))
+        for row in group_rows
+        if _symbol(row.get("entity_lei") or row.get("lei"))
+    }
+    legal_names = {
+        normalize_legal_name_conservative(str(row.get("candidate_legal_name") or row.get("legal_name") or ""))
+        for row in group_rows
+        if row.get("candidate_legal_name") or row.get("legal_name")
+    }
+    candidate_leis = {
+        _symbol(row.get("candidate_lei") or row.get("foreign_issuer_candidate_lei"))
+        for row in group_rows
+        if _symbol(row.get("candidate_lei") or row.get("foreign_issuer_candidate_lei"))
+    }
+    return {
+        "conflicting_entity_leis": len(leis) > 1,
+        "conflicting_candidate_leis": len(candidate_leis - leis) > 0 and len(candidate_leis | leis) > 1,
+        "conflicting_legal_names": len(legal_names) > 1,
+        "country_gate_rejected_in_group": any(
+            str(row.get("compatible_isin_gate_status") or "").lower() == "rejected" for row in group_rows
+        ),
+    }
+
+
+def _audit_review_reason(
+    conflict_flags: dict[str, bool],
+    deterministic_support: bool,
+    conservative_name_match: bool,
+) -> str:
+    if any(conflict_flags.values()):
+        return "conflicting_group_identity"
+    if not deterministic_support:
+        return "missing_deterministic_support"
+    if not conservative_name_match:
+        return "legal_name_not_conservatively_matched"
+    return "needs_review"
+
+
+def _audit_evidence_payload(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "entity_attach_reason": row.get("entity_attach_reason") or "",
+        "entity_attach_reasons": list(row.get("entity_attach_reasons") or []),
+        "legal_name_anchor_status": row.get("legal_name_anchor_status") or "",
+        "legal_name_anchor_reject_reason": row.get("legal_name_anchor_reject_reason") or "",
+        "compatible_isin_gate_status": row.get("compatible_isin_gate_status") or "",
+        "compatible_isin_gate_reject_reason": row.get("compatible_isin_gate_reject_reason") or "",
+        "legal_name_candidate_lei": row.get("legal_name_candidate_lei") or "",
+        "legal_name_candidate_lei_expansion_status": row.get("legal_name_candidate_lei_expansion_status") or "",
+        "foreign_issuer_final_gate_status": row.get("foreign_issuer_final_gate_status") or "",
+        "foreign_issuer_reject_reason": row.get("foreign_issuer_reject_reason") or "",
+        "foreign_issuer_raw_isin_in_expansion": bool(row.get("foreign_issuer_raw_isin_in_expansion")),
+        "matched_compatible_isins": list(row.get("matched_compatible_isins") or []),
+        "matched_compatible_isin_sample": _sample_isins(list(row.get("matched_compatible_isins") or [])),
+    }
+
+
+def _attachment_confidence(method: str) -> str:
+    if method in {"direct_isin", "lei_expansion", "isin_direct_prefix_mismatch_name_confirmed"}:
+        return "high"
+    if method in {"name_anchor_confirmed", "foreign_issuer_name_anchor_confirmed"}:
+        return "medium"
+    return "low"
 
 
 def _compatible_isins_for_listing(*, candidate: ListingCandidate, isins: list[str]) -> list[str]:

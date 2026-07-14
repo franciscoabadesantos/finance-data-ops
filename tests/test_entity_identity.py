@@ -495,6 +495,12 @@ def test_runtime_schema_contains_entity_layer_tables_indexes_and_grants() -> Non
         "create table if not exists feature_store.entity_master",
         "create table if not exists feature_store.entity_listing",
         "create table if not exists feature_store.entity_identity_audit",
+        "create table if not exists feature_store.entity_identity_review",
+        "create table if not exists feature_store.entity_identity_review_audit",
+        "attach_method text",
+        "attach_confidence text",
+        "evidence_payload jsonb not null default '{}'::jsonb",
+        "source_freshness jsonb not null default '{}'::jsonb",
         "idx_listing_isin_raw_isin",
         "idx_gleif_isin_lei_raw_lei",
         "idx_entity_listing_entity_id",
@@ -505,9 +511,11 @@ def test_runtime_schema_contains_entity_layer_tables_indexes_and_grants() -> Non
         "idx_entity_listing_exchange_mic",
         "idx_entity_master_home_country",
         "idx_entity_identity_audit_symbol_issue_type",
+        "idx_entity_identity_review_symbol_state",
+        "idx_entity_identity_review_audit_review_id",
         "grant select, insert, update, delete",
         "finance_data_ops_worker",
-        "grant select on feature_store.entity_master, feature_store.entity_listing, feature_store.entity_identity_audit",
+        "grant select on feature_store.entity_master, feature_store.entity_listing, feature_store.entity_identity_audit, feature_store.entity_identity_review, feature_store.entity_identity_review_audit",
     ]:
         assert snippet in sql
 

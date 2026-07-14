@@ -182,7 +182,7 @@ create table if not exists feature_store.entity_master (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb,
-  check (resolution_status in ('resolved', 'ambiguous', 'unresolved', 'manual_review'))
+  check (resolution_status in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review'))
 );
 
 create index if not exists idx_entity_master_home_country
@@ -207,10 +207,17 @@ create table if not exists feature_store.entity_listing (
   resolution_source text not null,
   resolution_confidence double precision not null default 0,
   resolution_status text not null,
+  attach_method text,
+  attach_confidence text,
+  review_state text,
+  evidence_payload jsonb not null default '{}'::jsonb,
+  source_freshness jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb,
-  check (resolution_status in ('resolved', 'ambiguous', 'unresolved', 'manual_review'))
+  check (resolution_status in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review')),
+  check (review_state is null or review_state in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review')),
+  check (attach_confidence is null or attach_confidence in ('high', 'medium', 'low', 'provisional'))
 );
 
 create index if not exists idx_entity_listing_entity_id
@@ -243,6 +250,45 @@ create table if not exists feature_store.entity_identity_audit (
 
 create index if not exists idx_entity_identity_audit_symbol_issue_type
   on feature_store.entity_identity_audit (symbol, issue_type);
+
+create table if not exists feature_store.entity_identity_review (
+  review_id bigserial primary key,
+  symbol text,
+  entity_id text,
+  candidate_lei text,
+  attach_method text,
+  resolution_state text not null default 'needs_manual_review',
+  review_reason text,
+  evidence_summary jsonb not null default '{}'::jsonb,
+  conflicting_candidates jsonb not null default '[]'::jsonb,
+  reviewer_decision text,
+  reviewer_identity text,
+  reviewed_at timestamptz,
+  override_provenance text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (resolution_state in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review'))
+);
+
+create index if not exists idx_entity_identity_review_symbol_state
+  on feature_store.entity_identity_review (symbol, resolution_state);
+
+create index if not exists idx_entity_identity_review_entity_id
+  on feature_store.entity_identity_review (entity_id);
+
+create table if not exists feature_store.entity_identity_review_audit (
+  audit_id bigserial primary key,
+  review_id bigint references feature_store.entity_identity_review(review_id),
+  symbol text,
+  entity_id text,
+  event_type text not null,
+  event_payload jsonb not null default '{}'::jsonb,
+  actor text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_entity_identity_review_audit_review_id
+  on feature_store.entity_identity_review_audit (review_id);
 
 create table if not exists feature_store.technical_features_daily (
   symbol text not null,
@@ -303,9 +349,15 @@ begin
     grant select, insert, update, delete
       on feature_store.entity_master,
          feature_store.entity_listing,
-         feature_store.entity_identity_audit
+         feature_store.entity_identity_audit,
+         feature_store.entity_identity_review,
+         feature_store.entity_identity_review_audit
       to finance_data_ops_worker;
     grant usage, select on sequence feature_store.entity_identity_audit_audit_id_seq
+      to finance_data_ops_worker;
+    grant usage, select
+      on sequence feature_store.entity_identity_review_review_id_seq,
+                  feature_store.entity_identity_review_audit_audit_id_seq
       to finance_data_ops_worker;
     grant select on feature_store.ticker_readiness to finance_data_ops_worker;
   end if;
@@ -319,7 +371,7 @@ begin
         read_role
       );
       execute format(
-        'grant select on feature_store.entity_master, feature_store.entity_listing, feature_store.entity_identity_audit to %I',
+        'grant select on feature_store.entity_master, feature_store.entity_listing, feature_store.entity_identity_audit, feature_store.entity_identity_review, feature_store.entity_identity_review_audit to %I',
         read_role
       );
     end if;
