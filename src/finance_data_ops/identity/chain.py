@@ -879,6 +879,27 @@ def _evaluate_name_anchor(
         if _symbol(name_candidate.get("normalized_legal_name")) == _symbol(normalized_listing_name)
     ]
     if not exact_candidates:
+        foreign_issuer_matches = _foreign_issuer_name_anchor_matches(
+            candidate=candidate,
+            openfigi=openfigi,
+            name_candidates=[
+                name_candidate
+                for name_candidate in record.candidates
+                if _legal_name_candidate_status_acceptable(name_candidate)
+            ],
+            lei_expansions=lei_expansions,
+            lei_expansion_request_set=lei_expansion_request_set,
+            raw_isin=raw_isin,
+        )
+        if foreign_issuer_resolution := _foreign_issuer_resolution_from_matches(
+            base=base,
+            candidate=candidate,
+            foreign_issuer_matches=foreign_issuer_matches,
+            lei_expansion_request_set=lei_expansion_request_set,
+        ):
+            return foreign_issuer_resolution
+        if record.candidates:
+            _copy_name_candidate_diagnostics(base, record.candidates[0])
         base["status"] = "not_found"
         base["reject_reason"] = "legal_name_search_no_match"
         return base
@@ -919,47 +940,13 @@ def _evaluate_name_anchor(
             lei_expansion_request_set=lei_expansion_request_set,
             raw_isin=raw_isin,
         )
-        if len(foreign_issuer_matches) == 1:
-            name_candidate, expansion, candidate_isins = foreign_issuer_matches[0]
-            _copy_name_candidate_diagnostics(base, name_candidate)
-            _copy_legal_name_candidate_expansion_diagnostics(
-                base,
-                candidate=candidate,
-                name_candidate=name_candidate,
-                expansion=expansion,
-                requested=_symbol(name_candidate.get("lei")) in lei_expansion_request_set,
-            )
-            base.update(
-                {
-                    "status": "foreign_issuer_confirmed",
-                    "reject_reason": "",
-                    "matches": foreign_issuer_matches,
-                    "compatible_expanded_isin_count": len(candidate_isins),
-                    "matched_compatible_isins": _sample_isins(candidate_isins),
-                    "compatible_isin_gate_status": "foreign_issuer_prefix_mismatch_confirmed",
-                    "compatible_isin_gate_reject_reason": "",
-                    "expected_listing_country_prefix_present": False,
-                    "compatible_isin_candidate_sample": _sample_isins(candidate_isins),
-                    "compatible_isin_candidate_count": len(candidate_isins),
-                }
-            )
-            return base
-        if len(foreign_issuer_matches) > 1:
-            all_isins = sorted({isin for _, _, candidate_isins in foreign_issuer_matches for isin in candidate_isins})
-            base.update(
-                {
-                    "status": "ambiguous",
-                    "reject_reason": "legal_name_search_ambiguous",
-                    "matches": foreign_issuer_matches,
-                    "candidate_lei": ",".join(sorted({record.lei for _, record, _ in foreign_issuer_matches})),
-                    "compatible_expanded_isin_count": len(all_isins),
-                    "matched_compatible_isins": _sample_isins(all_isins),
-                    "compatible_isin_gate_status": "ambiguous",
-                    "compatible_isin_gate_reject_reason": "legal_name_search_ambiguous",
-                    "expected_listing_country_prefix_present": False,
-                }
-            )
-            return base
+        if foreign_issuer_resolution := _foreign_issuer_resolution_from_matches(
+            base=base,
+            candidate=candidate,
+            foreign_issuer_matches=foreign_issuer_matches,
+            lei_expansion_request_set=lei_expansion_request_set,
+        ):
+            return foreign_issuer_resolution
         first_status_candidate = status_candidates[0]
         first_lei = _symbol(first_status_candidate.get("lei"))
         _copy_legal_name_candidate_expansion_diagnostics(
@@ -1059,9 +1046,13 @@ def _foreign_issuer_name_anchor_matches(
         return []
     matches: list[tuple[dict[str, Any], GleifLeiIsinRecord, list[str]]] = []
     for name_candidate in name_candidates:
-        issuer_prefixes = _issuer_isin_prefixes_from_legal_name_candidate(name_candidate)
-        if not issuer_prefixes or issuer_prefixes == {"US"}:
+        if not _direct_prefix_mismatch_name_confirmed(
+            candidate=candidate,
+            openfigi=openfigi,
+            legal_name=str(name_candidate.get("legal_name") or ""),
+        ):
             continue
+        issuer_prefixes = _issuer_isin_prefixes_from_legal_name_candidate(name_candidate)
         lei = _symbol(name_candidate.get("lei"))
         expansion = lei_expansions.get(lei)
         if not expansion or expansion.status != "success":
@@ -1075,6 +1066,57 @@ def _foreign_issuer_name_anchor_matches(
             continue
         matches.append((name_candidate, expansion, candidate_isins))
     return matches
+
+
+def _foreign_issuer_resolution_from_matches(
+    *,
+    base: dict[str, Any],
+    candidate: ListingCandidate,
+    foreign_issuer_matches: list[tuple[dict[str, Any], GleifLeiIsinRecord, list[str]]],
+    lei_expansion_request_set: set[str],
+) -> dict[str, Any] | None:
+    if len(foreign_issuer_matches) == 1:
+        name_candidate, expansion, candidate_isins = foreign_issuer_matches[0]
+        _copy_name_candidate_diagnostics(base, name_candidate)
+        _copy_legal_name_candidate_expansion_diagnostics(
+            base,
+            candidate=candidate,
+            name_candidate=name_candidate,
+            expansion=expansion,
+            requested=_symbol(name_candidate.get("lei")) in lei_expansion_request_set,
+        )
+        base.update(
+            {
+                "status": "foreign_issuer_confirmed",
+                "reject_reason": "",
+                "matches": foreign_issuer_matches,
+                "compatible_expanded_isin_count": len(candidate_isins),
+                "matched_compatible_isins": _sample_isins(candidate_isins),
+                "compatible_isin_gate_status": "foreign_issuer_prefix_mismatch_confirmed",
+                "compatible_isin_gate_reject_reason": "",
+                "expected_listing_country_prefix_present": False,
+                "compatible_isin_candidate_sample": _sample_isins(candidate_isins),
+                "compatible_isin_candidate_count": len(candidate_isins),
+            }
+        )
+        return base
+    if len(foreign_issuer_matches) > 1:
+        all_isins = sorted({isin for _, _, candidate_isins in foreign_issuer_matches for isin in candidate_isins})
+        base.update(
+            {
+                "status": "ambiguous",
+                "reject_reason": "legal_name_search_ambiguous",
+                "matches": foreign_issuer_matches,
+                "candidate_lei": ",".join(sorted({record.lei for _, record, _ in foreign_issuer_matches})),
+                "compatible_expanded_isin_count": len(all_isins),
+                "matched_compatible_isins": _sample_isins(all_isins),
+                "compatible_isin_gate_status": "ambiguous",
+                "compatible_isin_gate_reject_reason": "legal_name_search_ambiguous",
+                "expected_listing_country_prefix_present": False,
+            }
+        )
+        return base
+    return None
 
 
 def _issuer_isin_prefixes_from_legal_name_candidate(name_candidate: dict[str, Any]) -> set[str]:
@@ -1094,9 +1136,9 @@ def _foreign_issuer_confirming_isins(
     expanded_isins: list[str],
 ) -> list[str]:
     expanded = {_symbol(isin) for isin in expanded_isins if _symbol(isin)}
-    candidate_isins = {isin for isin in expanded if isin[:2] in issuer_prefixes}
+    candidate_isins = {isin for isin in expanded if issuer_prefixes and isin[:2] in issuer_prefixes}
     normalized_raw_isin = _symbol(raw_isin)
-    if normalized_raw_isin and normalized_raw_isin in expanded and normalized_raw_isin[:2] in issuer_prefixes:
+    if normalized_raw_isin and normalized_raw_isin in expanded and normalized_raw_isin[:2] != "US":
         candidate_isins.add(normalized_raw_isin)
     return sorted(candidate_isins)
 

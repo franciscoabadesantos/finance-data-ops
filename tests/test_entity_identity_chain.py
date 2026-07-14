@@ -10,9 +10,14 @@ from finance_data_ops.identity.chain import (
     acceptance_pairs_for_symbols,
     measure_entity_identity_chain,
 )
-from finance_data_ops.identity.models import ListingCandidate
-from finance_data_ops.identity.gleif import GleifIsinLeiClient
-from finance_data_ops.identity.isin import YFinanceIsinClient, isin_prefix_policy_for_listing
+from finance_data_ops.identity.models import ListingCandidate, OpenFigiMapping
+from finance_data_ops.identity.gleif import (
+    GleifIsinLeiClient,
+    GleifIsinLeiRecord,
+    GleifLegalNameRecord,
+    GleifLeiIsinRecord,
+)
+from finance_data_ops.identity.isin import IsinRecord, YFinanceIsinClient, isin_prefix_policy_for_listing
 from finance_data_ops.identity.names import (
     legal_name_query_from_listing,
     legal_name_query_variants_from_listing,
@@ -638,6 +643,123 @@ def test_us_foreign_issuer_can_attach_from_legal_name_candidate_without_provider
     assert rows["WPM"]["entity_attach_method"] == "foreign_issuer_name_anchor_confirmed"
     assert rows["WPM"]["matched_compatible_isins"] == ["CA9628791027"]
     assert measurement.summary["attached_count"] == 2
+
+
+def test_us_foreign_issuer_acn_attaches_when_legal_name_candidate_is_not_exact_suffix_match() -> None:
+    candidate = ListingCandidate(symbol="ACN", provider_symbol="ACN", country="US", currency="USD", name="ACCENTURE PLC")
+    measurement = measure_entity_identity_chain(
+        candidates=[candidate],
+        openfigi_mappings=[
+            OpenFigiMapping(
+                symbol="ACN",
+                request_hash="fixture",
+                status="success",
+                payload={"exchCode": "US"},
+                ticker="ACN",
+                name="ACCENTURE PLC",
+                country="US",
+                currency="USD",
+            )
+        ],
+        isin_records=[
+            IsinRecord(
+                symbol="ACN",
+                provider="fixture_yfinance",
+                request_payload={"symbol": "ACN"},
+                response_payload={"isin": "IE00B4BNMY34"},
+                isin="IE00B4BNMY34",
+                status="suspect",
+                error_message="provider_returned_alternate_market_instrument",
+            )
+        ],
+        gleif_records=[
+            GleifIsinLeiRecord(isin="IE00B4BNMY34", status="not_found", error_message="no_lei")
+        ],
+        gleif_lei_isin_records=[
+            GleifLeiIsinRecord(
+                lei="549300JY6CF6DO4YFQ03",
+                legal_name="ACCENTURE PUBLIC LIMITED COMPANY",
+                isin_list=["IE00B4BNMY34"],
+                status="success",
+            )
+        ],
+        gleif_legal_name_records=[
+            GleifLegalNameRecord(
+                query_name="Accenture",
+                normalized_query_name="ACCENTURE",
+                status="success",
+                candidates=[
+                    {
+                        **_legal_candidate("549300JY6CF6DO4YFQ03", "ACCENTURE PUBLIC LIMITED COMPANY", country="IE"),
+                        "normalized_legal_name": "ACCENTURE PUBLIC",
+                    }
+                ],
+            )
+        ],
+        gleif_lei_expansion_request_leis=["549300JY6CF6DO4YFQ03"],
+        gleif_lei_expansion_request_origin_leis={"legal_name_candidate": ["549300JY6CF6DO4YFQ03"]},
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["entity_attach_method"] == "foreign_issuer_name_anchor_confirmed"
+    assert row["candidate_lei"] == "549300JY6CF6DO4YFQ03"
+    assert row["legal_name_candidate_lei"] == "549300JY6CF6DO4YFQ03"
+    assert row["matched_compatible_isins"] == ["IE00B4BNMY34"]
+    assert row["compatible_isin_gate_status"] == "foreign_issuer_prefix_mismatch_confirmed"
+
+
+def test_us_foreign_issuer_raw_isin_in_lei_expansion_confirms_when_gleif_country_prefix_is_incomplete() -> None:
+    measurement = _fixture_measurement(
+        ["DLO", "TRI"],
+        openfigi_fixtures={
+            "DLO": _security_fixture("DLO", "DLOCAL LTD"),
+            "TRI": _security_fixture("TRI", "THOMSON REUTERS CORP"),
+        },
+        isin_fixtures={
+            "DLO": {"isin": "KYG290181018", "source": "fixture_yfinance"},
+            "TRI": {"isin": "CA8849038812", "source": "fixture_yfinance"},
+        },
+        gleif_fixtures={
+            "KYG290181018": {"status": "not_found", "error_message": "no_lei"},
+            "CA8849038812": {"status": "not_found", "error_message": "no_lei"},
+        },
+        gleif_lei_isin_fixtures={
+            "LEI:529900D15DJKVN3RCO35": {"legal_name": "DLocal Limited", "isin_list": ["KYG290181018"]},
+            "LEI:549300561UZND4C7B569": {"legal_name": "THOMSON REUTERS CORPORATION", "isin_list": ["CA8849038812"]},
+        },
+        gleif_legal_name_fixtures={
+            "NAME:DLOCAL": {
+                "candidates": [
+                    {
+                        **_legal_candidate("529900D15DJKVN3RCO35", "DLocal Limited", country="UY"),
+                        "jurisdiction": "",
+                        "jurisdiction_country": "",
+                    }
+                ]
+            },
+            "NAME:THOMSON REUTERS": {
+                "candidates": [
+                    {
+                        **_legal_candidate("549300561UZND4C7B569", "THOMSON REUTERS CORPORATION", country="GB"),
+                        "jurisdiction": "",
+                        "jurisdiction_country": "",
+                    }
+                ]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="DLO", provider_symbol="DLO", country="US", currency="USD", name="DLOCAL LTD"),
+            ListingCandidate(symbol="TRI", provider_symbol="TRI", country="US", currency="USD", name="THOMSON REUTERS CORP"),
+        ],
+        pairs=[],
+    )
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+
+    assert rows["DLO"]["entity_attach_method"] == "foreign_issuer_name_anchor_confirmed"
+    assert rows["DLO"]["matched_compatible_isins"] == ["KYG290181018"]
+    assert rows["TRI"]["entity_attach_method"] == "foreign_issuer_name_anchor_confirmed"
+    assert rows["TRI"]["matched_compatible_isins"] == ["CA8849038812"]
 
 
 def test_us_foreign_issuer_ambiguous_legal_name_candidates_stay_manual_review() -> None:
