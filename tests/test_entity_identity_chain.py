@@ -2170,6 +2170,43 @@ def test_acronym_name_anchor_is_machine_safe_with_direct_isin_lei_support() -> N
     assert row["review_reason"] == ""
 
 
+def test_acronym_name_anchor_is_machine_safe_with_forward_resolved_matched_isin_support() -> None:
+    audit = _heuristic_attach_audit(
+        [
+            {
+                "symbol": "CSL.AX",
+                "provider_symbol": "CSL.AX",
+                "entity_attach_method": "name_anchor_confirmed",
+                "entity_lei": "529900ECSECK5ZDQTE14",
+                "candidate_lei": "529900ECSECK5ZDQTE14",
+                "candidate_legal_name": "CSL LIMITED",
+                "internal_candidate_name": "CSL LTD",
+                "openfigi_name": "CSL LTD",
+                "listing_name_used_for_legal_name_search": "Csl Limited",
+                "legal_name_anchor_status": "confirmed",
+                "matched_compatible_isins": ["AU000000CSL8"],
+                "derived_listing_country": "AU",
+                "allowed_isin_prefixes": ["AU"],
+            }
+        ],
+        gleif_by_isin={
+            "AU000000CSL8": GleifIsinLeiRecord(
+                isin="AU000000CSL8",
+                lei="529900ECSECK5ZDQTE14",
+                legal_name="CSL LIMITED",
+                status="success",
+            )
+        },
+    )
+
+    row = audit[0]
+
+    assert row["normalized_name_too_short"] is True
+    assert row["normalized_name_acronym_only"] is True
+    assert row["strong_deterministic_isin_support"] is True
+    assert row["review_status"] == "machine_verifiably_safe"
+
+
 def test_acronym_name_anchor_without_known_isin_support_still_requires_review() -> None:
     audit = _heuristic_attach_audit(
         [
@@ -2198,6 +2235,36 @@ def test_acronym_name_anchor_without_known_isin_support_still_requires_review() 
     assert row["strong_deterministic_isin_support"] is False
     assert row["review_status"] == "needs_review"
     assert row["review_reason"] == "name_normalization_requires_review"
+
+
+def test_acronym_name_anchor_with_expansion_only_isin_still_requires_review() -> None:
+    audit = _heuristic_attach_audit(
+        [
+            {
+                "symbol": "CSL.AX",
+                "provider_symbol": "CSL.AX",
+                "entity_attach_method": "name_anchor_confirmed",
+                "entity_lei": "529900ECSECK5ZDQTE14",
+                "candidate_lei": "529900ECSECK5ZDQTE14",
+                "candidate_legal_name": "CSL LIMITED",
+                "internal_candidate_name": "CSL LTD",
+                "openfigi_name": "CSL LTD",
+                "listing_name_used_for_legal_name_search": "Csl Limited",
+                "legal_name_anchor_status": "confirmed",
+                "matched_compatible_isins": ["AU000000CSL8"],
+                "expanded_candidate_isins": ["AU000000CSL8"],
+                "lei_expanded_isins": ["AU000000CSL8"],
+                "derived_listing_country": "AU",
+                "allowed_isin_prefixes": ["AU"],
+            }
+        ]
+    )
+
+    row = audit[0]
+
+    assert row["normalized_name_acronym_only"] is True
+    assert row["strong_deterministic_isin_support"] is False
+    assert row["review_status"] == "needs_review"
 
 
 def test_side_by_side_publisher_blocks_unreviewed_heuristic_gate() -> None:

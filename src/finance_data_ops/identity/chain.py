@@ -155,7 +155,7 @@ def measure_entity_identity_chain(
         }
     )
     precision_audit = _name_anchor_precision_audit(symbol_rows)
-    heuristic_attach_audit = _heuristic_attach_audit(symbol_rows)
+    heuristic_attach_audit = _heuristic_attach_audit(symbol_rows, gleif_by_isin=gleif_by_isin)
     cjk_apac_heuristic_attach_audit = _cjk_apac_heuristic_attach_audit(heuristic_attach_audit)
     publication_gate = _publication_gate(heuristic_attach_audit)
     summary = _summary(
@@ -2199,7 +2199,11 @@ def _name_anchor_precision_audit(rows: list[dict[str, Any]]) -> list[dict[str, A
     return out
 
 
-def _heuristic_attach_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _heuristic_attach_audit(
+    rows: list[dict[str, Any]],
+    *,
+    gleif_by_isin: dict[str, GleifIsinLeiRecord] | None = None,
+) -> list[dict[str, Any]]:
     out = []
     entity_groups: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -2224,7 +2228,11 @@ def _heuristic_attach_audit(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         conflict_flags = _entity_group_conflict_flags(group_rows)
         deterministic_support = _has_deterministic_attach_support(row)
-        strong_deterministic_isin_support = _has_strong_deterministic_isin_support(row=row, entity_lei=entity_lei)
+        strong_deterministic_isin_support = _has_strong_deterministic_isin_support(
+            row=row,
+            entity_lei=entity_lei,
+            gleif_by_isin=gleif_by_isin or {},
+        )
         conservative_name_match = _has_conservative_name_match(
             row=row,
             normalized_listing_names=normalized_listing_names,
@@ -2441,29 +2449,34 @@ def _has_deterministic_attach_support(row: dict[str, Any]) -> bool:
     return False
 
 
-def _has_strong_deterministic_isin_support(*, row: dict[str, Any], entity_lei: str) -> bool:
+def _has_strong_deterministic_isin_support(
+    *,
+    row: dict[str, Any],
+    entity_lei: str,
+    gleif_by_isin: dict[str, GleifIsinLeiRecord],
+) -> bool:
+    if not entity_lei:
+        return False
     known_isins = {
         _symbol(row.get("isin")),
         _symbol(row.get("raw_isin")),
         _symbol(row.get("foreign_issuer_raw_isin")),
     }
     known_isins = {isin for isin in known_isins if isin}
-    if not known_isins:
-        return False
-    if entity_lei and _symbol(row.get("direct_lei")) == entity_lei:
+    if known_isins and _symbol(row.get("direct_lei")) == entity_lei:
         return True
-    if entity_lei and _symbol(row.get("direct_prefix_mismatch_lei")) == entity_lei:
+    if known_isins and _symbol(row.get("direct_prefix_mismatch_lei")) == entity_lei:
         return True
-    expanded_or_matched = {
+    matched_isins = {
         _symbol(isin)
-        for isin in (
-            list(row.get("matched_compatible_isins") or [])
-            + list(row.get("expanded_candidate_isins") or [])
-            + list(row.get("lei_expanded_isins") or [])
-        )
+        for isin in list(row.get("matched_compatible_isins") or [])
         if _symbol(isin)
     }
-    return bool(known_isins & expanded_or_matched)
+    for isin in sorted(known_isins | matched_isins):
+        gleif = gleif_by_isin.get(isin)
+        if gleif and gleif.status == "success" and _symbol(gleif.lei) == entity_lei:
+            return True
+    return False
 
 
 def _entity_group_conflict_flags(group_rows: list[dict[str, Any]]) -> dict[str, bool]:
