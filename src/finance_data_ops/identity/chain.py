@@ -668,6 +668,13 @@ def _apply_direct_prefix_mismatch_candidate(
     if attached.get("isin_status") != "suspect" or attached.get("isin_error_reason") not in mismatch_reasons:
         return
 
+    if not _is_us_listing(candidate=candidate, openfigi=openfigi):
+        attached["direct_prefix_mismatch_candidate_status"] = "rejected"
+        attached["direct_prefix_mismatch_candidate_reject_reason"] = "direct_prefix_mismatch_non_us_listing"
+        attached["direct_prefix_mismatch_status"] = "rejected"
+        attached["direct_prefix_mismatch_reject_reason"] = "direct_prefix_mismatch_non_us_listing"
+        return
+
     raw_isin = _symbol(attached.get("raw_isin"))
     if not raw_isin:
         attached["direct_prefix_mismatch_candidate_status"] = "rejected"
@@ -686,7 +693,7 @@ def _apply_direct_prefix_mismatch_candidate(
 
     attached["direct_prefix_mismatch_lei"] = gleif.lei
     attached["direct_prefix_mismatch_legal_name"] = gleif.legal_name
-    if not _direct_isin_name_confirmed(candidate=candidate, openfigi=openfigi, legal_name=gleif.legal_name):
+    if not _direct_prefix_mismatch_name_confirmed(candidate=candidate, openfigi=openfigi, legal_name=gleif.legal_name):
         attached["direct_prefix_mismatch_candidate_status"] = "rejected"
         attached["direct_prefix_mismatch_candidate_reject_reason"] = "direct_prefix_mismatch_name_unconfirmed"
         attached["direct_prefix_mismatch_status"] = "rejected"
@@ -1332,6 +1339,45 @@ def _direct_isin_name_confirmed(
         if normalize_legal_name_conservative(query) == normalized_legal_name:
             return True
     return False
+
+
+def _direct_prefix_mismatch_name_confirmed(
+    *,
+    candidate: ListingCandidate,
+    openfigi: OpenFigiMapping | None,
+    legal_name: str,
+) -> bool:
+    if _direct_isin_name_confirmed(candidate=candidate, openfigi=openfigi, legal_name=legal_name):
+        return True
+    normalized_legal_name = _normalize_direct_prefix_mismatch_name(legal_name)
+    if not normalized_legal_name:
+        return False
+    listing_names = []
+    if openfigi and openfigi.name:
+        listing_names.append(openfigi.name)
+    if candidate.name:
+        listing_names.append(candidate.name)
+    if not listing_names:
+        listing_names.append(_best_listing_name(candidate, openfigi))
+    return any(_normalize_direct_prefix_mismatch_name(query) == normalized_legal_name for query in listing_names)
+
+
+def _normalize_direct_prefix_mismatch_name(value: Any) -> str:
+    normalized = normalize_legal_name_conservative(value)
+    if normalized.endswith(" PUBLIC"):
+        return normalized[: -len(" PUBLIC")]
+    return normalized
+
+
+def _is_us_listing(*, candidate: ListingCandidate, openfigi: OpenFigiMapping | None) -> bool:
+    listing_country = _symbol(candidate.country)
+    if listing_country == "US":
+        return True
+    openfigi_country = _symbol(openfigi.country if openfigi else "")
+    if openfigi_country == "US":
+        return True
+    exchange = _symbol((openfigi.payload if openfigi else {}).get("exchCode") if openfigi else "")
+    return exchange == "US"
 
 
 def _annotate_listing_group_profiles(

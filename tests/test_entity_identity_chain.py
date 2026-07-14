@@ -405,40 +405,59 @@ def test_same_fuzzy_name_with_different_lei_does_not_group() -> None:
 
 
 def test_isolated_direct_isin_prefix_mismatch_can_attach_after_baseline_paths() -> None:
-    symbols = ["NE"]
+    symbols = ["ACN", "BNTX", "DLO", "TRI", "WPM", "NE"]
     measurement = _fixture_measurement(
         symbols,
         openfigi_fixtures={
+            "ACN": _security_fixture("ACN", "ACCENTURE PLC"),
+            "BNTX": _security_fixture("BNTX", "BIONTECH SE"),
+            "DLO": _security_fixture("DLO", "DLOCAL LTD"),
+            "TRI": _security_fixture("TRI", "THOMSON REUTERS CORP"),
+            "WPM": _security_fixture("WPM", "WHEATON PRECIOUS METALS CORP"),
             "NE": _security_fixture("NE", "NOBLE CORP PLC"),
         },
         isin_fixtures={
+            "ACN": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"},
+            "BNTX": {"isin": "DE000A2PSR20", "source": "fixture_yfinance"},
+            "DLO": {"isin": "KYG290181018", "source": "fixture_yfinance"},
+            "TRI": {"isin": "CA8849038085", "source": "fixture_yfinance"},
+            "WPM": {"isin": "CA9628791027", "source": "fixture_yfinance"},
             "NE": {"isin": "GB00BMXNWH07", "source": "fixture_yfinance"},
         },
         gleif_fixtures={
+            "IE00B4BNMY34": {"lei": "ACNLEI00000001", "legal_name": "ACCENTURE PUBLIC LIMITED COMPANY"},
+            "DE000A2PSR20": {"lei": "BNTXLEI0000001", "legal_name": "BIONTECH SE"},
+            "KYG290181018": {"lei": "DLOLEI00000001", "legal_name": "DLOCAL LIMITED"},
+            "CA8849038085": {"lei": "TRILEI00000001", "legal_name": "THOMSON REUTERS CORPORATION"},
+            "CA9628791027": {"lei": "WPMLEI00000001", "legal_name": "WHEATON PRECIOUS METALS CORP."},
             "GB00BMXNWH07": {"lei": "NELEI000000001", "legal_name": "NOBLE CORPORATION PLC"},
         },
         gleif_lei_isin_fixtures={},
         gleif_legal_name_fixtures={},
         extra_candidates=[
-            ListingCandidate(symbol=symbol, provider_symbol=symbol, country="US", currency="USD", name="NOBLE CORP PLC")
-            for symbol in symbols
+            ListingCandidate(symbol="ACN", provider_symbol="ACN", country="US", currency="USD", name="ACCENTURE PLC"),
+            ListingCandidate(symbol="BNTX", provider_symbol="BNTX", country="US", currency="USD", name="BIONTECH SE"),
+            ListingCandidate(symbol="DLO", provider_symbol="DLO", country="US", currency="USD", name="DLOCAL LTD"),
+            ListingCandidate(symbol="TRI", provider_symbol="TRI", country="US", currency="USD", name="THOMSON REUTERS CORP"),
+            ListingCandidate(symbol="WPM", provider_symbol="WPM", country="US", currency="USD", name="WHEATON PRECIOUS METALS CORP"),
+            ListingCandidate(symbol="NE", provider_symbol="NE", country="US", currency="USD", name="NOBLE CORP PLC"),
         ],
         pairs=[],
     )
-    row = measurement.symbol_rows[0]
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
 
-    assert row["entity_attach_method"] == "isin_direct_prefix_mismatch_name_confirmed"
-    assert row["attachment_provenance"] == "isin_direct_prefix_mismatch_name_confirmed"
-    assert row["attachment_confidence"] == "high"
-    assert row["isin_status"] == "suspect"
-    assert row["isin_error_reason"] == "provider_returned_alternate_market_instrument"
-    assert row["raw_isin"] == "GB00BMXNWH07"
-    assert row["isin"] == "GB00BMXNWH07"
-    assert row["direct_prefix_mismatch_candidate_status"] == "confirmed"
-    assert row["compatible_isin_gate_status"] == "diagnostic_prefix_mismatch"
-    assert row["decision_bucket"] == "attached"
-    assert measurement.summary["listings_attached_direct_isin_prefix_mismatch_name_confirmed"] == 1
-    assert measurement.summary["attached_count"] == 1
+    for symbol in symbols:
+        assert rows[symbol]["entity_attach_method"] == "isin_direct_prefix_mismatch_name_confirmed"
+        assert rows[symbol]["attachment_provenance"] == "isin_direct_prefix_mismatch_name_confirmed"
+        assert rows[symbol]["attachment_confidence"] == "high"
+        assert rows[symbol]["isin_status"] == "suspect"
+        assert rows[symbol]["isin_error_reason"] == "provider_returned_alternate_market_instrument"
+        assert rows[symbol]["isin"] == rows[symbol]["raw_isin"]
+        assert rows[symbol]["direct_prefix_mismatch_candidate_status"] == "confirmed"
+        assert rows[symbol]["compatible_isin_gate_status"] == "diagnostic_prefix_mismatch"
+        assert rows[symbol]["decision_bucket"] == "attached"
+    assert measurement.summary["listings_attached_direct_isin_prefix_mismatch_name_confirmed"] == 6
+    assert measurement.summary["attached_count"] == 6
 
 
 def test_shop_prefix_mismatch_without_name_confirmation_stays_manual_review() -> None:
@@ -468,6 +487,57 @@ def test_shop_prefix_mismatch_without_name_confirmation_stays_manual_review() ->
     assert row["direct_prefix_mismatch_candidate_reject_reason"] == "direct_prefix_mismatch_name_unconfirmed"
     assert row["decision_bucket"] == "needs_manual_review"
     assert measurement.summary["manual_review_by_listing_group_kind"] == {"single_listing": 1}
+
+
+def test_direct_prefix_mismatch_does_not_override_ambiguous_legal_name_candidate() -> None:
+    measurement = _fixture_measurement(
+        ["ACN"],
+        openfigi_fixtures={"ACN": _security_fixture("ACN", "ACCENTURE PLC")},
+        isin_fixtures={"ACN": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"}},
+        gleif_fixtures={"IE00B4BNMY34": {"lei": "ACNLEI00000001", "legal_name": "ACCENTURE PUBLIC LIMITED COMPANY"}},
+        gleif_lei_isin_fixtures={
+            "LEI:ACNLEI00000001": {"legal_name": "ACCENTURE PUBLIC LIMITED COMPANY", "isin_list": ["US0000000011"]},
+            "LEI:ACNLEI00000002": {"legal_name": "ACCENTURE PLC", "isin_list": ["US0000000029"]},
+        },
+        gleif_legal_name_fixtures={
+            "NAME:ACCENTURE": {
+                "candidates": [
+                    _legal_candidate("ACNLEI00000001", "ACCENTURE PLC", country="US"),
+                    _legal_candidate("ACNLEI00000002", "ACCENTURE PLC", country="US"),
+                ]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="ACN", provider_symbol="ACN", country="US", currency="USD", name="ACCENTURE PLC"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["entity_attach_method"] == "unattached_ambiguous"
+    assert row["direct_prefix_mismatch_candidate_status"] == "not_requested"
+    assert row["decision_bucket"] == "needs_manual_review"
+
+
+def test_direct_prefix_mismatch_requires_us_listing() -> None:
+    measurement = _fixture_measurement(
+        ["CSL.AX"],
+        openfigi_fixtures={"CSL.AX": _security_fixture("CSL", "CSL LTD", country="AU")},
+        isin_fixtures={"CSL.AX": {"isin": "GB00BMXNWH07", "source": "fixture_yfinance"}},
+        gleif_fixtures={"GB00BMXNWH07": {"lei": "CSLLEI0000001", "legal_name": "CSL LIMITED"}},
+        gleif_lei_isin_fixtures={},
+        gleif_legal_name_fixtures={},
+        extra_candidates=[
+            ListingCandidate(symbol="CSL.AX", provider_symbol="CSL.AX", country="AU", currency="AUD", name="CSL LTD"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["entity_attach_method"] == "unattached_no_anchor"
+    assert row["direct_prefix_mismatch_candidate_status"] == "rejected"
+    assert row["direct_prefix_mismatch_candidate_reject_reason"] == "direct_prefix_mismatch_non_us_listing"
+    assert row["entity_lei"] == ""
 
 
 def test_direct_prefix_mismatch_does_not_skip_name_anchor_fallback() -> None:
