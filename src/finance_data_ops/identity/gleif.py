@@ -10,6 +10,8 @@ import requests
 from finance_data_ops.identity.isin import ISIN_PATTERN
 
 GLEIF_LEI_RECORDS_URL = "https://api.gleif.org/api/v1/lei-records"
+DEFAULT_GLEIF_PAGE_SIZE = 200
+MAX_GLEIF_PAGES = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,10 +43,14 @@ class GleifIsinLeiClient:
         fixture_mappings: dict[str, Any] | None = None,
         offline: bool = False,
         session: requests.Session | None = None,
+        page_size: int = DEFAULT_GLEIF_PAGE_SIZE,
+        max_pages: int = MAX_GLEIF_PAGES,
     ) -> None:
         self.fixture_mappings = {str(k).strip().upper(): v for k, v in (fixture_mappings or {}).items()}
         self.offline = bool(offline)
         self.session = session or requests.Session()
+        self.page_size = max(1, min(int(page_size), 200))
+        self.max_pages = max(1, int(max_pages))
 
     def lookup_isins(self, isins: list[str]) -> list[GleifIsinLeiRecord]:
         out = []
@@ -105,37 +111,47 @@ class GleifIsinLeiClient:
                 status="not_found",
                 error_message="offline_without_fixture",
             )
+        pages: list[dict[str, Any]] = []
+        page_number = 1
         try:
-            response = self.session.get(
-                f"{GLEIF_LEI_RECORDS_URL}/{cleaned_lei}/relationships/isin-mappings",
-                params={},
-                timeout=30,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            return _lei_isin_record_from_payload(cleaned_lei, payload, source="gleif_relationship")
-        except Exception as relationship_exc:
-            try:
+            while page_number <= self.max_pages:
                 response = self.session.get(
-                    GLEIF_LEI_RECORDS_URL,
-                    params={"filter[lei]": cleaned_lei, "include": "isin-mappings"},
+                    f"{GLEIF_LEI_RECORDS_URL}/{cleaned_lei}/isins",
+                    params={"page[size]": self.page_size, "page[number]": page_number},
                     timeout=30,
                 )
                 response.raise_for_status()
                 payload = response.json()
-                return _lei_isin_record_from_payload(
-                    cleaned_lei,
-                    payload,
-                    source="gleif_lei_records_include",
-                    fallback_error=str(relationship_exc),
-                )
-            except Exception as exc:
+                if isinstance(payload, dict):
+                    pages.append(payload)
+                else:
+                    pages.append({"body": payload})
+                if not _has_next_page(payload=payload, page_number=page_number, page_size=self.page_size):
+                    break
+                page_number += 1
+            if page_number > self.max_pages:
                 return GleifLeiIsinRecord(
                     lei=cleaned_lei,
                     isin_list=[],
+                    response_payload={"pages": pages},
                     status="error",
-                    error_message=str(exc),
+                    error_message="gleif_lei_isin_pagination_limit_exceeded",
+                    source="gleif_lei_record_isins",
                 )
+            return _lei_isin_record_from_payload(
+                cleaned_lei,
+                {"pages": pages},
+                source="gleif_lei_record_isins",
+            )
+        except Exception as exc:
+            return GleifLeiIsinRecord(
+                lei=cleaned_lei,
+                isin_list=[],
+                response_payload={"pages": pages} if pages else None,
+                status="error",
+                error_message=str(exc),
+                source="gleif_lei_record_isins",
+            )
 
     def _from_fixture(self, isin: str) -> GleifIsinLeiRecord:
         raw = self.fixture_mappings.get(isin)
@@ -264,13 +280,7 @@ def _record_from_gleif_payload(isin: str, payload: Any) -> GleifIsinLeiRecord:
     )
 
 
-def _lei_isin_record_from_payload(
-    lei: str,
-    payload: Any,
-    *,
-    source: str,
-    fallback_error: str = "",
-) -> GleifLeiIsinRecord:
+def _lei_isin_record_from_payload(lei: str, payload: Any, *, source: str) -> GleifLeiIsinRecord:
     if not isinstance(payload, dict):
         return GleifLeiIsinRecord(
             lei=lei,
@@ -283,8 +293,6 @@ def _lei_isin_record_from_payload(
     isins = _extract_isins(payload)
     legal_name = _extract_legal_name(payload)
     message = "no_gleif_lei_isin_mapping"
-    if fallback_error:
-        message = f"{message}; relationship_error={fallback_error}"
     return GleifLeiIsinRecord(
         lei=lei,
         isin_list=isins,
@@ -319,6 +327,11 @@ def _extract_isins(payload: Any) -> list[str]:
 
 
 def _extract_legal_name(payload: dict[str, Any]) -> str:
+    pages = payload.get("pages")
+    if isinstance(pages, list):
+        for page in pages:
+            if isinstance(page, dict) and (name := _extract_legal_name(page)):
+                return name
     data = payload.get("data")
     if isinstance(data, list) and data and isinstance(data[0], dict):
         attributes = data[0].get("attributes") if isinstance(data[0].get("attributes"), dict) else {}
@@ -345,14 +358,33 @@ def _clean_isin_list(values: Any) -> list[str]:
             if (isin := _clean_text(raw, upper=True)) and ISIN_PATTERN.fullmatch(isin)
         }
     )
-    return GleifIsinLeiRecord(
-        isin=isin,
-        lei=lei,
-        legal_name=legal_name,
-        response_payload=payload,
-        status="success" if lei else "not_found",
-        error_message="" if lei else "gleif_mapping_without_lei",
-    )
+
+
+def _has_next_page(*, payload: Any, page_number: int, page_size: int) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    links = payload.get("links")
+    if isinstance(links, dict) and _clean_text(links.get("next")):
+        return True
+    meta = payload.get("meta")
+    if isinstance(meta, dict):
+        pagination = meta.get("pagination") if isinstance(meta.get("pagination"), dict) else meta
+        current = _int_or_none(pagination.get("currentPage") or pagination.get("current_page") or pagination.get("page"))
+        total_pages = _int_or_none(pagination.get("totalPages") or pagination.get("total_pages"))
+        if current is not None and total_pages is not None:
+            return current < total_pages
+        total = _int_or_none(pagination.get("total") or pagination.get("totalRecords") or pagination.get("total_records"))
+        if total is not None:
+            return page_number * page_size < total
+    data = payload.get("data")
+    return isinstance(data, list) and len(data) >= page_size
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except Exception:
+        return None
 
 
 def _clean_text(value: Any, *, upper: bool = False) -> str:

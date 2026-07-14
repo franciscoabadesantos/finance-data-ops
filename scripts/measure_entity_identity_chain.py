@@ -68,7 +68,11 @@ def main() -> None:
         gleif_fixture_mappings.update(gleif_fixtures)
     if gleif_lei_isin_fixtures:
         gleif_fixture_mappings.update(gleif_lei_isin_fixtures)
-    gleif_client = GleifIsinLeiClient(fixture_mappings=gleif_fixture_mappings or None, offline=args.offline)
+    gleif_client = GleifIsinLeiClient(
+        fixture_mappings=gleif_fixture_mappings or None,
+        offline=args.offline,
+        page_size=args.gleif_page_size,
+    )
     gleif_records = gleif_client.lookup_isins(
         [record.isin for record in isin_records if record.isin and record.status == "success"]
     )
@@ -102,7 +106,7 @@ def main() -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Measure Entity Layer V0.1 ISIN-to-LEI identity chain.")
+    parser = argparse.ArgumentParser(description="Measure Entity Layer V0.2 anchor ISIN-to-LEI expansion identity chain.")
     parser.add_argument("--symbols", action="append", default=[], help="Optional comma-separated symbol subset.")
     parser.add_argument("--source", choices=["postgres", "fixtures"], default="fixtures")
     parser.add_argument("--offline", action="store_true", help="Do not call live OpenFIGI/yfinance/GLEIF APIs.")
@@ -110,6 +114,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-root", default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--request-sleep-seconds", type=float, default=6.5)
+    parser.add_argument("--gleif-page-size", type=int, default=200, help="GLEIF page[size] for LEI-to-ISIN expansion.")
     return parser
 
 

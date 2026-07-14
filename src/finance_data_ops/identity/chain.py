@@ -179,7 +179,7 @@ def acceptance_gleif_fixtures() -> dict[str, dict[str, Any]]:
         "US7672041008": {"lei": "213800YOEO5OQ72G2R82", "legal_name": "RIO TINTO PLC", "source": "fixture_gleif"},
         "GB0005405286": {"lei": "MP6I5ZYZBEU3UXPYFY54", "legal_name": "HSBC HOLDINGS PLC", "source": "fixture_gleif"},
         "US02079K1079": {"lei": "5493006MHB84DD0ZWV18", "legal_name": "ALPHABET INC.", "source": "fixture_gleif"},
-        "US5260571048": {"lei": "549300T8O5DJR4R6H745", "legal_name": "LENNAR CORPORATION", "source": "fixture_gleif"},
+        "US5260571048": {"lei": "529900G61XVRLX5TJX09", "legal_name": "LENNAR CORPORATION", "source": "fixture_gleif"},
     }
 
 
@@ -215,7 +215,7 @@ def acceptance_gleif_lei_isin_fixtures() -> dict[str, dict[str, Any]]:
             "isin_list": ["US02079K1079", "US02079K3059"],
             "source": "fixture_gleif_lei_expansion",
         },
-        "LEI:549300T8O5DJR4R6H745": {
+        "LEI:529900G61XVRLX5TJX09": {
             "legal_name": "LENNAR CORPORATION",
             "isin_list": ["US5260571048", "US5260573028"],
             "source": "fixture_gleif_lei_expansion",
@@ -388,17 +388,20 @@ def _pair_row(left: str, right: str, pair_type: str, rows_by_symbol: dict[str, d
     left_lei = _symbol(left_row.get("entity_lei") or left_row.get("lei"))
     right_lei = _symbol(right_row.get("entity_lei") or right_row.get("lei"))
     grouped = bool(left_lei and right_lei and left_lei == right_lei)
+    left_method = left_row.get("entity_attach_method") or ""
+    right_method = right_row.get("entity_attach_method") or ""
     return {
         "pair": [left, right],
         "pair_type": pair_type,
         "grouped": grouped,
         "reason": "shared_lei" if grouped else _not_grouped_reason(left_row, right_row),
+        "grouping_path": _grouping_path(grouped=grouped, left_method=left_method, right_method=right_method),
         "left_lei": left_lei,
         "right_lei": right_lei,
         "left_isin": left_row.get("isin") or "",
         "right_isin": right_row.get("isin") or "",
-        "left_attach_method": left_row.get("entity_attach_method") or "",
-        "right_attach_method": right_row.get("entity_attach_method") or "",
+        "left_attach_method": left_method,
+        "right_attach_method": right_method,
     }
 
 
@@ -441,6 +444,13 @@ def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any
         "listings_unattached_no_anchor": len(no_anchor_unattached),
         "listings_unattached_ambiguous": len(ambiguous_unattached),
         "acceptance_pairs_grouped": len(grouped_pairs),
+        "pairs_grouped_direct_anchor_plus_lei_expansion": len(
+            [row for row in grouped_pairs if row.get("grouping_path") == "direct_anchor_plus_lei_expansion"]
+        ),
+        "pairs_grouped_direct_lei": len([row for row in grouped_pairs if row.get("grouping_path") == "direct_lei"]),
+        "pairs_blocked_no_valid_anchor": len(
+            [row for row in pair_rows if not row.get("grouped") and row.get("reason") == "no_valid_anchor_isin"]
+        ),
         "tail_without_anchor_count": len(no_anchor_unattached),
         "tail_without_anchor_examples": _tail_without_anchor_examples(no_anchor_unattached),
         "unresolved_percentage": _rate(len(no_anchor_unattached) + len(ambiguous_unattached), candidate_count),
@@ -468,6 +478,8 @@ def _not_grouped_reason(left: dict[str, Any], right: dict[str, Any]) -> str:
     left_entity_lei = _symbol(left.get("entity_lei") or left.get("lei"))
     right_entity_lei = _symbol(right.get("entity_lei") or right.get("lei"))
     if not left_entity_lei or not right_entity_lei:
+        if not left.get("direct_lei") and not right.get("direct_lei"):
+            return "no_valid_anchor_isin"
         methods = {_symbol(left.get("entity_attach_method")), _symbol(right.get("entity_attach_method"))}
         if "UNATTACHED_AMBIGUOUS" in methods:
             return "ambiguous_lei_expansion_attach"
@@ -480,6 +492,17 @@ def _not_grouped_reason(left: dict[str, Any], right: dict[str, Any]) -> str:
             return "different_lei_depositary_or_ambiguous"
         return "different_lei"
     return "unknown"
+
+
+def _grouping_path(*, grouped: bool, left_method: str, right_method: str) -> str:
+    if not grouped:
+        return ""
+    methods = {left_method, right_method}
+    if "lei_expansion" in methods:
+        return "direct_anchor_plus_lei_expansion"
+    if methods == {"direct_isin"}:
+        return "direct_lei"
+    return "other"
 
 
 def _pairs_for_symbols(symbols: list[str]) -> list[tuple[str, str, str]]:

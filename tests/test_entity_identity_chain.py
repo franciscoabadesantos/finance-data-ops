@@ -30,6 +30,9 @@ def test_acceptance_fixture_chain_reports_symbol_pair_outcomes() -> None:
     assert summary["listings_attached_via_lei_expansion"] == 7
     assert summary["entity_groups_formed"] == 7
     assert summary["acceptance_pairs_grouped"] == 7
+    assert summary["pairs_grouped_direct_anchor_plus_lei_expansion"] == 7
+    assert summary["pairs_grouped_direct_lei"] == 0
+    assert summary["pairs_blocked_no_valid_anchor"] == 0
     assert summary["adr_home_pairs_grouped"] == 4
     assert summary["share_class_pairs_grouped"] == 2
     assert summary["adrs_mapping_to_depositary_or_ambiguous_lei_count"] == 0
@@ -133,22 +136,33 @@ def test_gleif_lei_records_endpoint_fixture_parses_lei_and_legal_name() -> None:
     assert record.response_payload is not None
 
 
-def test_gleif_lei_relationship_endpoint_parses_expanded_isins() -> None:
+def test_gleif_lei_isins_endpoint_paginates_and_parses_expanded_isins() -> None:
     session = _FakeGleifSession(
-        {
-            "data": [
-                {"id": "US02079K1079", "type": "isin-mappings"},
-                {"attributes": {"isin": "US02079K3059"}},
-            ]
-        }
+        [
+            {
+                "data": [{"id": "US02079K1079", "type": "isins"}],
+                "meta": {"pagination": {"currentPage": 1, "totalPages": 2}},
+            },
+            {
+                "data": [{"attributes": {"isin": "US02079K3059"}}],
+                "meta": {"pagination": {"currentPage": 2, "totalPages": 2}},
+            },
+        ]
     )
-    client = GleifIsinLeiClient(session=session)
+    client = GleifIsinLeiClient(session=session, page_size=1)
 
     record = client.lookup_lei_isin("5493006MHB84DD0ZWV18")
 
-    assert session.requested_url.endswith("/lei-records/5493006MHB84DD0ZWV18/relationships/isin-mappings")
+    assert session.requested_urls == [
+        "https://api.gleif.org/api/v1/lei-records/5493006MHB84DD0ZWV18/isins",
+        "https://api.gleif.org/api/v1/lei-records/5493006MHB84DD0ZWV18/isins",
+    ]
+    assert session.requested_params_list == [
+        {"page[size]": 1, "page[number]": 1},
+        {"page[size]": 1, "page[number]": 2},
+    ]
     assert record.status == "success"
-    assert record.source == "gleif_relationship"
+    assert record.source == "gleif_lei_record_isins"
     assert record.isin_list == ["US02079K1079", "US02079K3059"]
 
 
@@ -304,8 +318,10 @@ def test_yfinance_suspect_isins_are_excluded_from_anchors() -> None:
 
     assert measurement.summary["anchor_isin_count"] == 0
     assert measurement.summary["anchor_lei_count"] == 0
+    assert measurement.summary["pairs_blocked_no_valid_anchor"] == 1
     assert all(not row["entity_lei"] for row in measurement.symbol_rows)
     assert measurement.pair_rows[0]["grouped"] is False
+    assert measurement.pair_rows[0]["reason"] == "no_valid_anchor_isin"
 
 
 def test_cache_apply_publishes_only_raw_cache_tables() -> None:
@@ -385,11 +401,21 @@ class _FakeGleifSession:
         self.status_code = status_code
         self.requested_url = ""
         self.requested_params = {}
+        self.requested_urls: list[str] = []
+        self.requested_params_list: list[dict] = []
+        self._call_count = 0
 
     def get(self, url: str, *, params: dict, timeout: int) -> "_FakeGleifResponse":
         self.requested_url = url
         self.requested_params = dict(params)
-        return _FakeGleifResponse(self.payload, self.status_code)
+        self.requested_urls.append(url)
+        self.requested_params_list.append(dict(params))
+        payload = self.payload
+        if isinstance(payload, list):
+            index = min(self._call_count, len(payload) - 1)
+            payload = payload[index]
+        self._call_count += 1
+        return _FakeGleifResponse(payload, self.status_code)
 
 
 class _FakeGleifResponse:
