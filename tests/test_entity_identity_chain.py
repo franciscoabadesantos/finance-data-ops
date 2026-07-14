@@ -12,7 +12,7 @@ from finance_data_ops.identity.chain import (
 )
 from finance_data_ops.identity.models import ListingCandidate
 from finance_data_ops.identity.gleif import GleifIsinLeiClient
-from finance_data_ops.identity.isin import YFinanceIsinClient
+from finance_data_ops.identity.isin import IsinRecord, YFinanceIsinClient, isin_prefix_policy_for_listing
 from finance_data_ops.identity.names import (
     legal_name_query_from_listing,
     legal_name_query_variants_from_listing,
@@ -415,11 +415,11 @@ def test_direct_prefix_mismatch_does_not_skip_name_anchor_fallback() -> None:
             "CSL.AX": _security_fixture("CSL", "CSL LTD", country="AU"),
         },
         isin_fixtures={
-            "ALKS": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"},
-            "BCRX": {"isin": "DE000A2PSR20", "source": "fixture_yfinance"},
-            "BE": {"isin": "KYG290181018", "source": "fixture_yfinance"},
-            "COIN": {"isin": "CA8849038085", "source": "fixture_yfinance"},
-            "CSL.AX": {"isin": "GB00BMXNWH07", "source": "fixture_yfinance"},
+            "ALKS": _isin_record("ALKS", "IE00B4BNMY34"),
+            "BCRX": _isin_record("BCRX", "DE000A2PSR20"),
+            "BE": _isin_record("BE", "KYG290181018"),
+            "COIN": _isin_record("COIN", "CA8849038085"),
+            "CSL.AX": _isin_record("CSL.AX", "GB00BMXNWH07"),
         },
         gleif_fixtures={
             "IE00B4BNMY34": {"lei": "DIRECTWRONGLEI1", "legal_name": "UNRELATED HOLDINGS PLC"},
@@ -483,6 +483,7 @@ def test_direct_prefix_mismatch_does_not_skip_name_anchor_fallback() -> None:
         assert rows[symbol]["isin_status"] == "success"
         assert rows[symbol]["isin_prefix_diagnostic"] == "isin_prefix_mismatch"
         assert rows[symbol]["direct_isin_attach_reject_reason"] == "direct_isin_prefix_mismatch_name_unconfirmed"
+        assert rows[symbol]["legal_name_anchor_status"] == "confirmed"
         assert rows[symbol]["entity_attach_method"] == "name_anchor_confirmed"
         assert rows[symbol]["attachment_provenance"] == "name_anchor_confirmed"
         assert rows[symbol]["attachment_confidence"] == "medium"
@@ -1358,11 +1359,15 @@ def _fixture_measurement(
     )
     direct_lei_by_isin = {record.isin: record.lei for record in gleif_records if record.lei and record.status == "success"}
     openfigi_by_symbol = {mapping.symbol: mapping for mapping in openfigi_mappings}
+    candidates_by_symbol = {candidate.symbol: candidate for candidate in candidates}
     direct_lei_symbols = {
         record.symbol
         for record in isin_records
-        if record.isin and record.status == "success" and direct_lei_by_isin.get(record.isin)
-        and record.error_message != "isin_prefix_mismatch"
+        if _direct_isin_can_skip_legal_name(
+            candidate=candidates_by_symbol.get(record.symbol),
+            record=record,
+            direct_lei_by_isin=direct_lei_by_isin,
+        )
     }
     legal_name_records = gleif.search_legal_names(
         [
@@ -1410,6 +1415,19 @@ def _security_fixture(ticker: str, name: str, *, country: str = "US") -> dict:
     }
 
 
+def _isin_record(symbol: str, isin: str) -> IsinRecord:
+    return IsinRecord(
+        symbol=symbol,
+        provider="fixture_yfinance",
+        request_payload={"provider_symbol": symbol},
+        response_payload={"isin": isin},
+        isin=isin,
+        status="success",
+        error_message="",
+        source="fixture_yfinance",
+    )
+
+
 def _legal_candidate(lei: str, legal_name: str, *, country: str) -> dict:
     return {
         "lei": lei,
@@ -1420,6 +1438,13 @@ def _legal_candidate(lei: str, legal_name: str, *, country: str) -> dict:
         "entity_status": "ACTIVE",
         "registration_status": "ISSUED",
     }
+
+
+def _direct_isin_can_skip_legal_name(*, candidate, record, direct_lei_by_isin: dict[str, str]) -> bool:
+    if not candidate or not record.isin or record.status != "success" or not direct_lei_by_isin.get(record.isin):
+        return False
+    allowed_prefixes = set(isin_prefix_policy_for_listing(candidate)["allowed_isin_prefixes"])
+    return bool(allowed_prefixes and record.isin[:2] in allowed_prefixes)
 
 
 class _FakeGleifSession:

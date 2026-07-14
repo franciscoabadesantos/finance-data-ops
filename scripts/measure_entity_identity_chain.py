@@ -28,7 +28,7 @@ from finance_data_ops.identity.chain import (
     measure_entity_identity_chain,
 )
 from finance_data_ops.identity.gleif import GleifIsinLeiClient
-from finance_data_ops.identity.isin import YFinanceIsinClient
+from finance_data_ops.identity.isin import YFinanceIsinClient, isin_prefix_policy_for_listing
 from finance_data_ops.identity.names import legal_name_query_variants_from_listing
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
@@ -84,11 +84,15 @@ def main() -> None:
     )
     direct_lei_by_isin = {record.isin: record.lei for record in gleif_records if record.lei and record.status == "success"}
     openfigi_by_symbol = {mapping.symbol: mapping for mapping in openfigi_mappings}
+    candidates_by_symbol = {candidate.symbol: candidate for candidate in candidates}
     direct_lei_symbols = {
         record.symbol
         for record in isin_records
-        if record.isin and record.status == "success" and direct_lei_by_isin.get(record.isin)
-        and record.error_message != "isin_prefix_mismatch"
+        if _direct_isin_can_skip_legal_name(
+            candidate=candidates_by_symbol.get(record.symbol),
+            record=record,
+            direct_lei_by_isin=direct_lei_by_isin,
+        )
     }
     legal_name_records = gleif_client.search_legal_names(
         [
@@ -155,6 +159,13 @@ def _parse_symbols(values: list[str]) -> list[str]:
     for value in values:
         symbols.extend(part.strip().upper() for part in str(value).split(",") if part.strip())
     return symbols
+
+
+def _direct_isin_can_skip_legal_name(*, candidate, record, direct_lei_by_isin: dict[str, str]) -> bool:
+    if not candidate or not record.isin or record.status != "success" or not direct_lei_by_isin.get(record.isin):
+        return False
+    allowed_prefixes = set(isin_prefix_policy_for_listing(candidate)["allowed_isin_prefixes"])
+    return bool(allowed_prefixes and record.isin[:2] in allowed_prefixes)
 
 
 if __name__ == "__main__":
