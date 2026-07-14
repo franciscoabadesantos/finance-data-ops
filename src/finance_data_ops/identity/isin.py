@@ -206,6 +206,12 @@ def validate_isin_for_listing(raw_isin: Any, candidate: ListingCandidate) -> dic
     return {"status": "success", "isin": isin, "reason": ""}
 
 
+def allowed_isin_prefixes_for_listing(candidate: ListingCandidate) -> set[str]:
+    """Return conservative ISIN country prefixes expected for a provider listing."""
+
+    return _allowed_isin_prefixes(candidate)
+
+
 def _valid_isin_check_digit(isin: str) -> bool:
     expanded = ""
     for char in isin:

@@ -32,6 +32,9 @@ Owned Supabase surfaces:
 - Entity identity V0 side-by-side tables:
   - `source_cache.openfigi_mapping_raw`
   - `source_cache.gleif_entity_raw`
+  - `source_cache.listing_isin_raw`
+  - `source_cache.gleif_isin_lei_raw`
+  - `source_cache.gleif_lei_isin_raw`
   - `feature_store.entity_master`
   - `feature_store.entity_listing`
   - `feature_store.entity_identity_audit`

@@ -20,6 +20,7 @@ if str(SRC_PATH) not in sys.path:
 from finance_data_ops.identity.chain import (
     acceptance_fixture_candidates,
     acceptance_gleif_fixtures,
+    acceptance_gleif_lei_isin_fixtures,
     acceptance_isin_fixtures,
     acceptance_openfigi_fixtures,
     acceptance_pairs_for_symbols,
@@ -44,11 +45,13 @@ def main() -> None:
         openfigi_fixtures = acceptance_openfigi_fixtures()
         isin_fixtures = acceptance_isin_fixtures()
         gleif_fixtures = acceptance_gleif_fixtures()
+        gleif_lei_isin_fixtures = acceptance_gleif_lei_isin_fixtures()
     else:
         candidates = read_postgres_candidate_universe(database_dsn=settings.database_dsn, symbols=symbols)
         openfigi_fixtures = None
         isin_fixtures = None
         gleif_fixtures = None
+        gleif_lei_isin_fixtures = None
 
     selected_symbols = [candidate.symbol for candidate in candidates]
     openfigi_client = OpenFigiClient(
@@ -60,15 +63,24 @@ def main() -> None:
     openfigi_mappings = openfigi_client.map_candidates(candidates)
     isin_client = YFinanceIsinClient(fixture_isins=isin_fixtures, offline=args.offline)
     isin_records = isin_client.enrich_candidates(candidates)
-    gleif_client = GleifIsinLeiClient(fixture_mappings=gleif_fixtures, offline=args.offline)
+    gleif_fixture_mappings = {}
+    if gleif_fixtures:
+        gleif_fixture_mappings.update(gleif_fixtures)
+    if gleif_lei_isin_fixtures:
+        gleif_fixture_mappings.update(gleif_lei_isin_fixtures)
+    gleif_client = GleifIsinLeiClient(fixture_mappings=gleif_fixture_mappings or None, offline=args.offline)
     gleif_records = gleif_client.lookup_isins(
         [record.isin for record in isin_records if record.isin and record.status == "success"]
+    )
+    gleif_lei_isin_records = gleif_client.lookup_lei_isins(
+        [record.lei for record in gleif_records if record.lei and record.status == "success"]
     )
     measurement = measure_entity_identity_chain(
         candidates=candidates,
         openfigi_mappings=openfigi_mappings,
         isin_records=isin_records,
         gleif_records=gleif_records,
+        gleif_lei_isin_records=gleif_lei_isin_records,
         pairs=acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=openfigi_client.batch_split_retries,
     )

@@ -145,6 +145,16 @@ create table if not exists source_cache.gleif_isin_lei_raw (
 create index if not exists idx_gleif_isin_lei_raw_lei
   on source_cache.gleif_isin_lei_raw (lei);
 
+create table if not exists source_cache.gleif_lei_isin_raw (
+  lei text primary key,
+  response_payload jsonb,
+  isin_list text[] not null default array[]::text[],
+  status text not null,
+  error_message text,
+  fetched_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists feature_store.entity_attributes_static (
   entity_id text primary key,
   name text,
@@ -287,7 +297,8 @@ begin
       on source_cache.openfigi_mapping_raw,
          source_cache.gleif_entity_raw,
          source_cache.listing_isin_raw,
-         source_cache.gleif_isin_lei_raw
+         source_cache.gleif_isin_lei_raw,
+         source_cache.gleif_lei_isin_raw
       to finance_data_ops_worker;
     grant select, insert, update, delete
       on feature_store.entity_master,
@@ -304,7 +315,7 @@ begin
       execute format('grant usage on schema source_cache to %I', read_role);
       execute format('grant usage on schema feature_store to %I', read_role);
       execute format(
-        'grant select on source_cache.openfigi_mapping_raw, source_cache.gleif_entity_raw, source_cache.listing_isin_raw, source_cache.gleif_isin_lei_raw to %I',
+        'grant select on source_cache.openfigi_mapping_raw, source_cache.gleif_entity_raw, source_cache.listing_isin_raw, source_cache.gleif_isin_lei_raw, source_cache.gleif_lei_isin_raw to %I',
         read_role
       );
       execute format(

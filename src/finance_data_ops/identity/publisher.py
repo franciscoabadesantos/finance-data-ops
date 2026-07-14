@@ -59,6 +59,11 @@ def publish_entity_identity_raw_caches(
             measurement.gleif_cache_rows,
             on_conflict="isin",
         ),
+        "source_cache.gleif_lei_isin_raw": publisher.upsert(
+            "source_cache.gleif_lei_isin_raw",
+            measurement.gleif_lei_isin_cache_rows,
+            on_conflict="lei",
+        ),
     }
 
 

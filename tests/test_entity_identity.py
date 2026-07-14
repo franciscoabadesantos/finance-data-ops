@@ -403,6 +403,7 @@ def test_runtime_schema_contains_entity_layer_tables_indexes_and_grants() -> Non
         "create table if not exists source_cache.gleif_entity_raw",
         "create table if not exists source_cache.listing_isin_raw",
         "create table if not exists source_cache.gleif_isin_lei_raw",
+        "create table if not exists source_cache.gleif_lei_isin_raw",
         "create table if not exists feature_store.entity_master",
         "create table if not exists feature_store.entity_listing",
         "create table if not exists feature_store.entity_identity_audit",

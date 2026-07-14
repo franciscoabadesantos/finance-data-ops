@@ -127,11 +127,12 @@ Compatibility note:
 - `source_cache.gleif_entity_raw` (optional future LEI enrichment cache)
 - `source_cache.listing_isin_raw` (raw/cache table for provider listing-to-ISIN enrichment)
 - `source_cache.gleif_isin_lei_raw` (raw/cache table for GLEIF ISIN-to-LEI enrichment)
+- `source_cache.gleif_lei_isin_raw` (raw/cache table for GLEIF LEI-to-ISIN expansion)
 - `feature_store.entity_master` (canonical company/legal entity read model)
 - `feature_store.entity_listing` (one row per provider/listing symbol mapped to an entity)
 - `feature_store.entity_identity_audit` (append-only audit rows for unresolved, ambiguous, or conflicting identity cases)
 
-Entity identity V0 is side-by-side only. OpenFIGI ticker mapping is the main listing/security identity source, but it is not sufficient alone for company/entity grouping. Ticker-mapping FIGIs identify securities/listings. Company grouping requires the measured `listing -> ISIN -> LEI` path or an equivalent strong company-level identifier. ISIN alone identifies a security/instrument; LEI groups the legal entity. GLEIF coverage is partial, and ADR grouping is empirical because an ADR ISIN can map to the depositary rather than the underlying issuer. `feature_store.entity_attributes_static` is still a metadata read model, not entity master. Existing product/read paths, frontend search, `ticker_readiness`, prices, technicals, scorecards, and relationship edges do not consume these tables yet. Entity tables remain unpublished until the acceptance set proves the chain.
+Entity identity V0 is side-by-side only. OpenFIGI ticker mapping is the main listing/security identity source, but it is not sufficient alone for company/entity grouping. Ticker-mapping FIGIs identify securities/listings. Company grouping requires the measured `anchor listing -> ISIN -> LEI -> expanded LEI ISIN set` path or an equivalent strong company-level identifier. ISIN alone identifies a security/instrument; LEI groups the legal entity. A sibling listing can attach to an anchor LEI only when LEI expansion, listing market/ISIN-prefix compatibility, and issuer/listing name context produce one unambiguous candidate. GLEIF coverage is partial, and ADR grouping remains empirical. `feature_store.entity_attributes_static` is still a metadata read model, not entity master. Existing product/read paths, frontend search, `ticker_readiness`, prices, technicals, scorecards, and relationship edges do not consume these tables yet. Entity tables remain unpublished until the acceptance set proves the chain.
 
 Macro/release asset keys in `data_asset_status` are required:
 
