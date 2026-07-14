@@ -720,6 +720,44 @@ def test_us_foreign_issuer_acn_attaches_when_legal_name_candidate_is_not_exact_s
     assert row["foreign_issuer_final_gate_status"] == "confirmed"
 
 
+def test_acn_shaped_generic_candidate_routes_into_foreign_issuer_fallback() -> None:
+    measurement = _fixture_measurement(
+        ["ACN"],
+        openfigi_fixtures={"ACN": _security_fixture("ACN", "ACCENTURE PLC")},
+        isin_fixtures={"ACN": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"}},
+        gleif_fixtures={"IE00B4BNMY34": {"status": "not_found", "error_message": "no_lei"}},
+        gleif_lei_isin_fixtures={
+            "LEI:549300JY6CF6DO4YFQ03": {
+                "legal_name": "ACCENTURE PLC",
+                "isin_list": ["IE00B4BNMY34"],
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:ACCENTURE": {
+                "candidates": [
+                    {
+                        **_legal_candidate("549300JY6CF6DO4YFQ03", "ACCENTURE PLC", country="IE"),
+                        "entity_status": "",
+                        "registration_status": "",
+                    }
+                ]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="ACN", provider_symbol="ACN", country="US", currency="USD", name="ACCENTURE PLC"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["entity_attach_method"] == "foreign_issuer_name_anchor_confirmed"
+    assert row["candidate_lei"] == "549300JY6CF6DO4YFQ03"
+    assert row["legal_name_candidate_lei"] == "549300JY6CF6DO4YFQ03"
+    assert row["foreign_issuer_candidate_evaluated"] is True
+    assert row["foreign_issuer_raw_isin_in_expansion"] is True
+    assert row["foreign_issuer_final_gate_status"] == "confirmed"
+
+
 def test_us_foreign_issuer_raw_isin_in_lei_expansion_confirms_when_gleif_country_prefix_is_incomplete() -> None:
     measurement = _fixture_measurement(
         ["DLO", "TRI"],
@@ -775,6 +813,62 @@ def test_us_foreign_issuer_raw_isin_in_lei_expansion_confirms_when_gleif_country
     assert rows["TRI"]["matched_compatible_isins"] == ["CA8849038812"]
     assert rows["TRI"]["foreign_issuer_raw_isin_in_expansion"] is True
     assert rows["TRI"]["foreign_issuer_expanded_issuer_country_isin_count"] == 0
+
+
+def test_foreign_issuer_generic_candidate_keeps_gate_closed_without_lei_expansion() -> None:
+    measurement = _fixture_measurement(
+        ["DLO", "WPM"],
+        openfigi_fixtures={
+            "DLO": _security_fixture("DLO", "DLOCAL LTD"),
+            "WPM": _security_fixture("WPM", "WHEATON PRECIOUS METALS CORP"),
+        },
+        isin_fixtures={
+            "DLO": {"isin": "KYG290181018", "source": "fixture_yfinance"},
+            "WPM": {"status": "not_found", "error_message": "provider_isin_missing"},
+        },
+        gleif_fixtures={"KYG290181018": {"status": "not_found", "error_message": "no_lei"}},
+        gleif_lei_isin_fixtures={
+            "LEI:529900D15DJKVN3RCO35": {
+                "status": "not_found",
+                "error_message": "no_gleif_lei_isin_mapping",
+                "legal_name": "DLocal Limited",
+                "isin_list": [],
+            },
+            "LEI:549300XSFG5ZCGVYD886": {
+                "status": "not_found",
+                "error_message": "no_gleif_lei_isin_mapping",
+                "legal_name": "WHEATON PRECIOUS METALS CORP.",
+                "isin_list": [],
+            },
+        },
+        gleif_legal_name_fixtures={
+            "NAME:DLOCAL": {
+                "candidates": [_legal_candidate("529900D15DJKVN3RCO35", "DLocal Limited", country="KY")]
+            },
+            "NAME:WHEATON PRECIOUS METALS": {
+                "candidates": [_legal_candidate("549300XSFG5ZCGVYD886", "WHEATON PRECIOUS METALS CORP.", country="CA")]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="DLO", provider_symbol="DLO", country="US", currency="USD", name="DLOCAL LTD"),
+            ListingCandidate(
+                symbol="WPM",
+                provider_symbol="WPM",
+                country="US",
+                currency="USD",
+                name="WHEATON PRECIOUS METALS CORP",
+            ),
+        ],
+        pairs=[],
+    )
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+
+    for symbol in ("DLO", "WPM"):
+        assert rows[symbol]["entity_attach_method"] == "unattached_no_anchor"
+        assert rows[symbol]["foreign_issuer_candidate_evaluated"] is True
+        assert rows[symbol]["foreign_issuer_lei_expansion_status"] == "not_found"
+        assert rows[symbol]["foreign_issuer_reject_reason"] == "lei_expansion_not_success"
+        assert rows[symbol]["foreign_issuer_final_gate_status"] == "rejected"
 
 
 def test_foreign_issuer_rejection_diagnostics_explain_missing_confirming_isin() -> None:
