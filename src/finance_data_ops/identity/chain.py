@@ -112,6 +112,7 @@ def measure_entity_identity_chain(
     )
     rows_by_symbol = {row["symbol"]: row for row in symbol_rows}
     pair_rows = [_pair_row(left, right, pair_type, rows_by_symbol) for left, right, pair_type in selected_pairs]
+    symbol_rows = _annotate_listing_group_profiles(symbol_rows, pair_rows)
     lei_expanded_isin_count = len(
         {
             isin
@@ -343,6 +344,42 @@ def _symbol_row(
     listing_name_query = listing_name_queries[0] if listing_name_queries else legal_name_query_from_listing(listing_name)
     prefix_policy = isin_prefix_policy_for_listing(candidate)
     allowed_prefixes = list(prefix_policy["allowed_isin_prefixes"])
+    isin_prefix_match = bool(isin and allowed_prefixes and isin[:2] in set(allowed_prefixes))
+    direct_name_confirmed = _direct_isin_name_confirmed(
+        candidate=candidate,
+        openfigi=openfigi,
+        legal_name=direct_legal_name,
+    )
+    direct_attach_method = ""
+    direct_attach_reason = ""
+    direct_attach_reasons: list[str] = []
+    direct_entity_lei = ""
+    direct_entity_legal_name = ""
+    direct_lei_value = ""
+    direct_gate_status = "not_evaluated"
+    direct_gate_reject_reason = ""
+    direct_reject_reason = ""
+    if direct_lei:
+        if isin_prefix_match:
+            direct_attach_method = "direct_isin"
+            direct_attach_reason = "direct_isin_to_lei"
+            direct_attach_reasons = ["direct_isin_to_lei"]
+            direct_entity_lei = direct_lei
+            direct_entity_legal_name = direct_legal_name
+            direct_lei_value = direct_lei
+            direct_gate_status = "passed"
+        elif direct_name_confirmed:
+            direct_attach_method = "isin_direct_prefix_mismatch_name_confirmed"
+            direct_attach_reason = "direct_isin_prefix_mismatch_name_confirmed"
+            direct_attach_reasons = ["direct_isin_prefix_mismatch_name_confirmed"]
+            direct_entity_lei = direct_lei
+            direct_entity_legal_name = direct_legal_name
+            direct_lei_value = direct_lei
+            direct_gate_status = "diagnostic_prefix_mismatch"
+        else:
+            direct_reject_reason = "direct_isin_prefix_mismatch_name_unconfirmed"
+            direct_gate_status = "rejected"
+            direct_gate_reject_reason = direct_reject_reason
     return {
         "symbol": symbol,
         "provider_symbol": candidate.provider_symbol or symbol,
@@ -363,35 +400,39 @@ def _symbol_row(
         "isin_source": isin_record.source if isin_record else "",
         "isin_status": isin_status,
         "isin_error_reason": isin_record.error_message if isin_record else "",
+        "isin_prefix_match": isin_prefix_match,
+        "isin_prefix_diagnostic": "" if isin_prefix_match or not isin else "isin_prefix_mismatch",
         "raw_isin": raw_isin,
         "isin": isin,
         "lei_source": gleif.source if gleif and gleif.lei else "",
         "lei_status": gleif.status if gleif else ("not_requested" if not isin else "missing"),
         "direct_lei": direct_lei,
-        "lei": direct_lei,
+        "lei": direct_lei_value,
         "legal_name": direct_legal_name,
         "lei_role": _lei_role(gleif),
-        "entity_lei": direct_lei,
-        "entity_legal_name": direct_legal_name,
-        "entity_attach_method": "direct_isin" if direct_lei else "",
-        "entity_attach_reason": "direct_isin_to_lei" if direct_lei else "",
-        "entity_attach_reasons": ["direct_isin_to_lei"] if direct_lei else [],
-        "decision_bucket": "attached" if direct_lei else "",
+        "entity_lei": direct_entity_lei,
+        "entity_legal_name": direct_entity_legal_name,
+        "entity_attach_method": direct_attach_method,
+        "entity_attach_reason": direct_attach_reason,
+        "entity_attach_reasons": direct_attach_reasons,
+        "decision_bucket": "attached" if direct_entity_lei else "",
+        "direct_isin_name_confirmed": direct_name_confirmed,
+        "direct_isin_attach_reject_reason": direct_reject_reason,
         "expanded_candidate_isins": [],
         "lei_expanded_isins": [],
         "lei_expanded_isin_count": 0,
         "compatible_expanded_isin_count": 0,
-        "matched_compatible_isins": [],
+        "matched_compatible_isins": [isin] if direct_entity_lei else [],
         "allowed_isin_prefixes": allowed_prefixes,
-        "compatible_isin_gate_status": "passed" if direct_lei and allowed_prefixes else "not_evaluated",
-        "compatible_isin_gate_reject_reason": "",
-        "expected_listing_country_prefix_present": False,
-        "compatible_isin_candidate_count": 0,
-        "compatible_isin_candidate_sample": [],
-        "legal_name_anchor_status": "not_requested_direct_isin" if direct_lei else "not_evaluated",
+        "compatible_isin_gate_status": direct_gate_status,
+        "compatible_isin_gate_reject_reason": direct_gate_reject_reason,
+        "expected_listing_country_prefix_present": isin_prefix_match,
+        "compatible_isin_candidate_count": 1 if direct_entity_lei and isin_prefix_match else 0,
+        "compatible_isin_candidate_sample": [isin] if direct_entity_lei and isin_prefix_match else [],
+        "legal_name_anchor_status": "not_requested_direct_isin" if direct_entity_lei else "not_evaluated",
         "legal_name_anchor_reject_reason": "",
-        "candidate_lei": "",
-        "candidate_legal_name": "",
+        "candidate_lei": direct_lei if direct_reject_reason else "",
+        "candidate_legal_name": direct_legal_name if direct_reject_reason else "",
         "candidate_legal_country": "",
         "candidate_headquarters_country": "",
         "candidate_entity_status": "",
@@ -433,7 +474,12 @@ def _attach_rows_via_lei_expansion(
                 direct_isin = _symbol(attached.get("isin"))
                 if direct_isin and direct_isin in set(expansion.isin_list):
                     attached["matched_compatible_isins"] = [direct_isin]
-            attached["attachment_provenance"] = "isin_direct"
+            method = str(attached.get("entity_attach_method") or "")
+            attached["attachment_provenance"] = (
+                "isin_direct_prefix_mismatch_name_confirmed"
+                if method == "isin_direct_prefix_mismatch_name_confirmed"
+                else "isin_direct"
+            )
             attached["attachment_confidence"] = "high"
             attached["decision_bucket"] = "attached"
             out.append(attached)
@@ -882,7 +928,13 @@ def _summary(
         if lei:
             lei_groups.setdefault(lei, []).append(row["symbol"])
     grouped_pairs = [row for row in pair_rows if row.get("grouped")]
-    direct_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "direct_isin"]
+    direct_methods = {"direct_isin", "isin_direct_prefix_mismatch_name_confirmed"}
+    direct_attached = [row for row in symbol_rows if row.get("entity_attach_method") in direct_methods]
+    direct_prefix_mismatch_attached = [
+        row
+        for row in symbol_rows
+        if row.get("entity_attach_method") == "isin_direct_prefix_mismatch_name_confirmed"
+    ]
     expansion_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "lei_expansion"]
     name_anchor_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "name_anchor_confirmed"]
     attached = direct_attached + expansion_attached + name_anchor_attached
@@ -908,6 +960,7 @@ def _summary(
         "anchor_lei_count": len({_symbol(row.get("direct_lei")) for row in direct_attached if row.get("direct_lei")}),
         "lei_expanded_isin_count": int(lei_expanded_isin_count),
         "listings_attached_direct_isin": len(direct_attached),
+        "listings_attached_direct_isin_prefix_mismatch_name_confirmed": len(direct_prefix_mismatch_attached),
         "listings_attached_via_lei_expansion": len(expansion_attached),
         "listings_attached_name_anchor_confirmed": len(name_anchor_attached),
         "listings_unattached_no_anchor": len(no_anchor_unattached),
@@ -933,6 +986,19 @@ def _summary(
             "compatible_isin_gate_reject_reason",
         ),
         "decision_bucket_counts": decision_bucket_counts,
+        "provider_or_curated_by_listing_group_kind": _field_counts(
+            [
+                row
+                for row in symbol_rows
+                if row.get("decision_bucket") == "requires_provider_or_curated_identity"
+            ],
+            "listing_group_kind",
+        ),
+        "manual_review_by_listing_group_kind": _field_counts(
+            [row for row in symbol_rows if row.get("decision_bucket") == "needs_manual_review"],
+            "listing_group_kind",
+        ),
+        "tail_without_anchor_by_listing_group_kind": _field_counts(no_anchor_unattached, "listing_group_kind"),
         "fixable_free": fixable_free_count,
         "fixable_free_count": fixable_free_count,
         "fixable_free_rate": _rate(fixable_free_count, candidate_count),
@@ -1000,7 +1066,8 @@ def _grouping_path(*, grouped: bool, left_method: str, right_method: str) -> str
         return "name_anchor_confirmed"
     if "lei_expansion" in methods:
         return "direct_anchor_plus_lei_expansion"
-    if methods == {"direct_isin"}:
+    direct_methods = {"direct_isin", "isin_direct_prefix_mismatch_name_confirmed"}
+    if methods <= direct_methods:
         return "direct_lei"
     return "other"
 
@@ -1036,6 +1103,85 @@ def _lei_role(record: GleifIsinLeiRecord | None) -> str:
     return _symbol(record.response_payload.get("lei_role") or record.response_payload.get("role"))
 
 
+def _direct_isin_name_confirmed(
+    *,
+    candidate: ListingCandidate,
+    openfigi: OpenFigiMapping | None,
+    legal_name: str,
+) -> bool:
+    normalized_legal_name = normalize_legal_name_conservative(legal_name)
+    if not normalized_legal_name:
+        return False
+    listing_names = []
+    if openfigi and openfigi.name:
+        listing_names.append(openfigi.name)
+    if candidate.name:
+        listing_names.append(candidate.name)
+    if not listing_names:
+        listing_names.append(_best_listing_name(candidate, openfigi))
+    for query in legal_name_query_variants_from_listing(*listing_names):
+        if normalize_legal_name_conservative(query) == normalized_legal_name:
+            return True
+    return False
+
+
+def _annotate_listing_group_profiles(
+    rows: list[dict[str, Any]],
+    pair_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    groups_by_symbol: dict[str, set[str]] = {str(row.get("symbol") or ""): set() for row in rows}
+    row_by_symbol = {str(row.get("symbol") or ""): row for row in rows}
+
+    for pair in pair_rows:
+        symbols = {_symbol(symbol) for symbol in pair.get("pair", []) if _symbol(symbol) in row_by_symbol}
+        if len(symbols) > 1:
+            for symbol in symbols:
+                groups_by_symbol.setdefault(symbol, set()).update(symbols)
+
+    lei_groups: dict[str, set[str]] = {}
+    name_groups: dict[str, set[str]] = {}
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        lei = _symbol(row.get("entity_lei"))
+        if lei:
+            lei_groups.setdefault(f"LEI:{lei}", set()).add(symbol)
+        name_key = _listing_group_name_key(row)
+        if name_key:
+            name_groups.setdefault(f"NAME:{name_key}", set()).add(symbol)
+
+    for grouped in list(lei_groups.values()) + list(name_groups.values()):
+        if len(grouped) <= 1:
+            continue
+        for symbol in grouped:
+            groups_by_symbol.setdefault(symbol, set()).update(grouped)
+
+    out = []
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        symbols = sorted(groups_by_symbol.get(symbol) or {symbol})
+        annotated = dict(row)
+        annotated["listing_group_kind"] = "multi_listing_candidate" if len(symbols) > 1 else "single_listing"
+        annotated["listing_group_size_in_measurement"] = len(symbols)
+        annotated["listing_group_symbols_in_measurement"] = symbols
+        out.append(annotated)
+    return out
+
+
+def _listing_group_name_key(row: dict[str, Any]) -> str:
+    for value in (
+        row.get("entity_legal_name"),
+        row.get("candidate_legal_name"),
+        row.get("legal_name"),
+        row.get("openfigi_name"),
+        row.get("internal_candidate_name"),
+        row.get("listing_name_used_for_legal_name_search"),
+    ):
+        normalized = normalize_legal_name_conservative(value)
+        if normalized:
+            return normalized
+    return ""
+
+
 def _is_adr_like(row: dict[str, Any]) -> bool:
     text = f"{row.get('security_type') or ''} {row.get('symbol') or ''}".upper()
     return "ADR" in text or "DEPOSITARY" in text
@@ -1056,6 +1202,9 @@ def _unattached_reasons(
     gate_reject_reason = str(name_evaluation.get("compatible_isin_gate_reject_reason") or "")
     if gate_reject_reason:
         reasons.append(gate_reject_reason)
+    direct_reject_reason = str(row.get("direct_isin_attach_reject_reason") or "")
+    if direct_reject_reason:
+        reasons.append(direct_reject_reason)
 
     isin_status = str(row.get("isin_status") or "")
     if isin_status == "success" and not row.get("direct_lei"):
@@ -1079,6 +1228,7 @@ def _primary_unattached_reason(reasons: list[str]) -> str:
         "missing_listing_country_for_isin_gate",
         "gleif_lei_found_but_no_compatible_isin",
         "no_compatible_expanded_isin_for_listing_country",
+        "direct_isin_prefix_mismatch_name_unconfirmed",
         "valid_isin_no_gleif_lei",
         "openfigi_not_found",
         "no_listing_name_for_legal_name_search",
@@ -1094,7 +1244,14 @@ def _primary_unattached_reason(reasons: list[str]) -> str:
 
 
 def _decision_bucket_for_reasons(reasons: list[str]) -> str:
-    if any(reason in reasons for reason in {"legal_name_search_ambiguous", "multiple_compatible_expanded_lei"}):
+    if any(
+        reason in reasons
+        for reason in {
+            "legal_name_search_ambiguous",
+            "multiple_compatible_expanded_lei",
+            "direct_isin_prefix_mismatch_name_unconfirmed",
+        }
+    ):
         return "needs_manual_review"
     if any(
         reason in reasons
