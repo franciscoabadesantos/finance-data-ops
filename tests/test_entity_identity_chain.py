@@ -540,6 +540,136 @@ def test_direct_prefix_mismatch_requires_us_listing() -> None:
     assert row["entity_lei"] == ""
 
 
+def test_us_foreign_issuer_can_attach_from_legal_name_candidate_when_direct_isin_lei_missing() -> None:
+    measurement = _fixture_measurement(
+        ["ACN", "DLO", "TRI"],
+        openfigi_fixtures={
+            "ACN": _security_fixture("ACN", "ACCENTURE PLC"),
+            "DLO": _security_fixture("DLO", "DLOCAL LTD"),
+            "TRI": _security_fixture("TRI", "THOMSON REUTERS CORP"),
+        },
+        isin_fixtures={
+            "ACN": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"},
+            "DLO": {"isin": "KYG290181018", "source": "fixture_yfinance"},
+            "TRI": {"isin": "CA8849038812", "source": "fixture_yfinance"},
+        },
+        gleif_fixtures={
+            "IE00B4BNMY34": {"status": "not_found", "error_message": "no_lei"},
+            "KYG290181018": {"status": "not_found", "error_message": "no_lei"},
+            "CA8849038812": {"status": "not_found", "error_message": "no_lei"},
+        },
+        gleif_lei_isin_fixtures={
+            "LEI:549300JY6CF6DO4YFQ03": {"legal_name": "ACCENTURE PLC", "isin_list": ["IE00B4BNMY34"]},
+            "LEI:529900D15DJKVN3RCO35": {"legal_name": "DLocal Limited", "isin_list": ["KYG290181018"]},
+            "LEI:549300561UZND4C7B569": {"legal_name": "THOMSON REUTERS CORPORATION", "isin_list": ["CA8849038812"]},
+        },
+        gleif_legal_name_fixtures={
+            "NAME:ACCENTURE": {
+                "candidates": [_legal_candidate("549300JY6CF6DO4YFQ03", "ACCENTURE PLC", country="IE")]
+            },
+            "NAME:DLOCAL": {
+                "candidates": [_legal_candidate("529900D15DJKVN3RCO35", "DLocal Limited", country="KY")]
+            },
+            "NAME:THOMSON REUTERS": {
+                "candidates": [_legal_candidate("549300561UZND4C7B569", "THOMSON REUTERS CORPORATION", country="CA")]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="ACN", provider_symbol="ACN", country="US", currency="USD", name="ACCENTURE PLC"),
+            ListingCandidate(symbol="DLO", provider_symbol="DLO", country="US", currency="USD", name="DLOCAL LTD"),
+            ListingCandidate(symbol="TRI", provider_symbol="TRI", country="US", currency="USD", name="THOMSON REUTERS CORP"),
+        ],
+        pairs=[],
+    )
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+
+    for symbol in ("ACN", "DLO", "TRI"):
+        assert rows[symbol]["entity_attach_method"] == "foreign_issuer_name_anchor_confirmed"
+        assert rows[symbol]["attachment_confidence"] == "high"
+        assert rows[symbol]["direct_prefix_mismatch_candidate_status"] == "confirmed_via_legal_name_candidate"
+        assert rows[symbol]["compatible_isin_gate_status"] == "foreign_issuer_prefix_mismatch_confirmed"
+        assert rows[symbol]["legal_name_candidate_lei"]
+        assert rows[symbol]["legal_name_candidate_lei_in_expansion_request"] is True
+        assert rows[symbol]["legal_name_anchor_status"] == "confirmed"
+    assert measurement.summary["attached_count"] == 3
+    assert measurement.summary["listings_attached_foreign_issuer_name_anchor_confirmed"] == 3
+
+
+def test_us_foreign_issuer_can_attach_from_legal_name_candidate_without_provider_isin() -> None:
+    measurement = _fixture_measurement(
+        ["BNTX", "WPM"],
+        openfigi_fixtures={
+            "BNTX": _security_fixture("BNTX", "BIONTECH SE"),
+            "WPM": _security_fixture("WPM", "WHEATON PRECIOUS METALS CORP"),
+        },
+        isin_fixtures={
+            "BNTX": {"status": "not_found", "error_message": "provider_isin_missing"},
+            "WPM": {"status": "not_found", "error_message": "provider_isin_missing"},
+        },
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:BNTXLEI0000001": {"legal_name": "BIONTECH SE", "isin_list": ["DE000A2PSR20"]},
+            "LEI:WPMLEI00000001": {"legal_name": "WHEATON PRECIOUS METALS CORP.", "isin_list": ["CA9628791027"]},
+        },
+        gleif_legal_name_fixtures={
+            "NAME:BIONTECH": {
+                "candidates": [_legal_candidate("BNTXLEI0000001", "BIONTECH SE", country="DE")]
+            },
+            "NAME:WHEATON PRECIOUS METALS": {
+                "candidates": [_legal_candidate("WPMLEI00000001", "WHEATON PRECIOUS METALS CORP.", country="CA")]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="BNTX", provider_symbol="BNTX", country="US", currency="USD", name="BIONTECH SE"),
+            ListingCandidate(
+                symbol="WPM",
+                provider_symbol="WPM",
+                country="US",
+                currency="USD",
+                name="WHEATON PRECIOUS METALS CORP",
+            ),
+        ],
+        pairs=[],
+    )
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+
+    assert rows["BNTX"]["entity_attach_method"] == "foreign_issuer_name_anchor_confirmed"
+    assert rows["BNTX"]["matched_compatible_isins"] == ["DE000A2PSR20"]
+    assert rows["WPM"]["entity_attach_method"] == "foreign_issuer_name_anchor_confirmed"
+    assert rows["WPM"]["matched_compatible_isins"] == ["CA9628791027"]
+    assert measurement.summary["attached_count"] == 2
+
+
+def test_us_foreign_issuer_ambiguous_legal_name_candidates_stay_manual_review() -> None:
+    measurement = _fixture_measurement(
+        ["ACN"],
+        openfigi_fixtures={"ACN": _security_fixture("ACN", "ACCENTURE PLC")},
+        isin_fixtures={"ACN": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"}},
+        gleif_fixtures={"IE00B4BNMY34": {"status": "not_found", "error_message": "no_lei"}},
+        gleif_lei_isin_fixtures={
+            "LEI:ACNLEI00000001": {"legal_name": "ACCENTURE PLC", "isin_list": ["IE00B4BNMY34"]},
+            "LEI:ACNLEI00000002": {"legal_name": "ACCENTURE PLC", "isin_list": ["IE0000000002"]},
+        },
+        gleif_legal_name_fixtures={
+            "NAME:ACCENTURE": {
+                "candidates": [
+                    _legal_candidate("ACNLEI00000001", "ACCENTURE PLC", country="IE"),
+                    _legal_candidate("ACNLEI00000002", "ACCENTURE PLC", country="IE"),
+                ]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="ACN", provider_symbol="ACN", country="US", currency="USD", name="ACCENTURE PLC"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["entity_attach_method"] == "unattached_ambiguous"
+    assert row["decision_bucket"] == "needs_manual_review"
+    assert row["direct_prefix_mismatch_candidate_status"] == "not_requested"
+
+
 def test_direct_prefix_mismatch_does_not_skip_name_anchor_fallback() -> None:
     symbols = ["ALKS", "BCRX", "BE", "COIN", "CSL.AX"]
     measurement = _fixture_measurement(

@@ -570,29 +570,49 @@ def _attach_rows_via_lei_expansion(
                 lei_expansions=lei_expansions,
                 lei_expansion_request_set=lei_expansion_request_set,
                 legal_name_records=legal_name_records,
+                raw_isin=_symbol(attached.get("raw_isin")),
             )
             _apply_name_anchor_diagnostics(attached, name_evaluation)
             name_matches = name_evaluation["matches"]
             if len(name_matches) == 1:
                 name_candidate, record, candidate_isins = name_matches[0]
+                foreign_issuer_confirmed = name_evaluation.get("status") == "foreign_issuer_confirmed"
                 attached.update(
                     {
                         "lei": record.lei,
                         "legal_name": name_candidate.get("legal_name") or record.legal_name,
                         "entity_lei": record.lei,
                         "entity_legal_name": name_candidate.get("legal_name") or record.legal_name,
-                        "entity_attach_method": "name_anchor_confirmed",
-                        "entity_attach_reason": "legal_name_candidate_confirmed_by_lei_isin_expansion",
-                        "entity_attach_reasons": ["legal_name_candidate_confirmed_by_lei_isin_expansion"],
+                        "entity_attach_method": (
+                            "foreign_issuer_name_anchor_confirmed"
+                            if foreign_issuer_confirmed
+                            else "name_anchor_confirmed"
+                        ),
+                        "entity_attach_reason": (
+                            "foreign_issuer_legal_name_candidate_confirmed_by_lei_isin_expansion"
+                            if foreign_issuer_confirmed
+                            else "legal_name_candidate_confirmed_by_lei_isin_expansion"
+                        ),
+                        "entity_attach_reasons": [
+                            (
+                                "foreign_issuer_legal_name_candidate_confirmed_by_lei_isin_expansion"
+                                if foreign_issuer_confirmed
+                                else "legal_name_candidate_confirmed_by_lei_isin_expansion"
+                            )
+                        ],
                         "decision_bucket": "attached",
                         "expanded_candidate_isins": _sample_isins(candidate_isins),
                         "lei_expanded_isins": _sample_isins(record.isin_list),
                         "lei_expanded_isin_count": len(record.isin_list),
                         "compatible_expanded_isin_count": len(candidate_isins),
                         "matched_compatible_isins": _sample_isins(candidate_isins),
-                        "compatible_isin_gate_status": "passed",
+                        "compatible_isin_gate_status": (
+                            "foreign_issuer_prefix_mismatch_confirmed"
+                            if foreign_issuer_confirmed
+                            else "passed"
+                        ),
                         "compatible_isin_gate_reject_reason": "",
-                        "expected_listing_country_prefix_present": True,
+                        "expected_listing_country_prefix_present": not foreign_issuer_confirmed,
                         "compatible_isin_candidate_sample": _sample_isins(candidate_isins),
                         "compatible_isin_candidate_count": len(candidate_isins),
                         "lei_source": "gleif_legal_name_plus_lei_expansion",
@@ -603,10 +623,36 @@ def _attach_rows_via_lei_expansion(
                         "candidate_headquarters_country": name_candidate.get("headquarters_country") or "",
                         "candidate_entity_status": name_candidate.get("entity_status") or "",
                         "candidate_registration_status": name_candidate.get("registration_status") or "",
-                        "attachment_provenance": "name_anchor_confirmed",
-                        "attachment_confidence": "medium",
+                        "attachment_provenance": (
+                            "foreign_issuer_name_anchor_confirmed"
+                            if foreign_issuer_confirmed
+                            else "name_anchor_confirmed"
+                        ),
+                        "attachment_confidence": "high" if foreign_issuer_confirmed else "medium",
                         "legal_name_anchor_status": "confirmed",
                         "legal_name_anchor_reject_reason": "",
+                        "direct_prefix_mismatch_candidate_status": (
+                            "confirmed_via_legal_name_candidate"
+                            if foreign_issuer_confirmed
+                            else attached.get("direct_prefix_mismatch_candidate_status", "not_requested")
+                        ),
+                        "direct_prefix_mismatch_candidate_reject_reason": (
+                            "" if foreign_issuer_confirmed else attached.get("direct_prefix_mismatch_candidate_reject_reason", "")
+                        ),
+                        "direct_prefix_mismatch_status": (
+                            "confirmed" if foreign_issuer_confirmed else attached.get("direct_prefix_mismatch_status", "not_requested")
+                        ),
+                        "direct_prefix_mismatch_reject_reason": (
+                            "" if foreign_issuer_confirmed else attached.get("direct_prefix_mismatch_reject_reason", "")
+                        ),
+                        "direct_prefix_mismatch_lei": (
+                            record.lei if foreign_issuer_confirmed else attached.get("direct_prefix_mismatch_lei", "")
+                        ),
+                        "direct_prefix_mismatch_legal_name": (
+                            name_candidate.get("legal_name") or record.legal_name
+                            if foreign_issuer_confirmed
+                            else attached.get("direct_prefix_mismatch_legal_name", "")
+                        ),
                     }
                 )
             elif len(name_matches) > 1:
@@ -770,6 +816,7 @@ def _evaluate_name_anchor(
     lei_expansions: dict[str, GleifLeiIsinRecord],
     lei_expansion_request_set: set[str],
     legal_name_records: dict[str, GleifLegalNameRecord],
+    raw_isin: str = "",
 ) -> dict[str, Any]:
     listing_name = _best_listing_name(candidate, openfigi)
     query_names = _listing_name_search_queries(candidate, openfigi)
@@ -864,6 +911,64 @@ def _evaluate_name_anchor(
         )
     ]
     if not country_candidates:
+        foreign_issuer_matches = _foreign_issuer_name_anchor_matches(
+            candidate=candidate,
+            openfigi=openfigi,
+            name_candidates=status_candidates,
+            lei_expansions=lei_expansions,
+            lei_expansion_request_set=lei_expansion_request_set,
+            raw_isin=raw_isin,
+        )
+        if len(foreign_issuer_matches) == 1:
+            name_candidate, expansion, candidate_isins = foreign_issuer_matches[0]
+            _copy_name_candidate_diagnostics(base, name_candidate)
+            _copy_legal_name_candidate_expansion_diagnostics(
+                base,
+                candidate=candidate,
+                name_candidate=name_candidate,
+                expansion=expansion,
+                requested=_symbol(name_candidate.get("lei")) in lei_expansion_request_set,
+            )
+            base.update(
+                {
+                    "status": "foreign_issuer_confirmed",
+                    "reject_reason": "",
+                    "matches": foreign_issuer_matches,
+                    "compatible_expanded_isin_count": len(candidate_isins),
+                    "matched_compatible_isins": _sample_isins(candidate_isins),
+                    "compatible_isin_gate_status": "foreign_issuer_prefix_mismatch_confirmed",
+                    "compatible_isin_gate_reject_reason": "",
+                    "expected_listing_country_prefix_present": False,
+                    "compatible_isin_candidate_sample": _sample_isins(candidate_isins),
+                    "compatible_isin_candidate_count": len(candidate_isins),
+                }
+            )
+            return base
+        if len(foreign_issuer_matches) > 1:
+            all_isins = sorted({isin for _, _, candidate_isins in foreign_issuer_matches for isin in candidate_isins})
+            base.update(
+                {
+                    "status": "ambiguous",
+                    "reject_reason": "legal_name_search_ambiguous",
+                    "matches": foreign_issuer_matches,
+                    "candidate_lei": ",".join(sorted({record.lei for _, record, _ in foreign_issuer_matches})),
+                    "compatible_expanded_isin_count": len(all_isins),
+                    "matched_compatible_isins": _sample_isins(all_isins),
+                    "compatible_isin_gate_status": "ambiguous",
+                    "compatible_isin_gate_reject_reason": "legal_name_search_ambiguous",
+                    "expected_listing_country_prefix_present": False,
+                }
+            )
+            return base
+        first_status_candidate = status_candidates[0]
+        first_lei = _symbol(first_status_candidate.get("lei"))
+        _copy_legal_name_candidate_expansion_diagnostics(
+            base,
+            candidate=candidate,
+            name_candidate=first_status_candidate,
+            expansion=lei_expansions.get(first_lei),
+            requested=first_lei in lei_expansion_request_set,
+        )
         _copy_name_candidate_diagnostics(base, status_candidates[0])
         base["status"] = "rejected"
         base["reject_reason"] = "legal_name_match_country_incompatible"
@@ -939,6 +1044,61 @@ def _evaluate_name_anchor(
     base["compatible_isin_gate_status"] = "rejected"
     base["compatible_isin_gate_reject_reason"] = "no_compatible_expanded_isin_for_listing_country"
     return base
+
+
+def _foreign_issuer_name_anchor_matches(
+    *,
+    candidate: ListingCandidate,
+    openfigi: OpenFigiMapping | None,
+    name_candidates: list[dict[str, Any]],
+    lei_expansions: dict[str, GleifLeiIsinRecord],
+    lei_expansion_request_set: set[str],
+    raw_isin: str,
+) -> list[tuple[dict[str, Any], GleifLeiIsinRecord, list[str]]]:
+    if not _is_us_listing(candidate=candidate, openfigi=openfigi):
+        return []
+    matches: list[tuple[dict[str, Any], GleifLeiIsinRecord, list[str]]] = []
+    for name_candidate in name_candidates:
+        issuer_prefixes = _issuer_isin_prefixes_from_legal_name_candidate(name_candidate)
+        if not issuer_prefixes or issuer_prefixes == {"US"}:
+            continue
+        lei = _symbol(name_candidate.get("lei"))
+        expansion = lei_expansions.get(lei)
+        if not expansion or expansion.status != "success":
+            continue
+        candidate_isins = _foreign_issuer_confirming_isins(
+            issuer_prefixes=issuer_prefixes,
+            raw_isin=raw_isin,
+            expanded_isins=expansion.isin_list,
+        )
+        if not candidate_isins:
+            continue
+        matches.append((name_candidate, expansion, candidate_isins))
+    return matches
+
+
+def _issuer_isin_prefixes_from_legal_name_candidate(name_candidate: dict[str, Any]) -> set[str]:
+    prefixes = {
+        _symbol(name_candidate.get("legal_country")),
+        _symbol(name_candidate.get("headquarters_country")),
+        _symbol(name_candidate.get("jurisdiction_country")),
+        _symbol(name_candidate.get("jurisdiction")),
+    }
+    return {prefix for prefix in prefixes if len(prefix) == 2}
+
+
+def _foreign_issuer_confirming_isins(
+    *,
+    issuer_prefixes: set[str],
+    raw_isin: str,
+    expanded_isins: list[str],
+) -> list[str]:
+    expanded = {_symbol(isin) for isin in expanded_isins if _symbol(isin)}
+    candidate_isins = {isin for isin in expanded if isin[:2] in issuer_prefixes}
+    normalized_raw_isin = _symbol(raw_isin)
+    if normalized_raw_isin and normalized_raw_isin in expanded and normalized_raw_isin[:2] in issuer_prefixes:
+        candidate_isins.add(normalized_raw_isin)
+    return sorted(candidate_isins)
 
 
 def _apply_name_anchor_diagnostics(row: dict[str, Any], evaluation: dict[str, Any]) -> None:
@@ -1122,7 +1282,10 @@ def _summary(
     ]
     expansion_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "lei_expansion"]
     name_anchor_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "name_anchor_confirmed"]
-    attached = direct_attached + expansion_attached + name_anchor_attached
+    foreign_issuer_attached = [
+        row for row in symbol_rows if row.get("entity_attach_method") == "foreign_issuer_name_anchor_confirmed"
+    ]
+    attached = direct_attached + expansion_attached + name_anchor_attached + foreign_issuer_attached
     ambiguous_unattached = [row for row in symbol_rows if row.get("entity_attach_method") == "unattached_ambiguous"]
     no_anchor_unattached = [row for row in symbol_rows if row.get("entity_attach_method") == "unattached_no_anchor"]
     decision_bucket_counts = _decision_bucket_counts(symbol_rows)
@@ -1177,6 +1340,7 @@ def _summary(
         "gleif_lei_expansion_status_counts": _record_status_counts(list(lei_expansions.values())),
         "listings_attached_direct_isin": len(direct_attached),
         "listings_attached_direct_isin_prefix_mismatch_name_confirmed": len(direct_prefix_mismatch_attached),
+        "listings_attached_foreign_issuer_name_anchor_confirmed": len(foreign_issuer_attached),
         "listings_attached_via_lei_expansion": len(expansion_attached),
         "listings_attached_name_anchor_confirmed": len(name_anchor_attached),
         "listings_unattached_no_anchor": len(no_anchor_unattached),
@@ -1278,7 +1442,7 @@ def _grouping_path(*, grouped: bool, left_method: str, right_method: str) -> str
     if not grouped:
         return ""
     methods = {left_method, right_method}
-    if "name_anchor_confirmed" in methods:
+    if "name_anchor_confirmed" in methods or "foreign_issuer_name_anchor_confirmed" in methods:
         return "name_anchor_confirmed"
     if "lei_expansion" in methods:
         return "direct_anchor_plus_lei_expansion"
