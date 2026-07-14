@@ -51,7 +51,11 @@ def main() -> None:
         request_sleep_seconds=args.request_sleep_seconds,
     )
     mappings = client.map_candidates(candidates)
-    result = build_entity_identity(candidates=candidates, mappings=mappings)
+    result = build_entity_identity(
+        candidates=candidates,
+        mappings=mappings,
+        batch_split_retries=client.batch_split_retries,
+    )
     summary = result.summary()
     summary["candidate_symbols"] = len(candidates)
     summary["openfigi_cache_rows"] = len(result.openfigi_cache_rows)
@@ -83,7 +87,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", choices=["fixtures", "postgres", "local"], default="fixtures")
     parser.add_argument("--cache-root", default=None)
     parser.add_argument("--offline", action="store_true", help="Do not call OpenFIGI when source is postgres/local.")
-    parser.add_argument("--batch-size", type=int, default=25)
+    parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--request-sleep-seconds", type=float, default=6.5)
     return parser
 
@@ -108,7 +112,7 @@ def _example_openfigi_fixtures() -> dict[str, dict[str, Any]]:
         "GOOG": _fixture("GOOG", "ALPHABET INC-CL C", "BBG009S3NB30", "BBG009S3NB21", "US", "USD", "US"),
         "GOOGL": _fixture("GOOGL", "ALPHABET INC-CL A", "BBG009S39JY5", "BBG009S39JX6", "US", "USD", "US"),
         "LEN": _fixture("LEN", "LENNAR CORP-A", "BBG000C3FGJ8", "BBG000C3FGH9", "US", "USD", "US"),
-        "LENB": _fixture("LENB", "LENNAR CORP-B", "BBG000C3FHL0", "BBG000C3FHK1", "US", "USD", "US"),
+        "LENB": {"error": "No identifier found."},
     }
 
 

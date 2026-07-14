@@ -63,7 +63,11 @@ class OpenFigiMapping:
 
     @property
     def has_strong_identity(self) -> bool:
-        return bool(self.legal_entity_id or self.lei or self.share_class_figi or self.composite_figi or self.isin)
+        return bool(self.legal_entity_id or self.lei or self.isin)
+
+    @property
+    def has_security_identity(self) -> bool:
+        return bool(self.figi or self.composite_figi or self.share_class_figi)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +125,7 @@ class IdentityBuildResult:
     openfigi_cache_rows: list[dict[str, Any]]
     unresolved_symbols: list[str]
     ambiguous_symbols: list[str]
+    batch_split_retries: int = 0
 
     def summary(self) -> dict[str, Any]:
         issue_counts: dict[str, int] = {}
@@ -139,6 +144,39 @@ class IdentityBuildResult:
         return {
             "resolved_entities": len([e for e in self.entities if e.resolution_status == "resolved"]),
             "resolved_listings": len([listing for listing in self.listings if listing.resolution_status == "resolved"]),
+            "security_resolved_listings": len(
+                [
+                    row
+                    for row in self.openfigi_cache_rows
+                    if str(row.get("status") or "").strip().lower() == "success"
+                    and _has_security_identifier(row.get("response_payload"))
+                ]
+            ),
+            "entity_resolved_listings": len([listing for listing in self.listings if listing.resolution_status == "resolved"]),
+            "entity_unresolved_security_only": issue_counts.get("security_only_group_not_resolved", 0),
+            "entity_unresolved_no_openfigi_match": len(
+                [
+                    row
+                    for row in self.openfigi_cache_rows
+                    if str(row.get("status") or "").strip().lower() == "not_found"
+                ]
+            ),
+            "entity_unresolved_openfigi_error": len(
+                [
+                    row
+                    for row in self.openfigi_cache_rows
+                    if str(row.get("status") or "").strip().lower() == "error"
+                ]
+            ),
+            "strong_company_identifier_groups": len(
+                [
+                    entity
+                    for entity in self.entities
+                    if str(entity.metadata.get("identity_key_kind") or "") in {"legal_entity_id", "lei", "isin"}
+                ]
+            ),
+            "security_identifier_only_groups": issue_counts.get("security_only_group_not_resolved", 0),
+            "batch_split_retries": int(self.batch_split_retries),
             "entities": len(self.entities),
             "listings_mapped": len(self.listings),
             "unresolved_symbols": len(self.unresolved_symbols),
@@ -180,3 +218,15 @@ class IdentityBuildResult:
             "primary_listing_decisions": primary_decisions,
             "audit_issue_counts": dict(sorted(issue_counts.items())),
         }
+
+
+def _has_security_identifier(response_payload: Any) -> bool:
+    if not isinstance(response_payload, dict):
+        return False
+    data = response_payload.get("data")
+    if not isinstance(data, list) or not data:
+        return False
+    first = data[0]
+    if not isinstance(first, dict):
+        return False
+    return bool(first.get("figi") or first.get("compositeFIGI") or first.get("compositeFigi") or first.get("shareClassFIGI") or first.get("shareClassFigi"))

@@ -15,7 +15,9 @@ import requests
 from finance_data_ops.identity.models import ListingCandidate, OpenFigiMapping, OpenFigiRequest
 
 OPENFIGI_MAPPING_URL = "https://api.openfigi.com/v3/mapping"
-DEFAULT_BATCH_SIZE = 25
+AUTHENTICATED_DEFAULT_BATCH_SIZE = 25
+UNAUTHENTICATED_DEFAULT_BATCH_SIZE = 5
+MAX_BATCH_SIZE = 100
 DEFAULT_REQUEST_SLEEP_SECONDS = 6.5
 
 _OPENFIGI_EXCH_CODE_BY_YAHOO_SUFFIX = {
@@ -61,18 +63,21 @@ class OpenFigiClient:
         api_key: str | None = None,
         fixture_mappings: dict[str, Any] | None = None,
         dry_run: bool = False,
-        batch_size: int = DEFAULT_BATCH_SIZE,
+        batch_size: int | None = None,
         request_sleep_seconds: float = DEFAULT_REQUEST_SLEEP_SECONDS,
         session: requests.Session | None = None,
     ) -> None:
         self.api_key = (api_key if api_key is not None else os.environ.get("OPENFIGI_API_KEY") or "").strip()
         self.fixture_mappings = {str(k).upper(): v for k, v in (fixture_mappings or {}).items()}
         self.dry_run = bool(dry_run)
-        self.batch_size = max(1, min(int(batch_size), DEFAULT_BATCH_SIZE))
+        default_batch_size = AUTHENTICATED_DEFAULT_BATCH_SIZE if self.api_key else UNAUTHENTICATED_DEFAULT_BATCH_SIZE
+        self.batch_size = max(1, min(int(batch_size or default_batch_size), MAX_BATCH_SIZE))
         self.request_sleep_seconds = max(0.0, float(request_sleep_seconds))
         self.session = session or requests.Session()
+        self.batch_split_retries = 0
 
     def map_candidates(self, candidates: list[ListingCandidate]) -> list[OpenFigiMapping]:
+        self.batch_split_retries = 0
         requests_by_symbol = [build_openfigi_request(candidate) for candidate in candidates]
         if self.fixture_mappings:
             return [self._mapping_from_fixture(request) for request in requests_by_symbol]
@@ -94,6 +99,8 @@ class OpenFigiClient:
         payload = [request.payload for request in batch]
         try:
             response = self.session.post(OPENFIGI_MAPPING_URL, headers=headers, json=payload, timeout=30)
+            if response.status_code == 413:
+                return self._split_payload_too_large_batch(batch)
             response.raise_for_status()
             body = response.json()
         except Exception as exc:
@@ -110,6 +117,17 @@ class OpenFigiClient:
                 mappings.append(_error_mapping(request, "missing_openfigi_batch_response"))
         return mappings
 
+    def _split_payload_too_large_batch(self, batch: list[OpenFigiRequest]) -> list[OpenFigiMapping]:
+        self.batch_split_retries += 1
+        if len(batch) <= 1:
+            return [_error_mapping(batch[0], "openfigi_payload_too_large_single_request")]
+        midpoint = max(1, len(batch) // 2)
+        mappings = self._map_live_batch(batch[:midpoint])
+        if self.request_sleep_seconds:
+            time.sleep(self.request_sleep_seconds)
+        mappings.extend(self._map_live_batch(batch[midpoint:]))
+        return mappings
+
     def _mapping_from_fixture(self, request: OpenFigiRequest) -> OpenFigiMapping:
         raw = self.fixture_mappings.get(request.symbol.upper())
         if raw is None:
@@ -118,6 +136,8 @@ class OpenFigiClient:
             return replace(raw, symbol=request.symbol, request_hash=request.request_hash, payload=request.payload)
         if isinstance(raw, Exception):
             return _error_mapping(request, str(raw))
+        if isinstance(raw, dict) and raw.get("error"):
+            return _mapping_from_openfigi_item(request, raw)
         if isinstance(raw, dict) and raw.get("status") == "error":
             return _error_mapping(request, str(raw.get("error_message") or "fixture_error"), response_payload=raw)
         if isinstance(raw, dict) and "data" in raw:
@@ -214,7 +234,8 @@ def _mapping_from_openfigi_item(request: OpenFigiRequest, item: Any) -> OpenFigi
         return _error_mapping(request, "unexpected_openfigi_item_shape", response_payload={"item": item})
     if item.get("error"):
         message = str(item.get("error") or "")
-        status = "not_found" if "not found" in message.lower() else "error"
+        lower_message = message.lower()
+        status = "not_found" if "not found" in lower_message or "no identifier found" in lower_message else "error"
         return OpenFigiMapping(
             symbol=request.symbol,
             request_hash=request.request_hash,

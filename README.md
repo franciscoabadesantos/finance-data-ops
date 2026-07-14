@@ -124,6 +124,8 @@ python scripts/build_entity_identity.py --source postgres --symbols SAP,SAP.DE -
 
 Entity Layer V0 is side-by-side only. OpenFIGI is the main listing/security identity source; GLEIF/LEI is optional enrichment and is not required for V0. `feature_store.entity_attributes_static` remains a metadata read model and must not be treated as entity master. No product/read path uses `feature_store.entity_master` or `feature_store.entity_listing` yet, no command autonomously onboards symbols, and no price series are merged across listings. Future consumers should migrate only after the entity layer has been validated.
 
+OpenFIGI ticker mapping is not sufficient by itself for company/entity grouping. V0 treats ticker-mapping FIGIs as listing/security identity and emits audit rows when company-level identity is missing. True grouping, such as `SAP`/`SAP.DE`, requires a strong company-level identifier from LEI/GLEIF, a safe ISIN policy, an OpenFIGI issuer/legal-entity field or endpoint, or a future curated/manual review path.
+
 ## Prefect orchestration
 
 Prefect Cloud is the primary scheduler/orchestrator for daily domain refreshes.

@@ -24,6 +24,7 @@ def build_entity_identity(
     *,
     candidates: list[ListingCandidate],
     mappings: list[OpenFigiMapping],
+    batch_split_retries: int = 0,
 ) -> IdentityBuildResult:
     candidates_by_symbol = {_symbol(candidate.symbol): candidate for candidate in candidates if _symbol(candidate.symbol)}
     mappings_by_symbol = {_symbol(mapping.symbol): mapping for mapping in mappings if _symbol(mapping.symbol)}
@@ -101,6 +102,7 @@ def build_entity_identity(
         openfigi_cache_rows=openfigi_cache_rows(mappings),
         unresolved_symbols=sorted(set(unresolved_symbols)),
         ambiguous_symbols=sorted(set(ambiguous_symbols)),
+        batch_split_retries=batch_split_retries,
     )
 
 
@@ -250,7 +252,11 @@ def _security_only_audits(
                 figi=mapping.figi,
                 composite_figi=mapping.composite_figi,
                 share_class_figi=mapping.share_class_figi,
-                reason="missing_legal_entity_id_lei_or_isin",
+                provider_normalized_symbol=_symbol(mapping.payload.get("idValue")),
+                request_payload=mapping.payload,
+                name=mapping.name,
+                security_type=mapping.security_type,
+                reason="security_identity_without_entity_identifier",
             )
         )
 
@@ -364,7 +370,12 @@ def _normalized_name(value: Any) -> str:
     text = str(value or "").strip().lower()
     if not text:
         return ""
-    text = re.sub(r"\b(inc|corp|corporation|ltd|limited|plc|sa|se|ag|nv|asa|adr|sponsored)\b", "", text)
+    text = text.replace("a/s", " ")
+    text = re.sub(
+        r"\b(inc|corp|corporation|ltd|limited|plc|sa|se|ag|nv|asa|adr|sponsored|spons|depositary|receipt|ny|reg|shs|share|shares|class|cl|a|b|c|s)\b",
+        "",
+        text,
+    )
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return " ".join(text.split())
 

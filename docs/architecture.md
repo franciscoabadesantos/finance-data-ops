@@ -92,7 +92,7 @@ Data Ops owns provider symbology for frontier/onboarding candidates. Backend ser
 `etf_holding_onboarding_identity` as a read model and pass through `onboard_symbol`; suffix and listing
 venue rules live in `finance_data_ops.identity`.
 
-Entity identity V0 is an auditable side-by-side layer. A company/entity is not a ticker: one entity can have many listings, and listings retain their own symbol, venue, MIC, currency, country, provider identity, calendar, and price series. OpenFIGI is the primary listing/security identity source; GLEIF/LEI enrichment is optional. No product read path uses the entity layer yet, and no autonomous onboarding or cross-listing price blending is allowed.
+Entity identity V0 is an auditable side-by-side layer. A company/entity is not a ticker: one entity can have many listings, and listings retain their own symbol, venue, MIC, currency, country, provider identity, calendar, and price series. OpenFIGI ticker mapping provides listing/security identity; it does not by itself solve company grouping for cases such as `SAP`/`SAP.DE`, `ASML`/`ASML.AS`, or `NVO`/`NOVO-B.CO`. Entity grouping requires a strong company-level identifier from LEI/GLEIF, a safe ISIN policy, an OpenFIGI issuer/legal-entity source, or a future curated/manual review path. No product read path uses the entity layer yet, and no autonomous onboarding or cross-listing price blending is allowed.
 
 ## Runtime source-of-truth contract
 

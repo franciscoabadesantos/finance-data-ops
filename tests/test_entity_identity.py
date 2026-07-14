@@ -44,6 +44,12 @@ def test_openfigi_request_prefers_valid_mic_over_exchange() -> None:
     assert "exchCode" not in request.payload
 
 
+def test_openfigi_unauthenticated_default_batch_size_is_five() -> None:
+    assert OpenFigiClient(api_key="").batch_size == 5
+    assert OpenFigiClient(api_key="token").batch_size == 25
+    assert OpenFigiClient(api_key="", batch_size=12).batch_size == 12
+
+
 def test_yahoo_suffixes_normalize_for_openfigi_requests() -> None:
     cases = {
         "SAP.DE": ("SAP", "GY"),
@@ -95,6 +101,28 @@ def test_candidate_universe_treats_pandas_nan_as_missing() -> None:
     assert candidates[0].exchange == ""
     assert candidates[0].exchange_mic == ""
     assert candidates[0].currency == ""
+
+
+def test_openfigi_413_batch_is_split_without_poisoning_whole_batch() -> None:
+    candidates = [_candidate("AAA"), _candidate("BBB"), _candidate("CCC")]
+    client = OpenFigiClient(
+        api_key="",
+        batch_size=3,
+        request_sleep_seconds=0,
+        session=_PayloadTooLargeThenSuccessSession(),
+    )
+
+    mappings = client.map_candidates(candidates)
+    result = build_entity_identity(
+        candidates=candidates,
+        mappings=mappings,
+        batch_split_retries=client.batch_split_retries,
+    )
+
+    assert [mapping.status for mapping in mappings] == ["success", "success", "success"]
+    assert result.summary()["batch_split_retries"] == 2
+    assert result.summary()["security_resolved_listings"] == 3
+    assert result.summary()["entity_unresolved_openfigi_error"] == 0
 
 
 def test_sap_pair_resolves_to_same_entity() -> None:
@@ -194,6 +222,82 @@ def test_security_figis_without_entity_identifier_do_not_resolve_adr_home_pair()
     assert "same_name_different_security_identifier" in issue_types
     assert "possible_same_company_not_resolved" in issue_types
     assert "adr_home_candidate_missing_entity_identifier" in issue_types
+
+
+def test_live_like_security_only_samples_create_suggestions_not_entities() -> None:
+    result = _resolve(
+        [
+            _candidate("SAP", country="US"),
+            _candidate("SAP.DE", country="DE"),
+            _candidate("ASML", country="US"),
+            _candidate("ASML.AS", country="NL"),
+            _candidate("NVO", country="US"),
+            _candidate("NOVO-B.CO", country="DK"),
+            _candidate("TLS", country="US"),
+            _candidate("TLS.AX", country="AU"),
+        ],
+        {
+            "SAP": _security_mapping("SAP", "SAP SE-SPONSORED ADR", share="BBG001S6RD41", composite="BBG000BDSLD7", country="US", security_type="ADR"),
+            "SAP.DE": _security_mapping("SAP", "SAP SE", share="BBG001S6RK27", composite="BBG000BG7DY8", country="DE"),
+            "ASML": _security_mapping("ASML", "ASML HOLDING NV-NY REG SHS", share="BBG001SCG0R3", composite="BBG000K6MRN4", country="US", security_type="Depositary Receipt"),
+            "ASML.AS": _security_mapping("ASML", "ASML HOLDING NV", share="BBG001S7Q066", composite="BBG000C1HSN8", country="NL"),
+            "NVO": _security_mapping("NVO", "NOVO-NORDISK A/S-SPONS ADR", share="BBG001S5TSK0", composite="BBG000BQBKR3", country="US", security_type="ADR"),
+            "NOVO-B.CO": _security_mapping("NOVOB", "NOVO NORDISK A/S-B", share="BBG001S6RN12", composite="BBG000F8TYC6", country="DK"),
+            "TLS": _security_mapping("TLS", "TELOS CORP", share="BBG00TLSUS01", composite="BBG00TLSUS02", country="US"),
+            "TLS.AX": _security_mapping("TLS", "TELSTRA GROUP LTD", share="BBG00TLSAU01", composite="BBG00TLSAU02", country="AU"),
+        },
+    )
+
+    summary = result.summary()
+    assert summary["security_resolved_listings"] == 8
+    assert summary["entity_resolved_listings"] == 0
+    assert summary["entity_unresolved_security_only"] == 8
+    assert summary["strong_company_identifier_groups"] == 0
+    assert result.entities == []
+    assert result.listings == []
+    same_name_audits = [
+        audit
+        for audit in result.audits
+        if audit.issue_type == "same_name_different_security_identifier"
+    ]
+    assert {tuple(audit.details["symbols"]) for audit in same_name_audits} >= {
+        ("SAP", "SAP.DE"),
+        ("ASML", "ASML.AS"),
+        ("NOVO-B.CO", "NVO"),
+    }
+    assert all(set(audit.details.get("symbols", [])) != {"TLS", "TLS.AX"} for audit in same_name_audits)
+
+
+def test_lenb_not_found_is_isolated_from_successful_batch_members() -> None:
+    result = _resolve(
+        [_candidate("LEN"), _candidate("LENB")],
+        {
+            "LEN": _security_mapping("LEN", "LENNAR CORP-A", share="LEN-SHARE", composite="LEN-COMP"),
+            "LENB": {"error": "No identifier found."},
+        },
+    )
+
+    summary = result.summary()
+    assert summary["security_resolved_listings"] == 1
+    assert summary["entity_unresolved_no_openfigi_match"] == 1
+    assert summary["entity_unresolved_openfigi_error"] == 0
+    assert result.unresolved_symbols == ["LEN", "LENB"]
+
+
+def test_strong_legal_entity_id_creates_entity_records() -> None:
+    result = _resolve(
+        [_candidate("SAP", country="US"), _candidate("SAP.DE", country="DE")],
+        {
+            "SAP": _mapping("SAP", "SAP SE", legal="SAP-LEGAL", share="SAP-ADR-SHARE", composite="SAP-ADR-COMP", country="US", home="DE"),
+            "SAP.DE": _mapping("SAP", "SAP SE", legal="SAP-LEGAL", share="SAP-DE-SHARE", composite="SAP-DE-COMP", country="DE", home="DE"),
+        },
+    )
+
+    summary = result.summary()
+    assert summary["security_resolved_listings"] == 2
+    assert summary["entity_resolved_listings"] == 2
+    assert summary["strong_company_identifier_groups"] == 1
+    assert len(result.entities) == 1
 
 
 def test_openfigi_error_for_one_symbol_does_not_abort_batch() -> None:
@@ -375,6 +479,7 @@ def _security_mapping(
     share: str,
     composite: str,
     country: str = "US",
+    security_type: str = "Common Stock",
 ) -> dict:
     return {
         "ticker": ticker,
@@ -385,5 +490,42 @@ def _security_mapping(
         "country": country,
         "currency": "USD",
         "exchCode": "US" if country == "US" else country,
-        "securityType2": "Common Stock",
+        "securityType2": security_type,
     }
+
+
+class _PayloadTooLargeThenSuccessSession:
+    def post(self, _url: str, *, headers: dict, json: list[dict], timeout: int) -> "_FakeOpenFigiResponse":
+        if len(json) > 1:
+            return _FakeOpenFigiResponse(413, {"error": "Payload Too Large"})
+        ticker = json[0]["idValue"]
+        return _FakeOpenFigiResponse(
+            200,
+            [
+                {
+                    "data": [
+                        {
+                            "ticker": ticker,
+                            "name": f"{ticker} CORP",
+                            "figi": f"{ticker}-FIGI",
+                            "compositeFIGI": f"{ticker}-COMP",
+                            "shareClassFIGI": f"{ticker}-SHARE",
+                            "securityType2": "Common Stock",
+                        }
+                    ]
+                }
+            ],
+        )
+
+
+class _FakeOpenFigiResponse:
+    def __init__(self, status_code: int, payload: object) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self) -> object:
+        return self._payload
