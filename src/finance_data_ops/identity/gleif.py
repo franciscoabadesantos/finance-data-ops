@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 from finance_data_ops.identity.isin import ISIN_PATTERN
+from finance_data_ops.identity.names import normalize_legal_name_conservative
 
 GLEIF_LEI_RECORDS_URL = "https://api.gleif.org/api/v1/lei-records"
 DEFAULT_GLEIF_PAGE_SIZE = 200
@@ -34,6 +35,17 @@ class GleifLeiIsinRecord:
     error_message: str = ""
     source: str = "gleif"
     legal_name: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class GleifLegalNameRecord:
+    query_name: str
+    normalized_query_name: str
+    candidates: list[dict[str, Any]]
+    response_payload: dict[str, Any] | None = None
+    status: str = "not_found"
+    error_message: str = ""
+    source: str = "gleif_legal_name"
 
 
 class GleifIsinLeiClient:
@@ -153,6 +165,73 @@ class GleifIsinLeiClient:
                 source="gleif_lei_record_isins",
             )
 
+    def search_legal_names(self, names: list[str]) -> list[GleifLegalNameRecord]:
+        out = []
+        seen: set[str] = set()
+        for raw_name in names:
+            query_name = _clean_text(raw_name)
+            normalized = normalize_legal_name_conservative(query_name)
+            if not query_name or not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            out.append(self.search_legal_name(query_name))
+        return out
+
+    def search_legal_name(self, name: str) -> GleifLegalNameRecord:
+        query_name = _clean_text(name)
+        normalized = normalize_legal_name_conservative(query_name)
+        if self.fixture_mappings:
+            return self._legal_name_from_fixture(query_name=query_name, normalized=normalized)
+        if self.offline:
+            return GleifLegalNameRecord(
+                query_name=query_name,
+                normalized_query_name=normalized,
+                candidates=[],
+                status="not_found",
+                error_message="offline_without_fixture",
+            )
+        pages: list[dict[str, Any]] = []
+        page_number = 1
+        try:
+            while page_number <= self.max_pages:
+                response = self.session.get(
+                    GLEIF_LEI_RECORDS_URL,
+                    params={
+                        "filter[entity.legalName]": query_name,
+                        "page[size]": min(self.page_size, 20),
+                        "page[number]": page_number,
+                    },
+                    timeout=30,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if isinstance(payload, dict):
+                    pages.append(payload)
+                else:
+                    pages.append({"body": payload})
+                if not _has_next_page(payload=payload, page_number=page_number, page_size=min(self.page_size, 20)):
+                    break
+                page_number += 1
+            payload = {"pages": pages}
+            candidates = _legal_name_candidates_from_payload(payload, normalized_query_name=normalized)
+            return GleifLegalNameRecord(
+                query_name=query_name,
+                normalized_query_name=normalized,
+                candidates=candidates,
+                response_payload=payload,
+                status="success" if candidates else "not_found",
+                error_message="" if candidates else "no_gleif_legal_name_candidates",
+            )
+        except Exception as exc:
+            return GleifLegalNameRecord(
+                query_name=query_name,
+                normalized_query_name=normalized,
+                candidates=[],
+                response_payload={"pages": pages} if pages else None,
+                status="error",
+                error_message=str(exc),
+            )
+
     def _from_fixture(self, isin: str) -> GleifIsinLeiRecord:
         raw = self.fixture_mappings.get(isin)
         if raw is None:
@@ -219,6 +298,42 @@ class GleifIsinLeiClient:
             response_payload={"body": raw},
             status="error",
             error_message=f"unsupported_fixture_mapping: {type(raw).__name__}",
+        )
+
+    def _legal_name_from_fixture(self, *, query_name: str, normalized: str) -> GleifLegalNameRecord:
+        raw = (
+            self.fixture_mappings.get(f"NAME:{normalized}")
+            or self.fixture_mappings.get(f"LEGAL_NAME:{normalized}")
+            or self.fixture_mappings.get(normalized)
+        )
+        if raw is None:
+            return GleifLegalNameRecord(
+                query_name=query_name,
+                normalized_query_name=normalized,
+                candidates=[],
+                status="not_found",
+                error_message="fixture_not_found",
+            )
+        if isinstance(raw, GleifLegalNameRecord):
+            return replace(raw, query_name=query_name, normalized_query_name=normalized)
+        candidates = []
+        if isinstance(raw, dict):
+            values = raw.get("candidates") if isinstance(raw.get("candidates"), list) else [raw]
+            candidates = [_legal_name_candidate_from_mapping(value) for value in values if isinstance(value, dict)]
+        elif isinstance(raw, list):
+            candidates = [_legal_name_candidate_from_mapping(value) for value in raw if isinstance(value, dict)]
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.get("lei") and candidate.get("normalized_legal_name") == normalized
+        ]
+        return GleifLegalNameRecord(
+            query_name=query_name,
+            normalized_query_name=normalized,
+            candidates=candidates,
+            response_payload=raw if isinstance(raw, dict) else {"candidates": raw},
+            status="success" if candidates else "not_found",
+            error_message="" if candidates else "fixture_no_candidates",
         )
 
 
@@ -344,6 +459,72 @@ def _extract_legal_name(payload: dict[str, Any]) -> str:
     if isinstance(legal_name_value, dict):
         legal_name_value = legal_name_value.get("name")
     return _clean_text(attributes.get("legalName") or attributes.get("entityLegalName") or legal_name_value)
+
+
+def _legal_name_candidates_from_payload(payload: dict[str, Any], *, normalized_query_name: str) -> list[dict[str, Any]]:
+    candidates = []
+    for item in _payload_data_items(payload):
+        candidate = _legal_name_candidate_from_gleif_item(item)
+        if candidate.get("lei") and candidate.get("normalized_legal_name") == normalized_query_name:
+            candidates.append(candidate)
+    return candidates
+
+
+def _payload_data_items(payload: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if not isinstance(payload, dict):
+        return items
+    pages = payload.get("pages")
+    if isinstance(pages, list):
+        for page in pages:
+            items.extend(_payload_data_items(page))
+        return items
+    data = payload.get("data")
+    if isinstance(data, list):
+        items.extend(item for item in data if isinstance(item, dict))
+    elif isinstance(data, dict):
+        items.append(data)
+    return items
+
+
+def _legal_name_candidate_from_gleif_item(item: dict[str, Any]) -> dict[str, Any]:
+    attributes = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+    entity = attributes.get("entity") if isinstance(attributes.get("entity"), dict) else {}
+    registration = attributes.get("registration") if isinstance(attributes.get("registration"), dict) else {}
+    legal_name_value = entity.get("legalName")
+    if isinstance(legal_name_value, dict):
+        legal_name_value = legal_name_value.get("name")
+    legal_address = entity.get("legalAddress") if isinstance(entity.get("legalAddress"), dict) else {}
+    headquarters_address = entity.get("headquartersAddress") if isinstance(entity.get("headquartersAddress"), dict) else {}
+    return _legal_name_candidate_from_mapping(
+        {
+            "lei": attributes.get("lei") or item.get("id"),
+            "legal_name": legal_name_value or attributes.get("legalName"),
+            "legal_country": legal_address.get("country"),
+            "headquarters_country": headquarters_address.get("country"),
+            "jurisdiction": entity.get("jurisdiction"),
+            "entity_status": entity.get("status"),
+            "registration_status": registration.get("status"),
+            "conformity_flag": attributes.get("conformityFlag"),
+        }
+    )
+
+
+def _legal_name_candidate_from_mapping(raw: dict[str, Any]) -> dict[str, Any]:
+    legal_name = _clean_text(raw.get("legal_name") or raw.get("legalName") or raw.get("name"))
+    jurisdiction = _clean_text(raw.get("jurisdiction"), upper=True)
+    return {
+        "lei": _clean_text(raw.get("lei"), upper=True),
+        "legal_name": legal_name,
+        "normalized_legal_name": normalize_legal_name_conservative(legal_name),
+        "legal_country": _clean_text(raw.get("legal_country") or raw.get("legalCountry"), upper=True),
+        "headquarters_country": _clean_text(raw.get("headquarters_country") or raw.get("headquartersCountry"), upper=True),
+        "jurisdiction": jurisdiction,
+        "jurisdiction_country": jurisdiction.split("-", 1)[0] if jurisdiction else "",
+        "entity_status": _clean_text(raw.get("entity_status") or raw.get("entityStatus"), upper=True),
+        "registration_status": _clean_text(raw.get("registration_status") or raw.get("registrationStatus"), upper=True),
+        "conformity_flag": _clean_text(raw.get("conformity_flag") or raw.get("conformityFlag"), upper=True),
+    }
 
 
 def _clean_isin_list(values: Any) -> list[str]:

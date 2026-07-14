@@ -7,12 +7,14 @@ from typing import Any
 
 from finance_data_ops.identity.gleif import (
     GleifIsinLeiRecord,
+    GleifLegalNameRecord,
     GleifLeiIsinRecord,
     gleif_cache_rows,
     gleif_lei_isin_cache_rows,
 )
 from finance_data_ops.identity.isin import IsinRecord, allowed_isin_prefixes_for_listing, isin_cache_rows
 from finance_data_ops.identity.models import ListingCandidate, OpenFigiMapping
+from finance_data_ops.identity.names import legal_name_query_from_listing, normalize_legal_name_conservative
 from finance_data_ops.identity.openfigi import openfigi_cache_rows
 
 ACCEPTANCE_PAIRS = [
@@ -57,6 +59,7 @@ def measure_entity_identity_chain(
     isin_records: list[IsinRecord],
     gleif_records: list[GleifIsinLeiRecord],
     gleif_lei_isin_records: list[GleifLeiIsinRecord] | None = None,
+    gleif_legal_name_records: list[GleifLegalNameRecord] | None = None,
     pairs: list[tuple[str, str, str]] | None = None,
     batch_split_retries: int = 0,
 ) -> EntityChainMeasurement:
@@ -65,6 +68,9 @@ def measure_entity_identity_chain(
     isin_by_symbol = {_symbol(record.symbol): record for record in isin_records}
     gleif_by_isin = {_symbol(record.isin): record for record in gleif_records}
     lei_expansions = {_symbol(record.lei): record for record in (gleif_lei_isin_records or [])}
+    legal_name_records = {
+        _symbol(record.normalized_query_name): record for record in (gleif_legal_name_records or [])
+    }
     selected_pairs = pairs or _pairs_for_symbols(sorted(candidates_by_symbol))
 
     base_rows = []
@@ -83,6 +89,7 @@ def measure_entity_identity_chain(
         candidates_by_symbol=candidates_by_symbol,
         openfigi_by_symbol=openfigi_by_symbol,
         lei_expansions=lei_expansions,
+        legal_name_records=legal_name_records,
     )
     rows_by_symbol = {row["symbol"]: row for row in symbol_rows}
     pair_rows = [_pair_row(left, right, pair_type, rows_by_symbol) for left, right, pair_type in selected_pairs]
@@ -163,10 +170,10 @@ def acceptance_isin_fixtures() -> dict[str, dict[str, Any]]:
         "RIO": {"isin": "US7672041008", "source": "fixture_yfinance"},
         "RIO.L": {"isin": "-", "source": "fixture_yfinance"},
         "0005.HK": {"isin": "ARDEUT112257", "source": "fixture_yfinance"},
-        "HSBA.L": {"isin": "GB0005405286", "source": "fixture_yfinance"},
-        "GOOG": {"isin": "US02079K1079", "source": "fixture_yfinance"},
-        "GOOGL": {"isin": "-", "source": "fixture_yfinance"},
-        "LEN": {"isin": "US5260571048", "source": "fixture_yfinance"},
+        "HSBA.L": {"isin": "-", "source": "fixture_yfinance"},
+        "GOOG": {"isin": "CA02080M1005", "source": "fixture_yfinance"},
+        "GOOGL": {"isin": "CA02080M1005", "source": "fixture_yfinance"},
+        "LEN": {"isin": "-", "source": "fixture_yfinance"},
         "LENB": {"isin": "-", "source": "fixture_yfinance"},
     }
 
@@ -177,9 +184,61 @@ def acceptance_gleif_fixtures() -> dict[str, dict[str, Any]]:
         "USN070592100": {"lei": "724500Y6DUVHQD8W8H93", "legal_name": "ASML HOLDING N.V.", "source": "fixture_gleif"},
         "US6701002056": {"lei": "549300DAQ1CVT6CXN342", "legal_name": "NOVO NORDISK A/S", "source": "fixture_gleif"},
         "US7672041008": {"lei": "213800YOEO5OQ72G2R82", "legal_name": "RIO TINTO PLC", "source": "fixture_gleif"},
-        "GB0005405286": {"lei": "MP6I5ZYZBEU3UXPYFY54", "legal_name": "HSBC HOLDINGS PLC", "source": "fixture_gleif"},
-        "US02079K1079": {"lei": "5493006MHB84DD0ZWV18", "legal_name": "ALPHABET INC.", "source": "fixture_gleif"},
-        "US5260571048": {"lei": "529900G61XVRLX5TJX09", "legal_name": "LENNAR CORPORATION", "source": "fixture_gleif"},
+    }
+
+
+def acceptance_gleif_legal_name_fixtures() -> dict[str, dict[str, Any]]:
+    return {
+        "NAME:ALPHABET": {
+            "candidates": [
+                {
+                    "lei": "5493006MHB84DD0ZWV18",
+                    "legal_name": "ALPHABET INC.",
+                    "legal_country": "US",
+                    "headquarters_country": "US",
+                    "jurisdiction": "US-DE",
+                    "entity_status": "ACTIVE",
+                    "registration_status": "ISSUED",
+                    "conformity_flag": "CONFORMING",
+                },
+                {
+                    "lei": "984500443D78642F8280",
+                    "legal_name": "ALPHABET ENERGY INC",
+                    "legal_country": "IN",
+                    "headquarters_country": "IN",
+                    "jurisdiction": "IN",
+                    "entity_status": "ACTIVE",
+                    "registration_status": "ISSUED",
+                },
+            ]
+        },
+        "NAME:LENNAR": {
+            "candidates": [
+                {
+                    "lei": "529900G61XVRLX5TJX09",
+                    "legal_name": "LENNAR CORPORATION",
+                    "legal_country": "US",
+                    "headquarters_country": "US",
+                    "jurisdiction": "US-DE",
+                    "entity_status": "ACTIVE",
+                    "registration_status": "LAPSED",
+                    "conformity_flag": "NON_CONFORMING",
+                }
+            ]
+        },
+        "NAME:HSBC HOLDINGS": {
+            "candidates": [
+                {
+                    "lei": "MP6I5ZYZBEU3UXPYFY54",
+                    "legal_name": "HSBC HOLDINGS PLC",
+                    "legal_country": "GB",
+                    "headquarters_country": "GB",
+                    "jurisdiction": "GB",
+                    "entity_status": "ACTIVE",
+                    "registration_status": "ISSUED",
+                }
+            ]
+        },
     }
 
 
@@ -281,6 +340,7 @@ def _attach_rows_via_lei_expansion(
     candidates_by_symbol: dict[str, ListingCandidate],
     openfigi_by_symbol: dict[str, OpenFigiMapping],
     lei_expansions: dict[str, GleifLeiIsinRecord],
+    legal_name_records: dict[str, GleifLegalNameRecord],
 ) -> list[dict[str, Any]]:
     direct_lei_names: dict[str, str] = {}
     for row in base_rows:
@@ -295,6 +355,8 @@ def _attach_rows_via_lei_expansion(
             expansion = lei_expansions.get(_symbol(attached.get("entity_lei")))
             if expansion and expansion.status == "success":
                 attached["lei_expanded_isins"] = list(expansion.isin_list)
+            attached["attachment_provenance"] = "isin_direct"
+            attached["attachment_confidence"] = "high"
             out.append(attached)
             continue
 
@@ -322,6 +384,8 @@ def _attach_rows_via_lei_expansion(
                     "lei_expanded_isins": list(record.isin_list),
                     "lei_source": record.source,
                     "lei_status": record.status,
+                    "attachment_provenance": "lei_expansion",
+                    "attachment_confidence": "high",
                 }
             )
         elif len(matches) > 1:
@@ -331,15 +395,61 @@ def _attach_rows_via_lei_expansion(
                     "entity_attach_reason": "multiple_compatible_expanded_lei",
                     "expanded_candidate_isins": sorted({isin for _, isins in matches for isin in isins}),
                     "lei_expanded_isins": sorted({isin for record, _ in matches for isin in record.isin_list}),
+                    "attachment_provenance": "needs_review",
+                    "attachment_confidence": "review",
                 }
             )
         else:
-            attached.update(
-                {
-                    "entity_attach_method": "unattached_no_anchor",
-                    "entity_attach_reason": "no_compatible_expanded_lei_anchor",
-                }
+            name_matches = _name_anchor_matches(
+                candidate=candidate,
+                openfigi=openfigi,
+                lei_expansions=lei_expansions,
+                legal_name_records=legal_name_records,
             )
+            if len(name_matches) == 1:
+                name_candidate, record, candidate_isins = name_matches[0]
+                attached.update(
+                    {
+                        "lei": record.lei,
+                        "legal_name": name_candidate.get("legal_name") or record.legal_name,
+                        "entity_lei": record.lei,
+                        "entity_legal_name": name_candidate.get("legal_name") or record.legal_name,
+                        "entity_attach_method": "name_anchor_confirmed",
+                        "entity_attach_reason": "legal_name_candidate_confirmed_by_lei_isin_expansion",
+                        "expanded_candidate_isins": candidate_isins,
+                        "lei_expanded_isins": list(record.isin_list),
+                        "lei_source": "gleif_legal_name_plus_lei_expansion",
+                        "lei_status": record.status,
+                        "candidate_lei": record.lei,
+                        "candidate_legal_name": name_candidate.get("legal_name") or "",
+                        "candidate_legal_country": name_candidate.get("legal_country") or "",
+                        "candidate_headquarters_country": name_candidate.get("headquarters_country") or "",
+                        "candidate_entity_status": name_candidate.get("entity_status") or "",
+                        "candidate_registration_status": name_candidate.get("registration_status") or "",
+                        "attachment_provenance": "name_anchor_confirmed",
+                        "attachment_confidence": "medium",
+                    }
+                )
+            elif len(name_matches) > 1:
+                attached.update(
+                    {
+                        "entity_attach_method": "unattached_ambiguous",
+                        "entity_attach_reason": "multiple_legal_name_anchor_candidates",
+                        "candidate_lei": ",".join(sorted({record.lei for _, record, _ in name_matches})),
+                        "expanded_candidate_isins": sorted({isin for _, _, isins in name_matches for isin in isins}),
+                        "attachment_provenance": "needs_review",
+                        "attachment_confidence": "review",
+                    }
+                )
+            else:
+                attached.update(
+                    {
+                        "entity_attach_method": "unattached_no_anchor",
+                        "entity_attach_reason": "no_compatible_expanded_lei_anchor",
+                        "attachment_provenance": "needs_review",
+                        "attachment_confidence": "review",
+                    }
+                )
         out.append(attached)
     return out
 
@@ -355,6 +465,8 @@ def _lei_expansion_matches(
     allowed_prefixes = allowed_isin_prefixes_for_listing(candidate)
     listing_name = _best_listing_name(candidate, openfigi)
     for lei, record in sorted(lei_expansions.items()):
+        if lei not in direct_lei_names:
+            continue
         if record.status != "success":
             continue
         candidate_isins = [
@@ -369,6 +481,65 @@ def _lei_expansion_matches(
             continue
         matches.append((record, candidate_isins))
     return matches
+
+
+def _name_anchor_matches(
+    *,
+    candidate: ListingCandidate,
+    openfigi: OpenFigiMapping | None,
+    lei_expansions: dict[str, GleifLeiIsinRecord],
+    legal_name_records: dict[str, GleifLegalNameRecord],
+) -> list[tuple[dict[str, Any], GleifLeiIsinRecord, list[str]]]:
+    listing_name = _best_listing_name(candidate, openfigi)
+    normalized_listing_name = normalize_legal_name_conservative(listing_name)
+    record = legal_name_records.get(_symbol(normalized_listing_name))
+    if not record or record.status != "success":
+        return []
+    allowed_prefixes = allowed_isin_prefixes_for_listing(candidate)
+    matches: list[tuple[dict[str, Any], GleifLeiIsinRecord, list[str]]] = []
+    for name_candidate in record.candidates:
+        lei = _symbol(name_candidate.get("lei"))
+        expansion = lei_expansions.get(lei)
+        if not expansion or expansion.status != "success":
+            continue
+        if not _legal_name_candidate_acceptable(
+            name_candidate=name_candidate,
+            normalized_listing_name=normalized_listing_name,
+            allowed_prefixes=allowed_prefixes,
+        ):
+            continue
+        candidate_isins = [
+            isin
+            for isin in expansion.isin_list
+            if not allowed_prefixes or isin[:2] in allowed_prefixes
+        ]
+        if not candidate_isins:
+            continue
+        matches.append((name_candidate, expansion, candidate_isins))
+    return matches
+
+
+def _legal_name_candidate_acceptable(
+    *,
+    name_candidate: dict[str, Any],
+    normalized_listing_name: str,
+    allowed_prefixes: set[str],
+) -> bool:
+    if _symbol(name_candidate.get("normalized_legal_name")) != _symbol(normalized_listing_name):
+        return False
+    if _symbol(name_candidate.get("entity_status")) != "ACTIVE":
+        return False
+    if _symbol(name_candidate.get("registration_status")) not in {"ISSUED", "LAPSED"}:
+        return False
+    if not allowed_prefixes:
+        return True
+    countries = {
+        _symbol(name_candidate.get("legal_country")),
+        _symbol(name_candidate.get("headquarters_country")),
+        _symbol(name_candidate.get("jurisdiction_country")),
+    }
+    countries.discard("")
+    return bool(countries & allowed_prefixes)
 
 
 def _best_listing_name(candidate: ListingCandidate, openfigi: OpenFigiMapping | None) -> str:
@@ -426,6 +597,7 @@ def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any
     )
     direct_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "direct_isin"]
     expansion_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "lei_expansion"]
+    name_anchor_attached = [row for row in symbol_rows if row.get("entity_attach_method") == "name_anchor_confirmed"]
     ambiguous_unattached = [row for row in symbol_rows if row.get("entity_attach_method") == "unattached_ambiguous"]
     no_anchor_unattached = [row for row in symbol_rows if row.get("entity_attach_method") == "unattached_no_anchor"]
     return {
@@ -441,6 +613,7 @@ def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any
         "lei_expanded_isin_count": len(expanded_isins),
         "listings_attached_direct_isin": len(direct_attached),
         "listings_attached_via_lei_expansion": len(expansion_attached),
+        "listings_attached_name_anchor_confirmed": len(name_anchor_attached),
         "listings_unattached_no_anchor": len(no_anchor_unattached),
         "listings_unattached_ambiguous": len(ambiguous_unattached),
         "acceptance_pairs_grouped": len(grouped_pairs),
@@ -448,6 +621,9 @@ def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any
             [row for row in grouped_pairs if row.get("grouping_path") == "direct_anchor_plus_lei_expansion"]
         ),
         "pairs_grouped_direct_lei": len([row for row in grouped_pairs if row.get("grouping_path") == "direct_lei"]),
+        "pairs_grouped_name_anchor_confirmed": len(
+            [row for row in grouped_pairs if row.get("grouping_path") == "name_anchor_confirmed"]
+        ),
         "pairs_blocked_no_valid_anchor": len(
             [row for row in pair_rows if not row.get("grouped") and row.get("reason") == "no_valid_anchor_isin"]
         ),
@@ -498,6 +674,8 @@ def _grouping_path(*, grouped: bool, left_method: str, right_method: str) -> str
     if not grouped:
         return ""
     methods = {left_method, right_method}
+    if "name_anchor_confirmed" in methods:
+        return "name_anchor_confirmed"
     if "lei_expansion" in methods:
         return "direct_anchor_plus_lei_expansion"
     if methods == {"direct_isin"}:
@@ -542,72 +720,8 @@ def _is_adr_like(row: dict[str, Any]) -> bool:
 
 
 def _names_compatible(listing_name: str, legal_name: str) -> bool:
-    listing_tokens = _name_tokens(listing_name)
-    legal_tokens = _name_tokens(legal_name)
-    if not listing_tokens or not legal_tokens:
-        return False
-    overlap = listing_tokens & legal_tokens
-    if len(overlap) >= 2:
-        return True
-    return bool(overlap and next(iter(legal_tokens)) in overlap)
-
-
-def _name_tokens(value: str) -> set[str]:
-    text = str(value or "").upper()
-    replacements = {
-        "-": " ",
-        "/": " ",
-        ".": " ",
-        ",": " ",
-        "(": " ",
-        ")": " ",
-    }
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-    raw_tokens = [token.strip() for token in text.split() if token.strip()]
-    aliases = {
-        "CORP": "CORPORATION",
-        "CO": "COMPANY",
-        "NV": "N",
-        "N.V": "N",
-        "A/S": "AS",
-    }
-    stop = {
-        "A",
-        "B",
-        "C",
-        "CL",
-        "CLASS",
-        "COMMON",
-        "STOCK",
-        "ADR",
-        "ADS",
-        "SPON",
-        "SPONS",
-        "SPONSORED",
-        "DEPOSITARY",
-        "RECEIPT",
-        "REG",
-        "SHS",
-        "INC",
-        "PLC",
-        "LTD",
-        "LIMITED",
-        "SE",
-        "SA",
-        "AG",
-        "AS",
-        "N",
-        "V",
-        "THE",
-    }
-    tokens = set()
-    for token in raw_tokens:
-        normalized = aliases.get(token, token)
-        if len(normalized) < 3 or normalized in stop:
-            continue
-        tokens.add(normalized)
-    return tokens
+    normalized_listing = normalize_legal_name_conservative(listing_name)
+    return bool(normalized_listing and normalized_listing == normalize_legal_name_conservative(legal_name))
 
 
 def _tail_without_anchor_examples(rows: list[dict[str, Any]], *, limit: int = 10) -> list[dict[str, str]]:

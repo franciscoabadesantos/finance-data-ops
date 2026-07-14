@@ -20,6 +20,7 @@ if str(SRC_PATH) not in sys.path:
 from finance_data_ops.identity.chain import (
     acceptance_fixture_candidates,
     acceptance_gleif_fixtures,
+    acceptance_gleif_legal_name_fixtures,
     acceptance_gleif_lei_isin_fixtures,
     acceptance_isin_fixtures,
     acceptance_openfigi_fixtures,
@@ -28,6 +29,7 @@ from finance_data_ops.identity.chain import (
 )
 from finance_data_ops.identity.gleif import GleifIsinLeiClient
 from finance_data_ops.identity.isin import YFinanceIsinClient
+from finance_data_ops.identity.names import legal_name_query_from_listing
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
 from finance_data_ops.identity.universe import read_postgres_candidate_universe
@@ -46,12 +48,14 @@ def main() -> None:
         isin_fixtures = acceptance_isin_fixtures()
         gleif_fixtures = acceptance_gleif_fixtures()
         gleif_lei_isin_fixtures = acceptance_gleif_lei_isin_fixtures()
+        gleif_legal_name_fixtures = acceptance_gleif_legal_name_fixtures()
     else:
         candidates = read_postgres_candidate_universe(database_dsn=settings.database_dsn, symbols=symbols)
         openfigi_fixtures = None
         isin_fixtures = None
         gleif_fixtures = None
         gleif_lei_isin_fixtures = None
+        gleif_legal_name_fixtures = None
 
     selected_symbols = [candidate.symbol for candidate in candidates]
     openfigi_client = OpenFigiClient(
@@ -68,6 +72,8 @@ def main() -> None:
         gleif_fixture_mappings.update(gleif_fixtures)
     if gleif_lei_isin_fixtures:
         gleif_fixture_mappings.update(gleif_lei_isin_fixtures)
+    if gleif_legal_name_fixtures:
+        gleif_fixture_mappings.update(gleif_legal_name_fixtures)
     gleif_client = GleifIsinLeiClient(
         fixture_mappings=gleif_fixture_mappings or None,
         offline=args.offline,
@@ -76,8 +82,28 @@ def main() -> None:
     gleif_records = gleif_client.lookup_isins(
         [record.isin for record in isin_records if record.isin and record.status == "success"]
     )
+    direct_lei_by_isin = {record.isin: record.lei for record in gleif_records if record.lei and record.status == "success"}
+    openfigi_by_symbol = {mapping.symbol: mapping for mapping in openfigi_mappings}
+    direct_lei_symbols = {
+        record.symbol
+        for record in isin_records
+        if record.isin and record.status == "success" and direct_lei_by_isin.get(record.isin)
+    }
+    legal_name_records = gleif_client.search_legal_names(
+        [
+            legal_name_query_from_listing((openfigi_by_symbol.get(candidate.symbol).name if openfigi_by_symbol.get(candidate.symbol) else "") or candidate.name)
+            for candidate in candidates
+            if candidate.symbol not in direct_lei_symbols
+        ]
+    )
+    legal_name_candidate_leis = [
+        candidate["lei"]
+        for record in legal_name_records
+        for candidate in record.candidates
+        if candidate.get("lei")
+    ]
     gleif_lei_isin_records = gleif_client.lookup_lei_isins(
-        [record.lei for record in gleif_records if record.lei and record.status == "success"]
+        [record.lei for record in gleif_records if record.lei and record.status == "success"] + legal_name_candidate_leis
     )
     measurement = measure_entity_identity_chain(
         candidates=candidates,
@@ -85,6 +111,7 @@ def main() -> None:
         isin_records=isin_records,
         gleif_records=gleif_records,
         gleif_lei_isin_records=gleif_lei_isin_records,
+        gleif_legal_name_records=legal_name_records,
         pairs=acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=openfigi_client.batch_split_retries,
     )

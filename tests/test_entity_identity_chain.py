@@ -3,6 +3,7 @@ from __future__ import annotations
 from finance_data_ops.identity.chain import (
     acceptance_fixture_candidates,
     acceptance_gleif_fixtures,
+    acceptance_gleif_legal_name_fixtures,
     acceptance_gleif_lei_isin_fixtures,
     acceptance_isin_fixtures,
     acceptance_openfigi_fixtures,
@@ -12,6 +13,7 @@ from finance_data_ops.identity.chain import (
 from finance_data_ops.identity.models import ListingCandidate
 from finance_data_ops.identity.gleif import GleifIsinLeiClient
 from finance_data_ops.identity.isin import YFinanceIsinClient
+from finance_data_ops.identity.names import legal_name_query_from_listing, normalize_legal_name_conservative
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
 from finance_data_ops.publish.client import RecordingPublisher
@@ -22,21 +24,23 @@ def test_acceptance_fixture_chain_reports_symbol_pair_outcomes() -> None:
     summary = measurement.summary
 
     assert summary["candidate_count"] == 14
-    assert summary["isin_found_count"] == 7
-    assert summary["lei_found_count"] == 7
-    assert summary["anchor_isin_count"] == 7
-    assert summary["anchor_lei_count"] == 7
-    assert summary["listings_attached_direct_isin"] == 7
-    assert summary["listings_attached_via_lei_expansion"] == 7
+    assert summary["isin_found_count"] == 4
+    assert summary["lei_found_count"] == 4
+    assert summary["anchor_isin_count"] == 4
+    assert summary["anchor_lei_count"] == 4
+    assert summary["listings_attached_direct_isin"] == 4
+    assert summary["listings_attached_via_lei_expansion"] == 4
+    assert summary["listings_attached_name_anchor_confirmed"] == 6
     assert summary["entity_groups_formed"] == 7
     assert summary["acceptance_pairs_grouped"] == 7
-    assert summary["pairs_grouped_direct_anchor_plus_lei_expansion"] == 7
+    assert summary["pairs_grouped_direct_anchor_plus_lei_expansion"] == 4
+    assert summary["pairs_grouped_name_anchor_confirmed"] == 3
     assert summary["pairs_grouped_direct_lei"] == 0
     assert summary["pairs_blocked_no_valid_anchor"] == 0
     assert summary["adr_home_pairs_grouped"] == 4
     assert summary["share_class_pairs_grouped"] == 2
     assert summary["adrs_mapping_to_depositary_or_ambiguous_lei_count"] == 0
-    assert summary["unresolved_no_isin_count"] == 5
+    assert summary["unresolved_no_isin_count"] == 6
     assert summary["unresolved_no_lei_count"] == 0
 
     by_pair = {tuple(row["pair"]): row for row in measurement.pair_rows}
@@ -46,8 +50,11 @@ def test_acceptance_fixture_chain_reports_symbol_pair_outcomes() -> None:
     assert by_pair[("NVO", "NOVO-B.CO")]["grouped"] is True
     assert by_pair[("RIO", "RIO.L")]["grouped"] is True
     assert by_pair[("0005.HK", "HSBA.L")]["grouped"] is True
+    assert by_pair[("0005.HK", "HSBA.L")]["grouping_path"] == "name_anchor_confirmed"
     assert by_pair[("GOOG", "GOOGL")]["grouped"] is True
+    assert by_pair[("GOOG", "GOOGL")]["grouping_path"] == "name_anchor_confirmed"
     assert by_pair[("LEN", "LENB")]["grouped"] is True
+    assert by_pair[("LEN", "LENB")]["grouping_path"] == "name_anchor_confirmed"
 
 
 def test_symbol_rows_include_required_measurement_fields() -> None:
@@ -166,6 +173,14 @@ def test_gleif_lei_isins_endpoint_paginates_and_parses_expanded_isins() -> None:
     assert record.isin_list == ["US02079K1079", "US02079K3059"]
 
 
+def test_legal_name_query_preserves_corporate_suffix_but_confirmation_normalizes_it() -> None:
+    assert legal_name_query_from_listing("ALPHABET INC-CL C") == "Alphabet Inc"
+    assert legal_name_query_from_listing("LENNAR CORP-A") == "Lennar Corporation"
+    assert legal_name_query_from_listing("HSBC HOLDINGS PLC") == "Hsbc Holdings Plc"
+    assert normalize_legal_name_conservative("ALPHABET INC-CL C") == "ALPHABET"
+    assert normalize_legal_name_conservative("ALPHABET INC.") == "ALPHABET"
+
+
 def test_adr_isin_can_map_to_underlying_lei() -> None:
     for left, right in [("SAP", "SAP.DE"), ("ASML", "ASML.AS"), ("NVO", "NOVO-B.CO"), ("RIO", "RIO.L")]:
         measurement = _fixture_measurement([left, right])
@@ -204,11 +219,13 @@ def test_share_classes_with_different_isins_group_by_same_lei() -> None:
     measurement = _fixture_measurement(["GOOG", "GOOGL", "LEN", "LENB"])
     by_pair = {tuple(row["pair"]): row for row in measurement.pair_rows}
 
-    assert by_pair[("GOOG", "GOOGL")]["left_isin"]
-    assert by_pair[("GOOG", "GOOGL")]["right_attach_method"] == "lei_expansion"
+    assert by_pair[("GOOG", "GOOGL")]["left_isin"] == ""
+    assert by_pair[("GOOG", "GOOGL")]["left_attach_method"] == "name_anchor_confirmed"
+    assert by_pair[("GOOG", "GOOGL")]["right_attach_method"] == "name_anchor_confirmed"
     assert by_pair[("GOOG", "GOOGL")]["grouped"] is True
-    assert by_pair[("LEN", "LENB")]["left_isin"]
-    assert by_pair[("LEN", "LENB")]["right_attach_method"] == "lei_expansion"
+    assert by_pair[("LEN", "LENB")]["left_isin"] == ""
+    assert by_pair[("LEN", "LENB")]["left_attach_method"] == "name_anchor_confirmed"
+    assert by_pair[("LEN", "LENB")]["right_attach_method"] == "name_anchor_confirmed"
     assert by_pair[("LEN", "LENB")]["grouped"] is True
 
 
@@ -248,13 +265,69 @@ def test_tls_tls_ax_remains_non_merged_with_different_lei() -> None:
     assert measurement.pair_rows[0]["reason"] == "different_lei"
 
 
-def test_lenb_openfigi_not_found_can_still_group_when_isin_provider_supplies_data() -> None:
+def test_tls_tls_ax_remains_non_merged_through_name_anchor_path() -> None:
+    measurement = _fixture_measurement(
+        ["TLS", "TLS.AX"],
+        isin_fixtures={
+            "TLS": {"isin": "-", "source": "fixture_yfinance"},
+            "TLS.AX": {"isin": "-", "source": "fixture_yfinance"},
+        },
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:TELOSLEI000000001": {"legal_name": "TELOS CORPORATION", "isin_list": ["US87969B1017"]},
+            "LEI:TELSTRALEI000001": {"legal_name": "TELSTRA GROUP LTD", "isin_list": ["AU000000TLS2"]},
+        },
+        gleif_legal_name_fixtures={
+            "NAME:TELOS": {
+                "candidates": [
+                    {
+                        "lei": "TELOSLEI000000001",
+                        "legal_name": "TELOS CORPORATION",
+                        "legal_country": "US",
+                        "headquarters_country": "US",
+                        "jurisdiction": "US-DE",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            },
+            "NAME:TELSTRA GROUP": {
+                "candidates": [
+                    {
+                        "lei": "TELSTRALEI000001",
+                        "legal_name": "TELSTRA GROUP LTD",
+                        "legal_country": "AU",
+                        "headquarters_country": "AU",
+                        "jurisdiction": "AU",
+                        "entity_status": "ACTIVE",
+                        "registration_status": "ISSUED",
+                    }
+                ]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="TLS", provider_symbol="TLS", country="US", currency="USD", name="TELOS CORPORATION"),
+            ListingCandidate(symbol="TLS.AX", provider_symbol="TLS.AX", country="AU", currency="AUD", name="TELSTRA GROUP LTD"),
+        ],
+        pairs=[("TLS", "TLS.AX", "bare_collision")],
+    )
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+
+    assert rows["TLS"]["entity_attach_method"] == "name_anchor_confirmed"
+    assert rows["TLS.AX"]["entity_attach_method"] == "name_anchor_confirmed"
+    assert measurement.pair_rows[0]["grouped"] is False
+    assert measurement.pair_rows[0]["reason"] == "different_lei"
+
+
+def test_lenb_openfigi_not_found_can_still_group_when_name_anchor_is_confirmed() -> None:
     measurement = _fixture_measurement(["LEN", "LENB"])
     rows = {row["symbol"]: row for row in measurement.symbol_rows}
 
     assert rows["LENB"]["openfigi_status"] == "not_found"
     assert rows["LENB"]["isin"] == ""
-    assert rows["LENB"]["entity_attach_method"] == "lei_expansion"
+    assert rows["LENB"]["entity_attach_method"] == "name_anchor_confirmed"
+    assert rows["LENB"]["attachment_provenance"] == "name_anchor_confirmed"
+    assert rows["LENB"]["attachment_confidence"] == "medium"
     assert measurement.pair_rows[0]["grouped"] is True
 
 
@@ -314,6 +387,7 @@ def test_yfinance_suspect_isins_are_excluded_from_anchors() -> None:
         },
         gleif_fixtures=acceptance_gleif_fixtures(),
         gleif_lei_isin_fixtures=acceptance_gleif_lei_isin_fixtures(),
+        gleif_legal_name_fixtures={},
     )
 
     assert measurement.summary["anchor_isin_count"] == 0
@@ -346,6 +420,7 @@ def _fixture_measurement(
     isin_fixtures: dict | None = None,
     gleif_fixtures: dict | None = None,
     gleif_lei_isin_fixtures: dict | None = None,
+    gleif_legal_name_fixtures: dict | None = None,
     extra_candidates: list[ListingCandidate] | None = None,
     pairs: list[tuple[str, str, str]] | None = None,
 ):
@@ -376,12 +451,40 @@ def _fixture_measurement(
         if gleif_lei_isin_fixtures is not None
         else acceptance_gleif_lei_isin_fixtures()
     )
+    fixture_mappings.update(
+        gleif_legal_name_fixtures
+        if gleif_legal_name_fixtures is not None
+        else acceptance_gleif_legal_name_fixtures()
+    )
     gleif = GleifIsinLeiClient(fixture_mappings=fixture_mappings)
     gleif_records = gleif.lookup_isins(
         [record.isin for record in isin_records if record.isin and record.status == "success"]
     )
+    direct_lei_by_isin = {record.isin: record.lei for record in gleif_records if record.lei and record.status == "success"}
+    openfigi_by_symbol = {mapping.symbol: mapping for mapping in openfigi_mappings}
+    direct_lei_symbols = {
+        record.symbol
+        for record in isin_records
+        if record.isin and record.status == "success" and direct_lei_by_isin.get(record.isin)
+    }
+    legal_name_records = gleif.search_legal_names(
+        [
+            legal_name_query_from_listing(
+                (openfigi_by_symbol.get(candidate.symbol).name if openfigi_by_symbol.get(candidate.symbol) else "")
+                or candidate.name
+            )
+            for candidate in candidates
+            if candidate.symbol not in direct_lei_symbols
+        ]
+    )
     gleif_lei_isin_records = gleif.lookup_lei_isins(
         [record.lei for record in gleif_records if record.lei and record.status == "success"]
+        + [
+            candidate["lei"]
+            for record in legal_name_records
+            for candidate in record.candidates
+            if candidate.get("lei")
+        ]
     )
     selected_symbols = [candidate.symbol for candidate in candidates]
     return measure_entity_identity_chain(
@@ -390,6 +493,7 @@ def _fixture_measurement(
         isin_records=isin_records,
         gleif_records=gleif_records,
         gleif_lei_isin_records=gleif_lei_isin_records,
+        gleif_legal_name_records=legal_name_records,
         pairs=pairs if pairs is not None else acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=openfigi.batch_split_retries,
     )
