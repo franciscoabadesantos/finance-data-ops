@@ -116,7 +116,12 @@ def main() -> None:
         if candidate.get("lei")
     ]
     gleif_lei_isin_records = gleif_client.lookup_lei_isins(
-        [record.lei for record in gleif_records if record.lei and record.status == "success"] + legal_name_candidate_leis
+        _gleif_lei_expansion_lookup_leis(
+            isin_records=isin_records,
+            candidates_by_symbol=candidates_by_symbol,
+            direct_lei_by_isin=direct_lei_by_isin,
+            legal_name_candidate_leis=legal_name_candidate_leis,
+        )
     )
     measurement = measure_entity_identity_chain(
         candidates=candidates,
@@ -184,6 +189,33 @@ def _gleif_lookup_isins(isin_records) -> list[str]:
         if should_lookup and record.isin not in seen:
             out.append(record.isin)
             seen.add(record.isin)
+    return out
+
+
+def _gleif_lei_expansion_lookup_leis(
+    *,
+    isin_records,
+    candidates_by_symbol,
+    direct_lei_by_isin: dict[str, str],
+    legal_name_candidate_leis: list[str],
+) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for record in isin_records:
+        if not _direct_isin_can_skip_legal_name(
+            candidate=candidates_by_symbol.get(record.symbol),
+            record=record,
+            direct_lei_by_isin=direct_lei_by_isin,
+        ):
+            continue
+        lei = direct_lei_by_isin.get(record.isin)
+        if lei and lei not in seen:
+            out.append(lei)
+            seen.add(lei)
+    for lei in legal_name_candidate_leis:
+        if lei and lei not in seen:
+            out.append(lei)
+            seen.add(lei)
     return out
 
 

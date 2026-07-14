@@ -424,14 +424,18 @@ def _symbol_row(
         "compatible_isin_candidate_sample": [isin] if direct_entity_lei and isin_prefix_match else [],
         "legal_name_anchor_status": "not_requested_direct_isin" if direct_entity_lei else "not_evaluated",
         "legal_name_anchor_reject_reason": "",
-        "candidate_lei": direct_lei if direct_reject_reason else "",
-        "candidate_legal_name": direct_legal_name if direct_reject_reason else "",
+        "candidate_lei": "",
+        "candidate_legal_name": "",
         "candidate_legal_country": "",
         "candidate_headquarters_country": "",
         "candidate_entity_status": "",
         "candidate_registration_status": "",
         "direct_prefix_mismatch_candidate_status": "not_requested",
         "direct_prefix_mismatch_candidate_reject_reason": "",
+        "direct_prefix_mismatch_status": "not_requested",
+        "direct_prefix_mismatch_reject_reason": "",
+        "direct_prefix_mismatch_lei": "",
+        "direct_prefix_mismatch_legal_name": "",
     }
 
 
@@ -648,19 +652,25 @@ def _apply_direct_prefix_mismatch_candidate(
     if not raw_isin:
         attached["direct_prefix_mismatch_candidate_status"] = "rejected"
         attached["direct_prefix_mismatch_candidate_reject_reason"] = "missing_raw_isin"
+        attached["direct_prefix_mismatch_status"] = "rejected"
+        attached["direct_prefix_mismatch_reject_reason"] = "missing_raw_isin"
         return
 
     gleif = gleif_by_isin.get(raw_isin)
     if not gleif or gleif.status != "success" or not gleif.lei:
         attached["direct_prefix_mismatch_candidate_status"] = "rejected"
         attached["direct_prefix_mismatch_candidate_reject_reason"] = "direct_prefix_mismatch_no_gleif_lei"
+        attached["direct_prefix_mismatch_status"] = "rejected"
+        attached["direct_prefix_mismatch_reject_reason"] = "direct_prefix_mismatch_no_gleif_lei"
         return
 
+    attached["direct_prefix_mismatch_lei"] = gleif.lei
+    attached["direct_prefix_mismatch_legal_name"] = gleif.legal_name
     if not _direct_isin_name_confirmed(candidate=candidate, openfigi=openfigi, legal_name=gleif.legal_name):
         attached["direct_prefix_mismatch_candidate_status"] = "rejected"
         attached["direct_prefix_mismatch_candidate_reject_reason"] = "direct_prefix_mismatch_name_unconfirmed"
-        attached["candidate_lei"] = gleif.lei
-        attached["candidate_legal_name"] = gleif.legal_name
+        attached["direct_prefix_mismatch_status"] = "rejected"
+        attached["direct_prefix_mismatch_reject_reason"] = "direct_prefix_mismatch_name_unconfirmed"
         attached["decision_bucket"] = "needs_manual_review"
         return
 
@@ -691,6 +701,10 @@ def _apply_direct_prefix_mismatch_candidate(
             "candidate_legal_name": gleif.legal_name,
             "direct_prefix_mismatch_candidate_status": "confirmed",
             "direct_prefix_mismatch_candidate_reject_reason": "",
+            "direct_prefix_mismatch_status": "confirmed",
+            "direct_prefix_mismatch_reject_reason": "",
+            "direct_prefix_mismatch_lei": gleif.lei,
+            "direct_prefix_mismatch_legal_name": gleif.legal_name,
         }
     )
 

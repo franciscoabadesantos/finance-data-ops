@@ -21,6 +21,7 @@ from finance_data_ops.identity.names import (
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
 from finance_data_ops.publish.client import RecordingPublisher
+from scripts.measure_entity_identity_chain import _gleif_lei_expansion_lookup_leis
 
 _PREFIX_MISMATCH_ISIN_REASONS = {
     "provider_returned_alternate_market_instrument",
@@ -481,6 +482,57 @@ def test_direct_prefix_mismatch_does_not_skip_name_anchor_fallback() -> None:
         assert rows[symbol]["attachment_provenance"] == "name_anchor_confirmed"
         assert rows[symbol]["attachment_confidence"] == "medium"
     assert measurement.summary["listings_attached_name_anchor_confirmed"] == 5
+
+
+def test_prefix_mismatch_lei_is_excluded_from_main_lei_expansion_lookup() -> None:
+    candidates = {
+        "ALKS": ListingCandidate(symbol="ALKS", provider_symbol="ALKS", country="US", currency="USD"),
+    }
+    isin_records = YFinanceIsinClient(
+        fixture_isins={"ALKS": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"}},
+        offline=True,
+    ).enrich_candidates(list(candidates.values()))
+    direct_lei_by_isin = {"IE00B4BNMY34": "DIRECTWRONGLEI1"}
+
+    lookup_leis = _gleif_lei_expansion_lookup_leis(
+        isin_records=isin_records,
+        candidates_by_symbol=candidates,
+        direct_lei_by_isin=direct_lei_by_isin,
+        legal_name_candidate_leis=["ALKSLEI000001"],
+    )
+
+    assert lookup_leis == ["ALKSLEI000001"]
+    assert "DIRECTWRONGLEI1" not in lookup_leis
+
+
+def test_name_anchor_candidate_diagnostics_survive_missing_expansion_and_prefix_mismatch_failure() -> None:
+    measurement = _fixture_measurement(
+        ["ALKS"],
+        openfigi_fixtures={"ALKS": _security_fixture("ALKS", "ALKERMES PLC")},
+        isin_fixtures={"ALKS": {"isin": "IE00B4BNMY34", "source": "fixture_yfinance"}},
+        gleif_fixtures={"IE00B4BNMY34": {"lei": "DIRECTWRONGLEI1", "legal_name": "UNRELATED HOLDINGS PLC"}},
+        gleif_lei_isin_fixtures={},
+        gleif_legal_name_fixtures={
+            "NAME:ALKERMES": {
+                "candidates": [_legal_candidate("ALKSLEI000001", "ALKERMES PLC", country="US")]
+            },
+        },
+        extra_candidates=[
+            ListingCandidate(symbol="ALKS", provider_symbol="ALKS", country="US", currency="USD", name="ALKERMES PLC"),
+        ],
+        pairs=[],
+    )
+    row = measurement.symbol_rows[0]
+
+    assert row["entity_attach_method"] == "unattached_no_anchor"
+    assert row["entity_attach_reason"] == "gleif_lei_found_but_no_compatible_isin"
+    assert row["candidate_lei"] == "ALKSLEI000001"
+    assert row["candidate_legal_name"] == "ALKERMES PLC"
+    assert row["matched_compatible_isins"] == []
+    assert row["direct_prefix_mismatch_status"] == "rejected"
+    assert row["direct_prefix_mismatch_reject_reason"] == "direct_prefix_mismatch_name_unconfirmed"
+    assert row["direct_prefix_mismatch_lei"] == "DIRECTWRONGLEI1"
+    assert row["direct_prefix_mismatch_legal_name"] == "UNRELATED HOLDINGS PLC"
 
 
 def test_tls_tls_ax_remains_non_merged_with_different_lei() -> None:
@@ -1371,14 +1423,19 @@ def _fixture_measurement(
             )
         ]
     )
+    legal_name_candidate_leis = [
+        candidate["lei"]
+        for record in legal_name_records
+        for candidate in record.candidates
+        if candidate.get("lei")
+    ]
     gleif_lei_isin_records = gleif.lookup_lei_isins(
-        [record.lei for record in gleif_records if record.lei and record.status == "success"]
-        + [
-            candidate["lei"]
-            for record in legal_name_records
-            for candidate in record.candidates
-            if candidate.get("lei")
-        ]
+        _gleif_lei_expansion_lookup_leis(
+            isin_records=isin_records,
+            candidates_by_symbol=candidates_by_symbol,
+            direct_lei_by_isin=direct_lei_by_isin,
+            legal_name_candidate_leis=legal_name_candidate_leis,
+        )
     )
     selected_symbols = [candidate.symbol for candidate in candidates]
     return measure_entity_identity_chain(
