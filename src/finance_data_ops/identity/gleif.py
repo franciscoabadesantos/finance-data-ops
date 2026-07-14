@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 
-GLEIF_ISIN_MAPPING_URL = "https://api.gleif.org/api/v1/isin-mappings"
+GLEIF_LEI_RECORDS_URL = "https://api.gleif.org/api/v1/lei-records"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +56,7 @@ class GleifIsinLeiClient:
             )
         try:
             response = self.session.get(
-                GLEIF_ISIN_MAPPING_URL,
+                GLEIF_LEI_RECORDS_URL,
                 params={"filter[isin]": cleaned_isin},
                 timeout=30,
             )
@@ -124,19 +124,15 @@ def _record_from_gleif_payload(isin: str, payload: Any) -> GleifIsinLeiRecord:
     if not isinstance(first, dict):
         return GleifIsinLeiRecord(isin=isin, response_payload=payload, status="error", error_message="unexpected_gleif_item_shape")
     attributes = first.get("attributes") if isinstance(first.get("attributes"), dict) else {}
-    relationships = first.get("relationships") if isinstance(first.get("relationships"), dict) else {}
-    lei = _clean_text(
-        attributes.get("lei")
-        or attributes.get("LEI")
-        or first.get("id")
-        or _relationship_id(relationships.get("lei-record")),
-        upper=True,
-    )
+    lei = _clean_text(attributes.get("lei") or attributes.get("LEI") or first.get("id"), upper=True)
     entity = attributes.get("entity") if isinstance(attributes.get("entity"), dict) else {}
+    legal_name_value = entity.get("legalName")
+    if isinstance(legal_name_value, dict):
+        legal_name_value = legal_name_value.get("name")
     legal_name = _clean_text(
         attributes.get("legalName")
         or attributes.get("entityLegalName")
-        or entity.get("legalName")
+        or legal_name_value
         or entity.get("legalName.name")
     )
     return GleifIsinLeiRecord(
@@ -147,15 +143,6 @@ def _record_from_gleif_payload(isin: str, payload: Any) -> GleifIsinLeiRecord:
         status="success" if lei else "not_found",
         error_message="" if lei else "gleif_mapping_without_lei",
     )
-
-
-def _relationship_id(value: Any) -> str:
-    if not isinstance(value, dict):
-        return ""
-    data = value.get("data")
-    if isinstance(data, dict):
-        return _clean_text(data.get("id"), upper=True)
-    return ""
 
 
 def _clean_text(value: Any, *, upper: bool = False) -> str:

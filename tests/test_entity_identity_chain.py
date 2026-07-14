@@ -73,6 +73,61 @@ def test_isin_missing_and_lei_missing_are_measured_separately() -> None:
     assert measurement.summary["unresolved_no_lei_count"] == 1
 
 
+def test_live_like_bad_yfinance_isins_are_suspect_or_missing() -> None:
+    measurement = _fixture_measurement(
+        ["GOOG", "GOOGL", "ASML.AS", "0005.HK", "SAP.DE", "HSBA.L", "LEN", "NOVO-B.CO"],
+        isin_fixtures={
+            "GOOG": {"isin": "CA02080M1005", "source": "fixture_yfinance"},
+            "GOOGL": {"isin": "CA02080M1005", "source": "fixture_yfinance"},
+            "ASML.AS": {"isin": "AR0725224551", "source": "fixture_yfinance"},
+            "0005.HK": {"isin": "ARDEUT112257", "source": "fixture_yfinance"},
+            "SAP.DE": {"isin": "-", "source": "fixture_yfinance"},
+            "HSBA.L": {"isin": "-", "source": "fixture_yfinance"},
+            "LEN": {"isin": "-", "source": "fixture_yfinance"},
+            "NOVO-B.CO": {"isin": "-", "source": "fixture_yfinance"},
+        },
+        gleif_fixtures={},
+    )
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+
+    assert rows["GOOG"]["isin_status"] == "suspect"
+    assert rows["GOOG"]["isin_error_reason"] == "provider_returned_alternate_market_instrument"
+    assert rows["GOOG"]["isin"] == ""
+    assert rows["GOOG"]["raw_isin"] == "CA02080M1005"
+    assert rows["ASML.AS"]["isin_status"] == "suspect"
+    assert rows["0005.HK"]["isin_status"] == "suspect"
+    assert rows["SAP.DE"]["isin_status"] == "not_found"
+    assert rows["SAP.DE"]["isin_error_reason"] == "placeholder_isin"
+    assert measurement.summary["isin_suspect_count"] == 4
+    assert measurement.summary["isin_found_count"] == 0
+
+
+def test_gleif_lei_records_endpoint_fixture_parses_lei_and_legal_name() -> None:
+    session = _FakeGleifSession(
+        {
+            "data": [
+                {
+                    "id": "5493006MHB84DD0ZWV18",
+                    "attributes": {
+                        "lei": "5493006MHB84DD0ZWV18",
+                        "entity": {"legalName": {"name": "Alphabet Inc."}},
+                    },
+                }
+            ]
+        }
+    )
+    client = GleifIsinLeiClient(session=session)
+
+    record = client.lookup_isin("US02079K1079")
+
+    assert session.requested_url.endswith("/lei-records")
+    assert session.requested_params == {"filter[isin]": "US02079K1079"}
+    assert record.status == "success"
+    assert record.lei == "5493006MHB84DD0ZWV18"
+    assert record.legal_name == "Alphabet Inc."
+    assert record.response_payload is not None
+
+
 def test_adr_isin_can_map_to_underlying_lei() -> None:
     measurement = _fixture_measurement(["ASML", "ASML.AS"])
     pair = measurement.pair_rows[0]
@@ -104,12 +159,12 @@ def test_same_fuzzy_name_with_different_lei_does_not_group() -> None:
     measurement = _fixture_measurement(
         ["AAA", "AAA.L"],
         isin_fixtures={
-            "AAA": {"isin": "US0000000001", "source": "fixture_yfinance"},
-            "AAA.L": {"isin": "GB0000000002", "source": "fixture_yfinance"},
+            "AAA": {"isin": "US0000000002", "source": "fixture_yfinance"},
+            "AAA.L": {"isin": "GB0000000009", "source": "fixture_yfinance"},
         },
         gleif_fixtures={
-            "US0000000001": {"lei": "LEIUSDIFFERENT1", "legal_name": "EXAMPLE PLC"},
-            "GB0000000002": {"lei": "LEIGBDIFFERENT2", "legal_name": "EXAMPLE PLC"},
+            "US0000000002": {"lei": "LEIUSDIFFERENT1", "legal_name": "EXAMPLE PLC"},
+            "GB0000000009": {"lei": "LEIGBDIFFERENT2", "legal_name": "EXAMPLE PLC"},
         },
         pairs=[("AAA", "AAA.L", "cross_listing")],
     )
@@ -186,7 +241,9 @@ def _fixture_measurement(
     isin = YFinanceIsinClient(fixture_isins=isin_fixtures or acceptance_isin_fixtures())
     isin_records = isin.enrich_candidates(candidates)
     gleif = GleifIsinLeiClient(fixture_mappings=gleif_fixtures or acceptance_gleif_fixtures())
-    gleif_records = gleif.lookup_isins([record.isin for record in isin_records if record.isin])
+    gleif_records = gleif.lookup_isins(
+        [record.isin for record in isin_records if record.isin and record.status == "success"]
+    )
     selected_symbols = [candidate.symbol for candidate in candidates]
     return measure_entity_identity_chain(
         candidates=candidates,
@@ -196,3 +253,29 @@ def _fixture_measurement(
         pairs=pairs if pairs is not None else acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=openfigi.batch_split_retries,
     )
+
+
+class _FakeGleifSession:
+    def __init__(self, payload: object, status_code: int = 200) -> None:
+        self.payload = payload
+        self.status_code = status_code
+        self.requested_url = ""
+        self.requested_params = {}
+
+    def get(self, url: str, *, params: dict, timeout: int) -> "_FakeGleifResponse":
+        self.requested_url = url
+        self.requested_params = dict(params)
+        return _FakeGleifResponse(self.payload, self.status_code)
+
+
+class _FakeGleifResponse:
+    def __init__(self, payload: object, status_code: int) -> None:
+        self.payload = payload
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self) -> object:
+        return self.payload

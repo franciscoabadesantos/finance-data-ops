@@ -185,7 +185,9 @@ def _symbol_row(
     gleif_by_isin: dict[str, GleifIsinLeiRecord],
 ) -> dict[str, Any]:
     request_payload = dict((openfigi.payload if openfigi else {}) or {})
-    isin = _symbol(isin_record.isin if isin_record else "")
+    raw_isin = _symbol(isin_record.isin if isin_record else "")
+    isin_status = isin_record.status if isin_record else "missing"
+    isin = raw_isin if isin_status == "success" else ""
     gleif = gleif_by_isin.get(isin)
     return {
         "symbol": symbol,
@@ -198,7 +200,9 @@ def _symbol_row(
         "shareClassFIGI": openfigi.share_class_figi if openfigi else "",
         "security_type": openfigi.security_type if openfigi else "",
         "isin_source": isin_record.source if isin_record and isin_record.isin else "",
-        "isin_status": isin_record.status if isin_record else "missing",
+        "isin_status": isin_status,
+        "isin_error_reason": isin_record.error_message if isin_record else "",
+        "raw_isin": raw_isin,
         "isin": isin,
         "lei_source": gleif.source if gleif and gleif.lei else "",
         "lei_status": gleif.status if gleif else ("not_requested" if not isin else "missing"),
@@ -228,7 +232,8 @@ def _pair_row(left: str, right: str, pair_type: str, rows_by_symbol: dict[str, d
 
 def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any]], batch_split_retries: int) -> dict[str, Any]:
     candidate_count = len(symbol_rows)
-    isin_found = len([row for row in symbol_rows if row.get("isin")])
+    isin_found = len([row for row in symbol_rows if row.get("isin") and row.get("isin_status") == "success"])
+    isin_suspect_rows = [row for row in symbol_rows if row.get("isin_status") == "suspect"]
     lei_found = len([row for row in symbol_rows if row.get("lei")])
     lei_groups: dict[str, list[str]] = {}
     for row in symbol_rows:
@@ -240,6 +245,8 @@ def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any
         "candidate_count": candidate_count,
         "isin_found_count": isin_found,
         "isin_found_rate": _rate(isin_found, candidate_count),
+        "isin_suspect_count": len(isin_suspect_rows),
+        "isin_suspect_reasons": _reason_counts(isin_suspect_rows),
         "lei_found_count": lei_found,
         "lei_found_rate_among_isins": _rate(lei_found, isin_found),
         "entity_groups_formed": len([symbols for symbols in lei_groups.values() if len(symbols) > 1]),
@@ -253,7 +260,7 @@ def _summary(*, symbol_rows: list[dict[str, Any]], pair_rows: list[dict[str, Any
                 if _is_adr_like(row) and _symbol(row.get("lei_role")) in {"DEPOSITARY", "AMBIGUOUS"}
             ]
         ),
-        "unresolved_no_isin_count": len([row for row in symbol_rows if not row.get("isin")]),
+        "unresolved_no_isin_count": len([row for row in symbol_rows if not row.get("isin") and row.get("isin_status") != "suspect"]),
         "unresolved_no_lei_count": len([row for row in symbol_rows if row.get("isin") and not row.get("lei")]),
         "openfigi_not_found_count": len([row for row in symbol_rows if row.get("openfigi_status") == "not_found"]),
         "batch_split_retries": int(batch_split_retries),
@@ -315,6 +322,14 @@ def _rate(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return round(float(numerator) / float(denominator), 4)
+
+
+def _reason_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        reason = str(row.get("isin_error_reason") or "unknown")
+        counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _symbol(value: Any) -> str:

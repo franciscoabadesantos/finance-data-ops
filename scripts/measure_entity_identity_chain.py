@@ -61,7 +61,9 @@ def main() -> None:
     isin_client = YFinanceIsinClient(fixture_isins=isin_fixtures, offline=args.offline)
     isin_records = isin_client.enrich_candidates(candidates)
     gleif_client = GleifIsinLeiClient(fixture_mappings=gleif_fixtures, offline=args.offline)
-    gleif_records = gleif_client.lookup_isins([record.isin for record in isin_records if record.isin])
+    gleif_records = gleif_client.lookup_isins(
+        [record.isin for record in isin_records if record.isin and record.status == "success"]
+    )
     measurement = measure_entity_identity_chain(
         candidates=candidates,
         openfigi_mappings=openfigi_mappings,
