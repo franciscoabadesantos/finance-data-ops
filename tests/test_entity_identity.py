@@ -57,7 +57,7 @@ def test_yahoo_suffixes_normalize_for_openfigi_requests() -> None:
         "NOVO-B.CO": ("NOVOB", "DC"),
         "TLS.AX": ("TLS", "AU"),
         "HSBA.L": ("HSBA", "LN"),
-        "0005.HK": ("0005", "HK"),
+        "0005.HK": ("5", "HK"),
         "7203.T": ("7203", "JT"),
         "RY.TO": ("RY", "CN"),
         "MSFT": ("MSFT", "US"),
@@ -76,6 +76,21 @@ def test_yahoo_suffixes_normalize_for_openfigi_requests() -> None:
         assert request.payload["exchCode"] == exch_code
         assert "micCode" not in request.payload
         assert "marketSecDes" not in request.payload
+
+
+def test_hong_kong_numeric_ticker_strips_leading_zeroes_only_for_openfigi_request() -> None:
+    request = build_openfigi_request(
+        ListingCandidate(
+            symbol="0005.HK",
+            provider_symbol="0005.HK",
+            country="HK",
+            currency="HKD",
+        )
+    )
+
+    assert request.symbol == "0005.HK"
+    assert request.payload["idValue"] == "5"
+    assert request.payload["exchCode"] == "HK"
 
 
 def test_candidate_universe_treats_pandas_nan_as_missing() -> None:

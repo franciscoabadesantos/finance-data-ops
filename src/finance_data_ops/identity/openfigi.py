@@ -335,6 +335,8 @@ def _ticker_without_suffix(symbol: str, suffix: str) -> str:
     if not suffix:
         return symbol
     ticker = symbol[: -len(suffix)]
+    if suffix == ".HK" and ticker.isdigit():
+        return str(int(ticker))
     if suffix == ".CO":
         return ticker.replace("-", "").replace(".", "")
     return ticker
