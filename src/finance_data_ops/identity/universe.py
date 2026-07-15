@@ -23,9 +23,11 @@ def build_candidate_universe_from_frames(
     market_price_daily: pd.DataFrame | None = None,
     technical_features_daily: pd.DataFrame | None = None,
     symbols: list[str] | None = None,
+    tracked_only: bool = False,
 ) -> list[ListingCandidate]:
     price_symbols = _symbol_set(market_price_daily, ("symbol", "ticker"))
     technical_symbols = _symbol_set(technical_features_daily, ("symbol", "ticker"))
+    explicitly_tracked_symbols = _explicitly_tracked_symbol_set(ticker_readiness)
     by_symbol: dict[str, dict[str, Any]] = {}
 
     for row in _active_registry_rows(ticker_registry):
@@ -113,6 +115,8 @@ def build_candidate_universe_from_frames(
     for symbol, row in sorted(by_symbol.items()):
         if selected and symbol not in selected:
             continue
+        if tracked_only and symbol not in explicitly_tracked_symbols:
+            continue
         out.append(
             ListingCandidate(
                 symbol=symbol,
@@ -135,6 +139,7 @@ def read_local_candidate_universe(
     *,
     cache_root: str | Path,
     symbols: list[str] | None = None,
+    tracked_only: bool = False,
 ) -> list[ListingCandidate]:
     return build_candidate_universe_from_frames(
         ticker_registry=read_parquet_table("ticker_registry", cache_root=cache_root, required=False),
@@ -156,6 +161,7 @@ def read_local_candidate_universe(
             cache_root=cache_root,
         ),
         symbols=symbols,
+        tracked_only=tracked_only,
     )
 
 
@@ -163,6 +169,7 @@ def read_postgres_candidate_universe(
     *,
     database_dsn: str,
     symbols: list[str] | None = None,
+    tracked_only: bool = False,
 ) -> list[ListingCandidate]:
     if not database_dsn:
         raise ValueError("DATA_OPS_DATABASE_URL is required for --source postgres.")
@@ -255,6 +262,7 @@ def read_postgres_candidate_universe(
                 ("symbol", "ticker"),
             ),
             symbols=symbols,
+            tracked_only=tracked_only,
         )
 
 
@@ -326,6 +334,17 @@ def _tracked_readiness_rows(frame: pd.DataFrame | None) -> list[dict[str, Any]]:
         if status and status not in {"untracked", "not_ready", "not_materialized"}:
             rows.append(row)
     return rows
+
+
+def _explicitly_tracked_symbol_set(frame: pd.DataFrame | None) -> set[str]:
+    out: set[str] = set()
+    for row in _frame_records(frame):
+        if _nullable_bool(row.get("is_tracked")) is not True:
+            continue
+        symbol = _first_symbol(row.get("symbol"), row.get("ticker"), row.get("entity_id"))
+        if symbol:
+            out.add(symbol)
+    return out
 
 
 def _query_optional_table(conn: Any, table_name: str, columns: list[str]) -> pd.DataFrame:

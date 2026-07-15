@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from finance_data_ops.identity.chain import (
@@ -35,7 +37,9 @@ from finance_data_ops.identity.publisher import (
     publish_entity_identity_raw_caches,
     publish_entity_identity_side_by_side,
 )
+from finance_data_ops.identity.raw_cache import RawCacheSnapshot
 from finance_data_ops.publish.client import RecordingPublisher
+from scripts import measure_entity_identity_chain as measure_script
 from scripts.measure_entity_identity_chain import (
     _audit_forward_lookup_isins,
     _gleif_lei_expansion_lookup_leis,
@@ -2063,6 +2067,74 @@ def test_controlled_entity_publish_dry_run_writes_nothing_and_reports_counts() -
     assert publisher.inserts == []
 
 
+def test_postgres_offline_without_raw_cache_keeps_existing_offline_not_found_behavior(monkeypatch) -> None:
+    candidates = acceptance_fixture_candidates(symbols=["SAP"])
+    monkeypatch.setattr(measure_script, "read_postgres_candidate_universe", lambda **_kwargs: candidates)
+
+    measurement = measure_script.build_entity_identity_measurement(
+        args=_measurement_args(source="postgres", offline=True, use_raw_cache=False, symbols=["SAP"]),
+        settings=SimpleNamespace(database_dsn="postgresql://example.invalid/db", cache_root=None),
+    )
+
+    sap = next(row for row in measurement.symbol_rows if row["symbol"] == "SAP")
+    assert sap["openfigi_status"] == "not_found"
+    assert measurement.openfigi_cache_rows[0]["error_message"] == "dry_run_without_fixture"
+
+
+def test_postgres_offline_with_raw_cache_attaches_from_cache_without_live_refresh(monkeypatch) -> None:
+    cached_measurement = _fixture_measurement(["SAP", "SAP.DE"])
+    candidates = acceptance_fixture_candidates(symbols=["SAP", "SAP.DE"])
+    snapshot = RawCacheSnapshot(
+        openfigi_rows=cached_measurement.openfigi_cache_rows,
+        listing_isin_rows=cached_measurement.isin_cache_rows,
+        gleif_isin_lei_rows=cached_measurement.gleif_cache_rows,
+        gleif_lei_isin_rows=cached_measurement.gleif_lei_isin_cache_rows,
+        gleif_entity_rows=[],
+    )
+    monkeypatch.setattr(measure_script, "read_postgres_candidate_universe", lambda **_kwargs: candidates)
+    monkeypatch.setattr(measure_script, "read_postgres_raw_cache_snapshot", lambda **_kwargs: snapshot)
+
+    measurement = measure_script.build_entity_identity_measurement(
+        args=_measurement_args(source="postgres", offline=True, use_raw_cache=True, symbols=["SAP,SAP.DE"]),
+        settings=SimpleNamespace(database_dsn="postgresql://example.invalid/db", cache_root=None),
+    )
+
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+    assert rows["SAP"]["entity_attach_method"] == "direct_isin"
+    assert rows["SAP.DE"]["entity_attach_method"] == "lei_expansion"
+    assert measurement.summary["raw_cache_enabled"] is True
+    assert measurement.summary["openfigi_cached_current_request_hash_count"] == 2
+    assert measurement.summary["listing_isin_cached_count"] == 2
+
+
+def test_postgres_offline_with_raw_cache_reports_cache_miss_explicitly(monkeypatch) -> None:
+    candidates = acceptance_fixture_candidates(symbols=["SAP"])
+    snapshot = RawCacheSnapshot(
+        openfigi_rows=[],
+        listing_isin_rows=[],
+        gleif_isin_lei_rows=[],
+        gleif_lei_isin_rows=[],
+        gleif_entity_rows=[],
+    )
+    monkeypatch.setattr(measure_script, "read_postgres_candidate_universe", lambda **_kwargs: candidates)
+    monkeypatch.setattr(measure_script, "read_postgres_raw_cache_snapshot", lambda **_kwargs: snapshot)
+
+    measurement = measure_script.build_entity_identity_measurement(
+        args=_measurement_args(source="postgres", offline=True, use_raw_cache=True, symbols=["SAP"]),
+        settings=SimpleNamespace(database_dsn="postgresql://example.invalid/db", cache_root=None),
+    )
+
+    sap = next(row for row in measurement.symbol_rows if row["symbol"] == "SAP")
+    assert sap["openfigi_status"] == "not_found"
+    assert measurement.openfigi_cache_rows[0]["error_message"] == "cache_miss"
+    assert measurement.isin_cache_rows[0]["error_message"] == "cache_miss"
+    assert measurement.summary["openfigi_cache_miss_count"] == 1
+    assert measurement.summary["cache_missing_samples"]["openfigi"] == ["SAP"]
+    publish_result = publish_entity_identity_raw_caches(publisher=RecordingPublisher(), measurement=measurement)
+    assert publish_result["source_cache.openfigi_mapping_raw"]["rows"] == 0
+    assert publish_result["source_cache.listing_isin_raw"]["rows"] == 0
+
+
 def test_controlled_entity_publish_blocks_when_gate_not_ready() -> None:
     measurement = _fixture_measurement(
         ["6701.T"],
@@ -2530,6 +2602,34 @@ class _FailOnTablePublisher(RecordingPublisher):
         if table == self.table_to_fail:
             raise RuntimeError(f"simulated failure for {table}")
         return super().upsert(table, rows, on_conflict=on_conflict)
+
+
+def _measurement_args(
+    *,
+    source: str = "fixtures",
+    offline: bool = True,
+    use_raw_cache: bool = False,
+    refresh_cache_misses: bool = False,
+    tracked_only: bool = False,
+    symbols: list[str] | None = None,
+):
+    return SimpleNamespace(
+        symbols=symbols or [],
+        source=source,
+        offline=offline,
+        use_raw_cache=use_raw_cache,
+        refresh_cache_misses=refresh_cache_misses,
+        tracked_only=tracked_only,
+        apply_cache=False,
+        cache_root=None,
+        batch_size=None,
+        request_sleep_seconds=0.0,
+        gleif_page_size=200,
+        gleif_request_sleep_seconds=0.0,
+        gleif_lei_isin_max_retries=0,
+        gleif_retry_backoff_seconds=0.0,
+        gleif_retry_jitter_seconds=0.0,
+    )
 
 
 def _fixture_measurement(

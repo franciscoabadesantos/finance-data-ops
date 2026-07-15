@@ -135,6 +135,39 @@ creating indexes, and applying conditional worker/read grants. It does not write
 
 Raw cache publication uses idempotent upserts. If a cache-only apply fails partway through, earlier cache table writes
 may already be committed by the Postgres publisher and the same cache apply can be rerun after fixing the failing table.
+Synthetic `cache_miss` rows emitted by offline cache-read measurement are diagnostics only and are not written as raw
+facts.
+
+Entity identity full-universe cache-read dry-run:
+
+```bash
+python scripts/measure_entity_identity_chain.py --source postgres --tracked-only --offline --use-raw-cache
+python scripts/publish_entity_identity_side_by_side.py --source postgres --tracked-only --offline --use-raw-cache
+```
+
+`--tracked-only` restricts the Postgres universe to `feature_store.ticker_readiness.is_tracked = true`. In
+`--offline --use-raw-cache` mode the commands read `source_cache.openfigi_mapping_raw`, `source_cache.listing_isin_raw`,
+`source_cache.gleif_isin_lei_raw`, `source_cache.gleif_lei_isin_raw`, and cached GLEIF entity rows if present. No
+OpenFIGI, yfinance, or GLEIF live calls are made, and no data is written without the existing apply flags. The summary
+includes raw-cache coverage and samples of missing OpenFIGI, listing ISIN, GLEIF ISIN-to-LEI, GLEIF LEI-to-ISIN, and
+legal-name cache facts.
+
+Entity identity cache-fill for missing raw facts remains separate from entity publication:
+
+```bash
+python scripts/publish_entity_identity_side_by_side.py \
+  --source postgres \
+  --tracked-only \
+  --use-raw-cache \
+  --refresh-live \
+  --refresh-cache-misses \
+  --gleif-request-sleep-seconds 7 \
+  --apply-caches
+```
+
+This reads cache first, refreshes only cache misses through the live providers, and upserts only raw cache tables.
+`--apply-entities` is a separate operation and must not be combined until the publication gate for the measured scope is
+green.
 
 Read-only verification after schema apply:
 

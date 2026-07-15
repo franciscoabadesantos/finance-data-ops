@@ -191,6 +191,28 @@ def test_candidate_universe_uses_entity_attributes_static_name_metadata() -> Non
     assert candidates[0].name == "Samsung Electronics Co Ltd"
 
 
+def test_candidate_universe_tracked_only_uses_explicit_is_tracked_rows() -> None:
+    candidates = build_candidate_universe_from_frames(
+        ticker_registry=pd.DataFrame(
+            [
+                {"input_symbol": "AAPL", "status": "active", "promotion_status": "validated_full"},
+                {"input_symbol": "MSFT", "status": "active", "promotion_status": "validated_full"},
+                {"input_symbol": "TSLA", "status": "active", "promotion_status": "validated_full"},
+            ]
+        ),
+        ticker_readiness=pd.DataFrame(
+            [
+                {"symbol": "AAPL", "is_tracked": True},
+                {"symbol": "MSFT", "is_tracked": False, "market_data_available": True},
+            ]
+        ),
+        market_price_daily=pd.DataFrame([{"symbol": "TSLA"}]),
+        tracked_only=True,
+    )
+
+    assert [candidate.symbol for candidate in candidates] == ["AAPL"]
+
+
 def test_openfigi_413_batch_is_split_without_poisoning_whole_batch() -> None:
     candidates = [_candidate("AAA"), _candidate("BBB"), _candidate("CCC")]
     client = OpenFigiClient(

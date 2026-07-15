@@ -60,7 +60,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols", action="append", default=[], help="Optional comma-separated symbol subset.")
     parser.add_argument("--source", choices=["postgres", "fixtures"], default="fixtures")
     parser.add_argument("--offline", action="store_true", help="Do not call live OpenFIGI/yfinance/GLEIF APIs.")
+    parser.add_argument("--use-raw-cache", action="store_true", help="Read source_cache raw facts before using live providers.")
     parser.add_argument("--refresh-live", action="store_true", help="Explicitly allow live OpenFIGI/yfinance/GLEIF refresh.")
+    parser.add_argument(
+        "--refresh-cache-misses",
+        action="store_true",
+        help="With --use-raw-cache and --refresh-live, call providers only for cache misses.",
+    )
+    parser.add_argument(
+        "--tracked-only",
+        action="store_true",
+        help="For --source postgres, use feature_store.ticker_readiness rows where is_tracked is true.",
+    )
     parser.add_argument("--apply-caches", action="store_true", help="Upsert raw fact cache tables before entity publication.")
     parser.add_argument("--apply-entities", action="store_true", help="Upsert side-by-side entity tables. Requires green gate.")
     parser.add_argument("--batch-id", default=None, help="Optional operator-provided publication batch id.")

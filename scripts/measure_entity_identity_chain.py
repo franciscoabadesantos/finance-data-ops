@@ -29,9 +29,16 @@ from finance_data_ops.identity.chain import (
 )
 from finance_data_ops.identity.gleif import GleifIsinLeiClient
 from finance_data_ops.identity.isin import YFinanceIsinClient, isin_prefix_policy_for_listing
-from finance_data_ops.identity.names import legal_name_query_variants_from_listing
+from finance_data_ops.identity.names import legal_name_query_variants_from_listing, normalize_legal_name_conservative
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
+from finance_data_ops.identity.raw_cache import (
+    missing_candidate_symbols_from_isins,
+    missing_candidate_symbols_from_openfigi,
+    missing_record_keys,
+    merge_records_by_key,
+    read_postgres_raw_cache_snapshot,
+)
 from finance_data_ops.identity.universe import read_postgres_candidate_universe
 from finance_data_ops.publish.client import PostgresPublisher, RecordingPublisher
 from finance_data_ops.settings import load_settings
@@ -76,7 +83,11 @@ def build_entity_identity_measurement(*, args, settings=None):
         gleif_lei_isin_fixtures = acceptance_gleif_lei_isin_fixtures()
         gleif_legal_name_fixtures = acceptance_gleif_legal_name_fixtures()
     else:
-        candidates = read_postgres_candidate_universe(database_dsn=settings.database_dsn, symbols=symbols)
+        candidates = read_postgres_candidate_universe(
+            database_dsn=settings.database_dsn,
+            symbols=symbols,
+            tracked_only=bool(getattr(args, "tracked_only", False)),
+        )
         openfigi_fixtures = None
         isin_fixtures = None
         gleif_fixtures = None
@@ -84,6 +95,14 @@ def build_entity_identity_measurement(*, args, settings=None):
         gleif_legal_name_fixtures = None
 
     selected_symbols = [candidate.symbol for candidate in candidates]
+    if getattr(args, "use_raw_cache", False):
+        return _build_measurement_with_raw_cache(
+            args=args,
+            candidates=candidates,
+            selected_symbols=selected_symbols,
+            settings=settings,
+        )
+
     openfigi_client = OpenFigiClient(
         fixture_mappings=openfigi_fixtures,
         dry_run=args.offline,
@@ -178,11 +197,170 @@ def build_entity_identity_measurement(*, args, settings=None):
     return measurement
 
 
+def _build_measurement_with_raw_cache(*, args, candidates, selected_symbols: list[str], settings):
+    raw_cache = read_postgres_raw_cache_snapshot(database_dsn=settings.database_dsn, candidates=candidates)
+    live_miss_refresh = bool(getattr(args, "refresh_cache_misses", False)) and not bool(args.offline)
+
+    openfigi_mappings = raw_cache.openfigi_mappings_for_candidates(candidates)
+    batch_split_retries = 0
+    if live_miss_refresh:
+        missing_symbols = missing_candidate_symbols_from_openfigi(openfigi_mappings)
+        live_candidates = [candidate for candidate in candidates if candidate.symbol in missing_symbols]
+        live_openfigi_client = OpenFigiClient(
+            dry_run=False,
+            batch_size=args.batch_size,
+            request_sleep_seconds=args.request_sleep_seconds,
+        )
+        openfigi_mappings = merge_records_by_key(
+            openfigi_mappings,
+            live_openfigi_client.map_candidates(live_candidates),
+            "symbol",
+        )
+        batch_split_retries = live_openfigi_client.batch_split_retries
+
+    isin_records = raw_cache.isin_records_for_candidates(candidates)
+    if live_miss_refresh:
+        missing_symbols = missing_candidate_symbols_from_isins(isin_records)
+        live_candidates = [candidate for candidate in candidates if candidate.symbol in missing_symbols]
+        isin_records = merge_records_by_key(
+            isin_records,
+            YFinanceIsinClient(offline=False).enrich_candidates(live_candidates),
+            "symbol",
+        )
+
+    gleif_client = GleifIsinLeiClient(
+        offline=not live_miss_refresh,
+        page_size=args.gleif_page_size,
+        request_sleep_seconds=args.gleif_request_sleep_seconds,
+        lei_isin_max_retries=args.gleif_lei_isin_max_retries,
+        retry_backoff_seconds=args.gleif_retry_backoff_seconds,
+        retry_jitter_seconds=args.gleif_retry_jitter_seconds,
+    )
+    gleif_records = raw_cache.gleif_records_for_isins(_gleif_lookup_isins(isin_records))
+    if live_miss_refresh:
+        missing_isins = missing_record_keys(gleif_records, "isin")
+        gleif_records = merge_records_by_key(gleif_records, gleif_client.lookup_isins(missing_isins), "isin")
+
+    direct_lei_by_isin = {record.isin: record.lei for record in gleif_records if record.lei and record.status == "success"}
+    openfigi_by_symbol = {mapping.symbol: mapping for mapping in openfigi_mappings}
+    candidates_by_symbol = {candidate.symbol: candidate for candidate in candidates}
+    direct_lei_symbols = {
+        record.symbol
+        for record in isin_records
+        if _direct_isin_can_skip_legal_name(
+            candidate=candidates_by_symbol.get(record.symbol),
+            record=record,
+            direct_lei_by_isin=direct_lei_by_isin,
+        )
+    }
+    legal_name_queries = [
+        query
+        for candidate in candidates
+        if candidate.symbol not in direct_lei_symbols
+        for query in legal_name_query_variants_from_listing(
+            (openfigi_by_symbol.get(candidate.symbol).name if openfigi_by_symbol.get(candidate.symbol) else ""),
+            candidate.name,
+        )
+    ]
+    legal_name_records = raw_cache.legal_name_records_for_queries(legal_name_queries)
+    if live_miss_refresh:
+        successful_names = {record.normalized_query_name for record in legal_name_records if record.status == "success"}
+        live_queries = [
+            query
+            for query in legal_name_queries
+            if query and normalize_legal_name_conservative(query) not in successful_names
+        ]
+        legal_name_records = merge_records_by_key(
+            legal_name_records,
+            gleif_client.search_legal_names(live_queries),
+            "normalized_query_name",
+        )
+
+    legal_name_candidate_leis = [
+        candidate["lei"]
+        for record in legal_name_records
+        for candidate in record.candidates
+        if candidate.get("lei")
+    ]
+    gleif_lei_expansion_plan = _gleif_lei_expansion_lookup_plan(
+        isin_records=isin_records,
+        candidates_by_symbol=candidates_by_symbol,
+        direct_lei_by_isin=direct_lei_by_isin,
+        legal_name_candidate_leis=legal_name_candidate_leis,
+    )
+    gleif_lei_isin_records = raw_cache.gleif_lei_isin_records_for_leis(gleif_lei_expansion_plan["request_leis"])
+    if live_miss_refresh:
+        missing_leis = missing_record_keys(gleif_lei_isin_records, "lei")
+        gleif_lei_isin_records = merge_records_by_key(
+            gleif_lei_isin_records,
+            gleif_client.lookup_lei_isins(missing_leis),
+            "lei",
+        )
+
+    measurement = measure_entity_identity_chain(
+        candidates=candidates,
+        openfigi_mappings=openfigi_mappings,
+        isin_records=isin_records,
+        gleif_records=gleif_records,
+        gleif_lei_isin_records=gleif_lei_isin_records,
+        gleif_legal_name_records=legal_name_records,
+        gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
+        gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
+        gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
+        pairs=acceptance_pairs_for_symbols(selected_symbols),
+        batch_split_retries=batch_split_retries,
+    )
+    audit_forward_isins = _audit_forward_lookup_isins(measurement, gleif_records)
+    if audit_forward_isins:
+        audit_records = raw_cache.gleif_records_for_isins(audit_forward_isins)
+        if live_miss_refresh:
+            missing_isins = missing_record_keys(audit_records, "isin")
+            audit_records = merge_records_by_key(audit_records, gleif_client.lookup_isins(missing_isins), "isin")
+        gleif_records = _merge_gleif_records(gleif_records, audit_records)
+        measurement = measure_entity_identity_chain(
+            candidates=candidates,
+            openfigi_mappings=openfigi_mappings,
+            isin_records=isin_records,
+            gleif_records=gleif_records,
+            gleif_lei_isin_records=gleif_lei_isin_records,
+            gleif_legal_name_records=legal_name_records,
+            gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
+            gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
+            gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
+            pairs=acceptance_pairs_for_symbols(selected_symbols),
+            batch_split_retries=batch_split_retries,
+        )
+    measurement.summary.update(
+        raw_cache.coverage_summary(
+            candidates=candidates,
+            openfigi_mappings=openfigi_mappings,
+            isin_records=isin_records,
+            gleif_records=gleif_records,
+            gleif_lei_isin_records=gleif_lei_isin_records,
+            legal_name_records=legal_name_records,
+            tracked_only=bool(getattr(args, "tracked_only", False)),
+        )
+    )
+    measurement.summary["raw_cache_refresh_misses_enabled"] = live_miss_refresh
+    return measurement
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Measure Entity Layer V0.2 anchor ISIN-to-LEI expansion identity chain.")
     parser.add_argument("--symbols", action="append", default=[], help="Optional comma-separated symbol subset.")
     parser.add_argument("--source", choices=["postgres", "fixtures"], default="fixtures")
     parser.add_argument("--offline", action="store_true", help="Do not call live OpenFIGI/yfinance/GLEIF APIs.")
+    parser.add_argument("--use-raw-cache", action="store_true", help="Read source_cache raw facts before using live providers.")
+    parser.add_argument(
+        "--refresh-cache-misses",
+        action="store_true",
+        help="With --use-raw-cache and live mode, call providers only for cache misses.",
+    )
+    parser.add_argument(
+        "--tracked-only",
+        action="store_true",
+        help="For --source postgres, use feature_store.ticker_readiness rows where is_tracked is true.",
+    )
     parser.add_argument("--apply-cache", action="store_true", help="Write only raw cache tables. Never writes entity tables.")
     parser.add_argument("--cache-root", default=None)
     parser.add_argument("--batch-size", type=int, default=None)

@@ -9,6 +9,7 @@ from typing import Any
 from finance_data_ops.identity.audit import audit_rows
 from finance_data_ops.identity.chain import EntityChainMeasurement
 from finance_data_ops.identity.models import EntityListingRecord, EntityRecord, IdentityAuditRecord, IdentityBuildResult
+from finance_data_ops.identity.raw_cache import cache_publishable_rows
 from finance_data_ops.publish.client import Publisher
 
 
@@ -48,22 +49,22 @@ def publish_entity_identity_raw_caches(
     return {
         "source_cache.openfigi_mapping_raw": publisher.upsert(
             "source_cache.openfigi_mapping_raw",
-            measurement.openfigi_cache_rows,
+            cache_publishable_rows(measurement.openfigi_cache_rows),
             on_conflict="request_hash",
         ),
         "source_cache.listing_isin_raw": publisher.upsert(
             "source_cache.listing_isin_raw",
-            measurement.isin_cache_rows,
+            cache_publishable_rows(measurement.isin_cache_rows),
             on_conflict="symbol,provider",
         ),
         "source_cache.gleif_isin_lei_raw": publisher.upsert(
             "source_cache.gleif_isin_lei_raw",
-            measurement.gleif_cache_rows,
+            cache_publishable_rows(measurement.gleif_cache_rows),
             on_conflict="isin",
         ),
         "source_cache.gleif_lei_isin_raw": publisher.upsert(
             "source_cache.gleif_lei_isin_raw",
-            measurement.gleif_lei_isin_cache_rows,
+            cache_publishable_rows(measurement.gleif_lei_isin_cache_rows),
             on_conflict="lei",
         ),
     }
@@ -341,6 +342,7 @@ def publish_entity_identity_controlled(
         batch_id=resolved_batch_id,
         scope_key=scope_key,
     )
+    cache_counts = _cache_publishable_counts(measurement)
     mode = _publication_mode(apply_caches=apply_caches, apply_entities=apply_entities)
     result: dict[str, Any] = {
         "status": "dry_run" if not (apply_caches or apply_entities) else "planned",
@@ -351,10 +353,10 @@ def publish_entity_identity_controlled(
         "planned_counts": dict(plan["planned_counts"]),
         "verification_summary": dict(plan["verification_summary"]),
         "planned_tables": {
-            "source_cache.openfigi_mapping_raw": len(measurement.openfigi_cache_rows),
-            "source_cache.listing_isin_raw": len(measurement.isin_cache_rows),
-            "source_cache.gleif_isin_lei_raw": len(measurement.gleif_cache_rows),
-            "source_cache.gleif_lei_isin_raw": len(measurement.gleif_lei_isin_cache_rows),
+            "source_cache.openfigi_mapping_raw": cache_counts["source_cache.openfigi_mapping_raw"],
+            "source_cache.listing_isin_raw": cache_counts["source_cache.listing_isin_raw"],
+            "source_cache.gleif_isin_lei_raw": cache_counts["source_cache.gleif_isin_lei_raw"],
+            "source_cache.gleif_lei_isin_raw": cache_counts["source_cache.gleif_lei_isin_raw"],
             "feature_store.entity_identity_publication_batch": 1,
             "feature_store.entity_master": len(plan["feature_store.entity_master"]),
             "feature_store.entity_listing": len(plan["feature_store.entity_listing"]),
@@ -364,10 +366,22 @@ def publish_entity_identity_controlled(
 
     if not apply_caches and not apply_entities:
         result["planned_cache_publish"] = {
-            "source_cache.openfigi_mapping_raw": {"rows": len(measurement.openfigi_cache_rows), "status": "planned"},
-            "source_cache.listing_isin_raw": {"rows": len(measurement.isin_cache_rows), "status": "planned"},
-            "source_cache.gleif_isin_lei_raw": {"rows": len(measurement.gleif_cache_rows), "status": "planned"},
-            "source_cache.gleif_lei_isin_raw": {"rows": len(measurement.gleif_lei_isin_cache_rows), "status": "planned"},
+            "source_cache.openfigi_mapping_raw": {
+                "rows": cache_counts["source_cache.openfigi_mapping_raw"],
+                "status": "planned",
+            },
+            "source_cache.listing_isin_raw": {
+                "rows": cache_counts["source_cache.listing_isin_raw"],
+                "status": "planned",
+            },
+            "source_cache.gleif_isin_lei_raw": {
+                "rows": cache_counts["source_cache.gleif_isin_lei_raw"],
+                "status": "planned",
+            },
+            "source_cache.gleif_lei_isin_raw": {
+                "rows": cache_counts["source_cache.gleif_lei_isin_raw"],
+                "status": "planned",
+            },
         }
         result["planned_entity_publish"] = {
             "feature_store.entity_master": {"rows": len(plan["feature_store.entity_master"]), "status": "planned"},
@@ -447,15 +461,25 @@ def _planned_counts(
     review_rows: list[dict[str, Any]],
     measurement: EntityChainMeasurement,
 ) -> dict[str, Any]:
+    cache_counts = _cache_publishable_counts(measurement)
     return {
-        "source_cache.openfigi_mapping_raw": len(measurement.openfigi_cache_rows),
-        "source_cache.listing_isin_raw": len(measurement.isin_cache_rows),
-        "source_cache.gleif_isin_lei_raw": len(measurement.gleif_cache_rows),
-        "source_cache.gleif_lei_isin_raw": len(measurement.gleif_lei_isin_cache_rows),
+        "source_cache.openfigi_mapping_raw": cache_counts["source_cache.openfigi_mapping_raw"],
+        "source_cache.listing_isin_raw": cache_counts["source_cache.listing_isin_raw"],
+        "source_cache.gleif_isin_lei_raw": cache_counts["source_cache.gleif_isin_lei_raw"],
+        "source_cache.gleif_lei_isin_raw": cache_counts["source_cache.gleif_lei_isin_raw"],
         "feature_store.entity_master": len(master_rows),
         "feature_store.entity_listing": len(listing_rows),
         "feature_store.entity_identity_review": len(review_rows),
         "feature_store.entity_identity_publication_batch": 1,
+    }
+
+
+def _cache_publishable_counts(measurement: EntityChainMeasurement) -> dict[str, int]:
+    return {
+        "source_cache.openfigi_mapping_raw": len(cache_publishable_rows(measurement.openfigi_cache_rows)),
+        "source_cache.listing_isin_raw": len(cache_publishable_rows(measurement.isin_cache_rows)),
+        "source_cache.gleif_isin_lei_raw": len(cache_publishable_rows(measurement.gleif_cache_rows)),
+        "source_cache.gleif_lei_isin_raw": len(cache_publishable_rows(measurement.gleif_lei_isin_cache_rows)),
     }
 
 
