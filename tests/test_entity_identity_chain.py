@@ -32,7 +32,12 @@ from finance_data_ops.identity.publisher import (
     publish_entity_identity_side_by_side,
 )
 from finance_data_ops.publish.client import RecordingPublisher
-from scripts.measure_entity_identity_chain import _gleif_lei_expansion_lookup_leis, _gleif_lei_expansion_lookup_plan
+from scripts.measure_entity_identity_chain import (
+    _audit_forward_lookup_isins,
+    _gleif_lei_expansion_lookup_leis,
+    _gleif_lei_expansion_lookup_plan,
+    _merge_gleif_records,
+)
 
 _PREFIX_MISMATCH_ISIN_REASONS = {
     "provider_returned_alternate_market_instrument",
@@ -2207,6 +2212,58 @@ def test_acronym_name_anchor_is_machine_safe_with_forward_resolved_matched_isin_
     assert row["review_status"] == "machine_verifiably_safe"
 
 
+def test_live_shaped_csl_matched_isin_forward_lookup_makes_gate_safe() -> None:
+    measurement = _fixture_measurement(
+        ["CSL.AX"],
+        extra_candidates=[
+            ListingCandidate(
+                symbol="CSL.AX",
+                provider_symbol="CSL.AX",
+                country="AU",
+                currency="AUD",
+                exchange="ASX",
+                name="CSL LTD",
+                source="test_fixture",
+            )
+        ],
+        openfigi_fixtures={"CSL.AX": _security_fixture("CSL", "CSL LTD", country="AU")},
+        isin_fixtures={"CSL.AX": {"status": "not_found", "error_message": "no_isin"}},
+        gleif_fixtures={
+            "AU000000CSL8": {
+                "lei": "529900ECSECK5ZDQTE14",
+                "legal_name": "CSL LIMITED",
+                "status": "success",
+            }
+        },
+        gleif_lei_isin_fixtures={
+            "LEI:529900ECSECK5ZDQTE14": {
+                "lei": "529900ECSECK5ZDQTE14",
+                "legal_name": "CSL LIMITED",
+                "isin_list": ["AU000000CSL8"],
+                "status": "success",
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:CSL": {
+                "status": "success",
+                "query": "CSL",
+                "candidates": [_legal_candidate("529900ECSECK5ZDQTE14", "CSL LIMITED", country="AU")],
+            }
+        },
+    )
+
+    row = measurement.symbol_rows[0]
+    audit = measurement.heuristic_attach_audit[0]
+
+    assert row["entity_attach_method"] == "name_anchor_confirmed"
+    assert row["matched_compatible_isins"] == ["AU000000CSL8"]
+    assert audit["normalized_name_acronym_only"] is True
+    assert audit["normalized_name_too_short"] is True
+    assert audit["strong_deterministic_isin_support"] is True
+    assert audit["review_status"] == "machine_verifiably_safe"
+    assert measurement.publication_gate["status"] == "ready_machine_safe"
+
+
 def test_acronym_name_anchor_without_known_isin_support_still_requires_review() -> None:
     audit = _heuristic_attach_audit(
         [
@@ -2383,7 +2440,7 @@ def _fixture_measurement(
     )
     gleif_lei_isin_records = gleif.lookup_lei_isins(gleif_lei_expansion_plan["request_leis"])
     selected_symbols = [candidate.symbol for candidate in candidates]
-    return measure_entity_identity_chain(
+    measurement = measure_entity_identity_chain(
         candidates=candidates,
         openfigi_mappings=openfigi_mappings,
         isin_records=isin_records,
@@ -2396,6 +2453,23 @@ def _fixture_measurement(
         pairs=pairs if pairs is not None else acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=openfigi.batch_split_retries,
     )
+    audit_forward_isins = _audit_forward_lookup_isins(measurement, gleif_records)
+    if audit_forward_isins:
+        gleif_records = _merge_gleif_records(gleif_records, gleif.lookup_isins(audit_forward_isins))
+        measurement = measure_entity_identity_chain(
+            candidates=candidates,
+            openfigi_mappings=openfigi_mappings,
+            isin_records=isin_records,
+            gleif_records=gleif_records,
+            gleif_lei_isin_records=gleif_lei_isin_records,
+            gleif_legal_name_records=legal_name_records,
+            gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
+            gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
+            gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
+            pairs=pairs if pairs is not None else acceptance_pairs_for_symbols(selected_symbols),
+            batch_split_retries=openfigi.batch_split_retries,
+        )
+    return measurement
 
 
 def _security_fixture(ticker: str, name: str, *, country: str = "US") -> dict:

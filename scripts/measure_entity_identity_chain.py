@@ -139,6 +139,22 @@ def main() -> None:
         pairs=acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=openfigi_client.batch_split_retries,
     )
+    audit_forward_isins = _audit_forward_lookup_isins(measurement, gleif_records)
+    if audit_forward_isins:
+        gleif_records = _merge_gleif_records(gleif_records, gleif_client.lookup_isins(audit_forward_isins))
+        measurement = measure_entity_identity_chain(
+            candidates=candidates,
+            openfigi_mappings=openfigi_mappings,
+            isin_records=isin_records,
+            gleif_records=gleif_records,
+            gleif_lei_isin_records=gleif_lei_isin_records,
+            gleif_legal_name_records=legal_name_records,
+            gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
+            gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
+            gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
+            pairs=acceptance_pairs_for_symbols(selected_symbols),
+            batch_split_retries=openfigi_client.batch_split_retries,
+        )
     output = measurement.as_dict()
     output["mode"] = "apply_cache" if args.apply_cache else "dry_run"
     output["source"] = args.source
@@ -205,6 +221,42 @@ def _gleif_lookup_isins(isin_records) -> list[str]:
             out.append(record.isin)
             seen.add(record.isin)
     return out
+
+
+def _audit_forward_lookup_isins(measurement, gleif_records) -> list[str]:
+    existing = {str(record.isin or "").strip().upper() for record in gleif_records if str(record.isin or "").strip()}
+    out: list[str] = []
+    seen: set[str] = set(existing)
+    for audit_row in measurement.heuristic_attach_audit:
+        if audit_row.get("attach_audit_kind") != "heuristic":
+            continue
+        candidate_isins = []
+        candidate_isins.extend(audit_row.get("matched_compatible_isins") or [])
+        raw_isin = audit_row.get("raw_isin")
+        if raw_isin:
+            candidate_isins.append(raw_isin)
+        listing_isin = audit_row.get("isin")
+        if listing_isin:
+            candidate_isins.append(listing_isin)
+        for isin in candidate_isins:
+            normalized = str(isin or "").strip().upper()
+            if normalized and normalized not in seen:
+                out.append(normalized)
+                seen.add(normalized)
+    return out
+
+
+def _merge_gleif_records(existing_records, new_records):
+    by_isin = {
+        str(record.isin or "").strip().upper(): record
+        for record in existing_records
+        if str(record.isin or "").strip()
+    }
+    for record in new_records:
+        isin = str(record.isin or "").strip().upper()
+        if isin:
+            by_isin[isin] = record
+    return list(by_isin.values())
 
 
 def _gleif_lei_expansion_lookup_leis(
