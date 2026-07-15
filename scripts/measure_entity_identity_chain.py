@@ -46,6 +46,26 @@ _PREFIX_MISMATCH_ISIN_REASONS = {
 def main() -> None:
     args = _parser().parse_args()
     settings = load_settings(cache_root=args.cache_root)
+    measurement = build_entity_identity_measurement(args=args, settings=settings)
+    output = measurement.as_dict()
+    output["mode"] = "apply_cache" if args.apply_cache else "dry_run"
+    output["source"] = args.source
+    if args.apply_cache:
+        settings.require_database()
+        publisher = PostgresPublisher(database_dsn=settings.database_dsn)
+        output["publish"] = publish_entity_identity_raw_caches(publisher=publisher, measurement=measurement)
+    else:
+        publisher = RecordingPublisher()
+        output["planned_cache_publish"] = publish_entity_identity_raw_caches(
+            publisher=publisher,
+            measurement=measurement,
+        )
+
+    print(json.dumps(output, indent=2, sort_keys=True, default=str))
+
+
+def build_entity_identity_measurement(*, args, settings=None):
+    settings = settings or load_settings(cache_root=getattr(args, "cache_root", None))
     symbols = _parse_symbols(args.symbols)
 
     if args.source == "fixtures":
@@ -155,21 +175,7 @@ def main() -> None:
             pairs=acceptance_pairs_for_symbols(selected_symbols),
             batch_split_retries=openfigi_client.batch_split_retries,
         )
-    output = measurement.as_dict()
-    output["mode"] = "apply_cache" if args.apply_cache else "dry_run"
-    output["source"] = args.source
-    if args.apply_cache:
-        settings.require_database()
-        publisher = PostgresPublisher(database_dsn=settings.database_dsn)
-        output["publish"] = publish_entity_identity_raw_caches(publisher=publisher, measurement=measurement)
-    else:
-        publisher = RecordingPublisher()
-        output["planned_cache_publish"] = publish_entity_identity_raw_caches(
-            publisher=publisher,
-            measurement=measurement,
-        )
-
-    print(json.dumps(output, indent=2, sort_keys=True, default=str))
+    return measurement
 
 
 def _parser() -> argparse.ArgumentParser:

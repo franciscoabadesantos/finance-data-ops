@@ -179,6 +179,7 @@ create table if not exists feature_store.entity_master (
   resolution_status text not null,
   primary_listing_symbol text,
   primary_listing_reason text,
+  publication_batch_id text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb,
@@ -187,6 +188,9 @@ create table if not exists feature_store.entity_master (
 
 create index if not exists idx_entity_master_home_country
   on feature_store.entity_master (home_country);
+
+create index if not exists idx_entity_master_publication_batch_id
+  on feature_store.entity_master (publication_batch_id);
 
 create table if not exists feature_store.entity_listing (
   symbol text primary key,
@@ -212,6 +216,7 @@ create table if not exists feature_store.entity_listing (
   review_state text,
   evidence_payload jsonb not null default '{}'::jsonb,
   source_freshness jsonb not null default '{}'::jsonb,
+  publication_batch_id text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb,
@@ -238,6 +243,9 @@ create index if not exists idx_entity_listing_share_class_figi
 create index if not exists idx_entity_listing_exchange_mic
   on feature_store.entity_listing (exchange_mic);
 
+create index if not exists idx_entity_listing_publication_batch_id
+  on feature_store.entity_listing (publication_batch_id);
+
 create table if not exists feature_store.entity_identity_audit (
   audit_id bigserial primary key,
   symbol text,
@@ -253,6 +261,7 @@ create index if not exists idx_entity_identity_audit_symbol_issue_type
 
 create table if not exists feature_store.entity_identity_review (
   review_id bigserial primary key,
+  review_key text unique,
   symbol text,
   entity_id text,
   candidate_lei text,
@@ -265,6 +274,7 @@ create table if not exists feature_store.entity_identity_review (
   reviewer_identity text,
   reviewed_at timestamptz,
   override_provenance text,
+  publication_batch_id text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   check (resolution_state in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review'))
@@ -275,6 +285,37 @@ create index if not exists idx_entity_identity_review_symbol_state
 
 create index if not exists idx_entity_identity_review_entity_id
   on feature_store.entity_identity_review (entity_id);
+
+create index if not exists idx_entity_identity_review_publication_batch_id
+  on feature_store.entity_identity_review (publication_batch_id);
+
+create table if not exists feature_store.entity_identity_publication_batch (
+  batch_id text primary key,
+  scope_key text not null default 'default',
+  source text not null default 'entity_identity_measurement',
+  mode text not null,
+  status text not null,
+  is_current boolean not null default false,
+  publication_gate jsonb not null default '{}'::jsonb,
+  summary jsonb not null default '{}'::jsonb,
+  planned_counts jsonb not null default '{}'::jsonb,
+  actual_counts jsonb not null default '{}'::jsonb,
+  verification_summary jsonb not null default '{}'::jsonb,
+  blocked_reasons jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (mode in ('dry_run', 'apply_cache', 'apply_entities', 'apply_cache_and_entities')),
+  check (status in ('planned', 'published_side_by_side', 'blocked', 'failed', 'superseded'))
+);
+
+create index if not exists idx_entity_identity_publication_batch_scope_current
+  on feature_store.entity_identity_publication_batch (scope_key, is_current);
+
+create table if not exists feature_store.entity_identity_publication_current (
+  scope_key text primary key,
+  batch_id text not null references feature_store.entity_identity_publication_batch(batch_id),
+  updated_at timestamptz not null default now()
+);
 
 create table if not exists feature_store.entity_identity_review_audit (
   audit_id bigserial primary key,
@@ -351,7 +392,9 @@ begin
          feature_store.entity_listing,
          feature_store.entity_identity_audit,
          feature_store.entity_identity_review,
-         feature_store.entity_identity_review_audit
+         feature_store.entity_identity_review_audit,
+         feature_store.entity_identity_publication_batch,
+         feature_store.entity_identity_publication_current
       to finance_data_ops_worker;
     grant usage, select on sequence feature_store.entity_identity_audit_audit_id_seq
       to finance_data_ops_worker;
@@ -371,7 +414,7 @@ begin
         read_role
       );
       execute format(
-        'grant select on feature_store.entity_master, feature_store.entity_listing, feature_store.entity_identity_audit, feature_store.entity_identity_review, feature_store.entity_identity_review_audit to %I',
+        'grant select on feature_store.entity_master, feature_store.entity_listing, feature_store.entity_identity_audit, feature_store.entity_identity_review, feature_store.entity_identity_review_audit, feature_store.entity_identity_publication_batch, feature_store.entity_identity_publication_current to %I',
         read_role
       );
     end if;

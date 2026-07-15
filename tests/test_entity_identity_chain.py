@@ -27,7 +27,9 @@ from finance_data_ops.identity.names import (
 )
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import (
+    build_entity_publication_batch_id,
     build_side_by_side_entity_publication_plan,
+    publish_entity_identity_controlled,
     publish_entity_identity_raw_caches,
     publish_entity_identity_side_by_side,
 )
@@ -2041,6 +2043,139 @@ def test_side_by_side_publication_plan_keeps_provisional_single_listing_evidence
     assert plan["feature_store.entity_master"][0]["resolution_status"] == "provisional"
     assert plan["feature_store.entity_listing"][0]["attach_method"] == "provisional_single_listing_candidate"
     assert plan["feature_store.entity_listing"][0]["resolution_status"] == "provisional"
+    assert plan["feature_store.entity_identity_publication_batch"][0]["batch_id"] == plan["batch_id"]
+    assert plan["verification_summary"]["candidate_lei_retained_provisional_count"] == 1
+
+
+def test_controlled_entity_publish_dry_run_writes_nothing_and_reports_counts() -> None:
+    measurement = _fixture_measurement(["SAP", "SAP.DE"])
+    publisher = RecordingPublisher()
+
+    result = publish_entity_identity_controlled(publisher=publisher, measurement=measurement)
+
+    assert result["status"] == "dry_run"
+    assert result["planned_counts"]["feature_store.entity_master"] == 1
+    assert result["planned_counts"]["feature_store.entity_listing"] == 2
+    assert result["verification_summary"]["unresolved_multi_listing_entities_count"] == 0
+    assert publisher.upserts == []
+    assert publisher.inserts == []
+
+
+def test_controlled_entity_publish_blocks_when_gate_not_ready() -> None:
+    measurement = _fixture_measurement(
+        ["6701.T"],
+        extra_candidates=[
+            ListingCandidate(
+                symbol="6701.T",
+                provider_symbol="6701.T",
+                country="JP",
+                currency="JPY",
+                exchange="JP",
+                name="NEC CORP",
+                source="test_fixture",
+            )
+        ],
+        openfigi_fixtures={"6701.T": _security_fixture("6701", "NEC CORP", country="JP")},
+        isin_fixtures={"6701.T": {"status": "not_found", "error_message": "no_isin"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:NEC-CORP-LEI": {
+                "lei": "NEC-CORP-LEI",
+                "legal_name": "NEC CORPORATION",
+                "isin_list": ["JP3733000008"],
+                "status": "success",
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NEC": {
+                "status": "success",
+                "query": "NEC",
+                "candidates": [_legal_candidate("NEC-CORP-LEI", "NEC CORPORATION", country="JP")],
+            }
+        },
+    )
+    publisher = RecordingPublisher()
+
+    result = publish_entity_identity_controlled(
+        publisher=publisher,
+        measurement=measurement,
+        apply_entities=True,
+    )
+
+    assert result["status"] == "blocked"
+    assert "publication_gate_not_ready" in result["publication_blockers"]
+    assert "heuristic_review_required" in result["publication_blockers"]
+    assert publisher.upserts == []
+    assert publisher.inserts == []
+
+
+def test_controlled_entity_publish_cache_first_then_side_by_side_tables() -> None:
+    measurement = _fixture_measurement(["SAP", "SAP.DE"])
+    publisher = RecordingPublisher()
+
+    result = publish_entity_identity_controlled(
+        publisher=publisher,
+        measurement=measurement,
+        apply_caches=True,
+        apply_entities=True,
+        batch_id="test-batch-1",
+    )
+
+    assert result["status"] == "published_side_by_side"
+    assert result["batch_id"] == "test-batch-1"
+    assert [call["table"] for call in publisher.upserts[:4]] == [
+        "source_cache.openfigi_mapping_raw",
+        "source_cache.listing_isin_raw",
+        "source_cache.gleif_isin_lei_raw",
+        "source_cache.gleif_lei_isin_raw",
+    ]
+    assert [call["table"] for call in publisher.upserts[4:]] == [
+        "feature_store.entity_identity_publication_batch",
+        "feature_store.entity_master",
+        "feature_store.entity_listing",
+        "feature_store.entity_identity_publication_current",
+    ]
+    assert publisher.upserts[4]["on_conflict"] == "batch_id"
+    assert publisher.upserts[5]["on_conflict"] == "entity_id"
+    assert publisher.upserts[6]["on_conflict"] == "symbol"
+    assert publisher.upserts[7]["on_conflict"] == "scope_key"
+    assert publisher.inserts == []
+    assert publisher.upserts[4]["rows"][0]["actual_counts"]["feature_store.entity_listing"] == 2
+    assert publisher.upserts[5]["rows"][0]["publication_batch_id"] == "test-batch-1"
+    assert all(row["publication_batch_id"] == "test-batch-1" for row in publisher.upserts[6]["rows"])
+
+
+def test_controlled_entity_publish_rerun_uses_idempotent_upserts() -> None:
+    measurement = _fixture_measurement(["GOOG", "GOOGL"])
+    first = RecordingPublisher()
+    second = RecordingPublisher()
+
+    publish_entity_identity_controlled(
+        publisher=first,
+        measurement=measurement,
+        apply_entities=True,
+        batch_id="repeatable-batch",
+    )
+    publish_entity_identity_controlled(
+        publisher=second,
+        measurement=measurement,
+        apply_entities=True,
+        batch_id="repeatable-batch",
+    )
+
+    assert [(call["table"], call["on_conflict"]) for call in first.upserts] == [
+        (call["table"], call["on_conflict"]) for call in second.upserts
+    ]
+    assert first.upserts[0]["rows"][0]["batch_id"] == "repeatable-batch"
+    assert second.upserts[0]["rows"][0]["batch_id"] == "repeatable-batch"
+    assert first.inserts == []
+    assert second.inserts == []
+
+
+def test_publication_batch_id_is_deterministic_for_same_measurement() -> None:
+    measurement = _fixture_measurement(["SAP", "SAP.DE"])
+
+    assert build_entity_publication_batch_id(measurement) == build_entity_publication_batch_id(measurement)
 
 
 def test_cjk_legal_name_does_not_collapse_to_short_latin_acronym_attach() -> None:

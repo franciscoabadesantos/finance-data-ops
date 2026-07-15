@@ -124,6 +124,7 @@ Entity identity V0 dry-run:
 python scripts/build_entity_identity.py --source fixtures
 python scripts/build_entity_identity.py --source postgres --symbols SAP,SAP.DE --offline
 python scripts/measure_entity_identity_chain.py --source fixtures
+python scripts/publish_entity_identity_side_by_side.py --source fixtures
 ```
 
 Entity Layer V0 is side-by-side only. OpenFIGI is the main listing/security identity source; GLEIF/LEI is optional enrichment and is not required for V0. `feature_store.entity_attributes_static` remains a metadata read model and must not be treated as entity master. No product/read path uses `feature_store.entity_master` or `feature_store.entity_listing` yet, no command autonomously onboards symbols, and no price series are merged across listings. Future consumers should migrate only after the entity layer has been validated.
@@ -131,6 +132,41 @@ Entity Layer V0 is side-by-side only. OpenFIGI is the main listing/security iden
 OpenFIGI ticker mapping is not sufficient by itself for company/entity grouping. V0 treats ticker-mapping FIGIs as listing/security identity and emits audit rows when company-level identity is missing. V0.2 measures provider ISIN anchors through `ISIN -> LEI -> expanded LEI ISIN set`, using paginated GLEIF `GET /api/v1/lei-records/{LEI}/isins`. Prefix-compatible provider ISINs remain the main direct anchor path and attach as `isin_direct`/high. If a valid raw provider ISIN has a country prefix that differs from the listing country, the main pipeline still treats it as suspect so the established legalName anchor path is unchanged; a separate isolated candidate may attach it as `isin_direct_prefix_mismatch_name_confirmed`/high only after GLEIF returns a LEI and the listing/OpenFIGI/internal name matches the GLEIF legal name under conservative normalization. Failed prefix-mismatch candidates do not suppress legalName fallback. `name_anchor_confirmed` remains fail-closed and medium confidence because it requires exact conservative name normalization, compatible country/address context, one surviving LEI, acceptable GLEIF entity state, and compatible expanded ISINs. Missing geography or no compatible expanded ISIN goes to review or the provider/curated tail instead of accepting name-only grouping.
 
 Publication readiness is gated by full audit output for every non-direct attach, including `lei_expansion`, `name_anchor_confirmed`, `foreign_issuer_name_anchor_confirmed`, and `isin_direct_prefix_mismatch_name_confirmed`. The audit records normalized listing/legal names, deterministic ISIN/LEI support, group symbols, conflict flags, confidence, provenance, and review status. CJK/APAC legal names preserve distinctive non-Latin tokens and only strip true legal-form suffixes; CJK names collapsed to Latin acronyms require review, while short/acronym-only heuristic name matches are machine-safe only with bidirectional deterministic support: the name candidate points to a LEI and the listing's own or matched compatible ISIN forward-resolves to the same LEI. Side-by-side publication is allowed only when every heuristic attach is reviewed or machine-verifiably safe. Provisional single-listing candidates can be retained as low-confidence evidence under symbol-scoped provisional ids; they are not treated as confirmed entity merges and do not block publication. Re-evaluation is driven by cache/evidence changes such as new listings, OpenFIGI refreshes, provider ISIN changes, new GLEIF ISIN mappings, new LEI expansion ISINs, legal-name candidate changes, manual review decisions, or corroborating provider evidence. Measurement output classifies unattached listings into `fixable_free`, `requires_provider_or_curated_identity`, and `needs_manual_review`, includes listing-group profiling (`single_listing` vs `multi_listing_candidate`), caps expanded ISIN lists to samples, and includes precision/publication gate views. `--apply-cache` on the measurement command may write raw cache rows only; entity tables remain unpublished by the measurement command.
+
+Controlled side-by-side entity publication is cache-first and dry-run by default:
+
+```bash
+python scripts/publish_entity_identity_side_by_side.py --source postgres
+python scripts/publish_entity_identity_side_by_side.py --source postgres --refresh-live --gleif-request-sleep-seconds 7
+python scripts/publish_entity_identity_side_by_side.py --source postgres --refresh-live --gleif-request-sleep-seconds 7 --apply-caches
+python scripts/publish_entity_identity_side_by_side.py --source postgres --refresh-live --gleif-request-sleep-seconds 7 --apply-caches --apply-entities --batch-id entity-wave-reviewed-YYYYMMDD
+```
+
+The publish command defaults to no live API refresh; `--refresh-live` is required to call OpenFIGI/yfinance/GLEIF, and the GLEIF/OpenFIGI throttle flags should be set for broader scopes. Entity writes are blocked unless the publication gate is green, unresolved multi-listing entities are zero, group conflicts are zero, and heuristic review-required rows are zero for the measured scope. The command writes raw cache tables before side-by-side entity tables when both apply flags are present. Publication batches are idempotent by `batch_id`, entity rows upsert by `entity_id`/`symbol`, and the current pointer is replaceable by `scope_key`. Product paths still do not consume these tables.
+
+Post-publish verification examples for the server operator:
+
+```sql
+select batch_id, status, is_current, planned_counts, actual_counts
+from feature_store.entity_identity_publication_batch
+order by created_at desc
+limit 5;
+
+select attach_method, review_state, count(*)
+from feature_store.entity_listing
+group by attach_method, review_state
+order by attach_method, review_state;
+
+select symbol, entity_id, attach_method, attach_confidence, review_state
+from feature_store.entity_listing
+where symbol in ('SAP', 'SAP.DE', 'CSL.AX');
+
+select entity_id, array_agg(symbol order by symbol) as listings
+from feature_store.entity_listing
+group by entity_id
+having count(*) > 1
+order by entity_id;
+```
 
 ## Prefect orchestration
 

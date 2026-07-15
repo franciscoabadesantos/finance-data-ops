@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from finance_data_ops.identity.audit import audit_rows
@@ -68,6 +70,16 @@ def publish_entity_identity_raw_caches(
 
 
 def build_side_by_side_entity_publication_plan(measurement: EntityChainMeasurement) -> dict[str, Any]:
+    batch_id = build_entity_publication_batch_id(measurement)
+    return build_side_by_side_entity_publication_plan_for_batch(measurement=measurement, batch_id=batch_id)
+
+
+def build_side_by_side_entity_publication_plan_for_batch(
+    *,
+    measurement: EntityChainMeasurement,
+    batch_id: str,
+    scope_key: str = "default",
+) -> dict[str, Any]:
     """Build entity table rows from a measured run without writing them.
 
     Confirmed attaches are modeled under LEI-based entity ids. Single-listing
@@ -100,19 +112,36 @@ def build_side_by_side_entity_publication_plan(measurement: EntityChainMeasureme
                     "resolution_status": status,
                     "primary_listing_symbol": None,
                     "primary_listing_reason": None,
+                    "publication_batch_id": batch_id,
                     "metadata": {
                         "resolution_state": status,
                         "source": "entity_identity_measurement",
+                        "publication_batch_id": batch_id,
                     },
                 },
             )
-            listing_rows.append(_publication_listing_row(row=row, entity_id=entity_id, status=status, confidence=str(confidence)))
+            listing_rows.append(
+                _publication_listing_row(
+                    row=row,
+                    entity_id=entity_id,
+                    status=status,
+                    confidence=str(confidence),
+                    publication_batch_id=batch_id,
+                )
+            )
             continue
 
         candidate_lei = str(row.get("candidate_lei") or row.get("foreign_issuer_candidate_lei") or "").strip()
         if row.get("listing_group_kind") != "single_listing" or not candidate_lei:
             if row.get("decision_bucket") == "needs_manual_review":
-                review_rows.append(_identity_review_row(row=row, entity_id=None, state="needs_manual_review"))
+                review_rows.append(
+                    _identity_review_row(
+                        row=row,
+                        entity_id=None,
+                        state="needs_manual_review",
+                        publication_batch_id=batch_id,
+                    )
+                )
             continue
 
         entity_id = f"provisional:{row.get('symbol')}"
@@ -130,11 +159,13 @@ def build_side_by_side_entity_publication_plan(measurement: EntityChainMeasureme
                 "resolution_status": "provisional",
                 "primary_listing_symbol": None,
                 "primary_listing_reason": None,
+                "publication_batch_id": batch_id,
                 "metadata": {
                     "resolution_state": "provisional",
                     "candidate_lei": candidate_lei,
                     "candidate_legal_name": legal_name,
                     "promotion_triggers": _reevaluation_triggers(),
+                    "publication_batch_id": batch_id,
                 },
             },
         )
@@ -145,6 +176,7 @@ def build_side_by_side_entity_publication_plan(measurement: EntityChainMeasureme
                 status="provisional",
                 confidence="provisional",
                 attach_method="provisional_single_listing_candidate",
+                publication_batch_id=batch_id,
             )
         )
 
@@ -160,14 +192,44 @@ def build_side_by_side_entity_publication_plan(measurement: EntityChainMeasureme
                     "review_reason": audit_row.get("review_reason") or "heuristic_attach_requires_review",
                     "evidence_summary": audit_row.get("evidence_payload") or {},
                     "conflicting_candidates": audit_row.get("entity_group_conflict_flags") or {},
+                    "publication_batch_id": batch_id,
+                    "review_key": _review_key(batch_id=batch_id, symbol=audit_row.get("symbol"), reason=audit_row.get("review_reason")),
                 }
             )
 
+    planned_counts = _planned_counts(
+        master_rows=list(master_by_id.values()),
+        listing_rows=listing_rows,
+        review_rows=review_rows,
+        measurement=measurement,
+    )
+    blockers = _publication_blockers(measurement)
+    batch_row = _publication_batch_row(
+        measurement=measurement,
+        batch_id=batch_id,
+        scope_key=scope_key,
+        mode="dry_run",
+        status="blocked" if blockers else "planned",
+        planned_counts=planned_counts,
+        actual_counts={},
+        blocked_reasons=blockers,
+    )
     return {
+        "batch_id": batch_id,
+        "scope_key": scope_key,
         "publication_gate": measurement.publication_gate,
+        "publication_blockers": blockers,
+        "planned_counts": planned_counts,
+        "verification_summary": _verification_summary(measurement),
+        "feature_store.entity_identity_publication_batch": [batch_row],
         "feature_store.entity_master": list(master_by_id.values()),
         "feature_store.entity_listing": listing_rows,
         "feature_store.entity_identity_review": review_rows,
+        "feature_store.entity_identity_publication_current": [
+            {"scope_key": scope_key, "batch_id": batch_id}
+        ]
+        if not blockers
+        else [],
         "reevaluation_triggers": _reevaluation_triggers(),
     }
 
@@ -177,14 +239,22 @@ def publish_entity_identity_side_by_side(
     publisher: Publisher,
     measurement: EntityChainMeasurement,
     allow_unreviewed_heuristics: bool = False,
+    batch_id: str | None = None,
+    scope_key: str = "default",
 ) -> dict[str, Any]:
-    plan = build_side_by_side_entity_publication_plan(measurement)
+    plan = build_side_by_side_entity_publication_plan_for_batch(
+        measurement=measurement,
+        batch_id=batch_id or build_entity_publication_batch_id(measurement),
+        scope_key=scope_key,
+    )
     gate = dict(plan["publication_gate"])
-    if gate.get("status") != "ready_machine_safe" and not allow_unreviewed_heuristics:
+    blockers = list(plan.get("publication_blockers") or [])
+    if (gate.get("status") != "ready_machine_safe" or blockers) and not allow_unreviewed_heuristics:
         return {
             "status": "blocked",
-            "reason": "publication_gate_blocked",
+            "reason": "publication_gate_blocked" if gate.get("status") != "ready_machine_safe" else "publication_blockers",
             "publication_gate": gate,
+            "publication_blockers": blockers,
             "planned_rows": {
                 "feature_store.entity_master": len(plan["feature_store.entity_master"]),
                 "feature_store.entity_listing": len(plan["feature_store.entity_listing"]),
@@ -192,7 +262,25 @@ def publish_entity_identity_side_by_side(
             },
         }
 
-    outputs: dict[str, Any] = {"status": "published_side_by_side", "publication_gate": gate}
+    outputs: dict[str, Any] = {
+        "status": "published_side_by_side",
+        "batch_id": plan["batch_id"],
+        "publication_gate": gate,
+        "verification_summary": plan["verification_summary"],
+    }
+    outputs["feature_store.entity_identity_publication_batch"] = publisher.upsert(
+        "feature_store.entity_identity_publication_batch",
+        [
+            {
+                **plan["feature_store.entity_identity_publication_batch"][0],
+                "mode": "apply_entities",
+                "status": "published_side_by_side",
+                "is_current": True,
+                "actual_counts": plan["planned_counts"],
+            }
+        ],
+        on_conflict="batch_id",
+    )
     outputs["feature_store.entity_master"] = publisher.upsert(
         "feature_store.entity_master",
         plan["feature_store.entity_master"],
@@ -204,11 +292,265 @@ def publish_entity_identity_side_by_side(
         on_conflict="symbol",
     )
     if plan["feature_store.entity_identity_review"]:
-        outputs["feature_store.entity_identity_review"] = publisher.insert(
+        outputs["feature_store.entity_identity_review"] = publisher.upsert(
             "feature_store.entity_identity_review",
             plan["feature_store.entity_identity_review"],
+            on_conflict="review_key",
+        )
+    if plan["feature_store.entity_identity_publication_current"]:
+        outputs["feature_store.entity_identity_publication_current"] = publisher.upsert(
+            "feature_store.entity_identity_publication_current",
+            plan["feature_store.entity_identity_publication_current"],
+            on_conflict="scope_key",
         )
     return outputs
+
+
+def publish_entity_identity_controlled(
+    *,
+    publisher: Publisher,
+    measurement: EntityChainMeasurement,
+    apply_caches: bool = False,
+    apply_entities: bool = False,
+    batch_id: str | None = None,
+    scope_key: str = "default",
+) -> dict[str, Any]:
+    """Dry-run-first controlled side-by-side publication.
+
+    Cache writes and entity writes are intentionally separate flags. When both
+    are enabled, raw fact caches are upserted before any feature_store entity
+    rows are touched.
+    """
+
+    resolved_batch_id = batch_id or build_entity_publication_batch_id(measurement)
+    plan = build_side_by_side_entity_publication_plan_for_batch(
+        measurement=measurement,
+        batch_id=resolved_batch_id,
+        scope_key=scope_key,
+    )
+    mode = _publication_mode(apply_caches=apply_caches, apply_entities=apply_entities)
+    result: dict[str, Any] = {
+        "status": "dry_run" if not (apply_caches or apply_entities) else "planned",
+        "mode": mode,
+        "batch_id": resolved_batch_id,
+        "publication_gate": plan["publication_gate"],
+        "publication_blockers": list(plan["publication_blockers"]),
+        "planned_counts": dict(plan["planned_counts"]),
+        "verification_summary": dict(plan["verification_summary"]),
+        "planned_tables": {
+            "source_cache.openfigi_mapping_raw": len(measurement.openfigi_cache_rows),
+            "source_cache.listing_isin_raw": len(measurement.isin_cache_rows),
+            "source_cache.gleif_isin_lei_raw": len(measurement.gleif_cache_rows),
+            "source_cache.gleif_lei_isin_raw": len(measurement.gleif_lei_isin_cache_rows),
+            "feature_store.entity_identity_publication_batch": 1,
+            "feature_store.entity_master": len(plan["feature_store.entity_master"]),
+            "feature_store.entity_listing": len(plan["feature_store.entity_listing"]),
+            "feature_store.entity_identity_review": len(plan["feature_store.entity_identity_review"]),
+        },
+    }
+
+    if not apply_caches and not apply_entities:
+        result["planned_cache_publish"] = {
+            "source_cache.openfigi_mapping_raw": {"rows": len(measurement.openfigi_cache_rows), "status": "planned"},
+            "source_cache.listing_isin_raw": {"rows": len(measurement.isin_cache_rows), "status": "planned"},
+            "source_cache.gleif_isin_lei_raw": {"rows": len(measurement.gleif_cache_rows), "status": "planned"},
+            "source_cache.gleif_lei_isin_raw": {"rows": len(measurement.gleif_lei_isin_cache_rows), "status": "planned"},
+        }
+        result["planned_entity_publish"] = {
+            "feature_store.entity_master": {"rows": len(plan["feature_store.entity_master"]), "status": "planned"},
+            "feature_store.entity_listing": {"rows": len(plan["feature_store.entity_listing"]), "status": "planned"},
+            "feature_store.entity_identity_review": {
+                "rows": len(plan["feature_store.entity_identity_review"]),
+                "status": "planned",
+            },
+        }
+        return result
+
+    if apply_entities and plan["publication_blockers"]:
+        result["status"] = "blocked"
+        result["reason"] = "publication_blockers"
+        return result
+
+    if apply_caches:
+        result["cache_publish"] = publish_entity_identity_raw_caches(publisher=publisher, measurement=measurement)
+
+    if apply_entities:
+        entity_outputs = publish_entity_identity_side_by_side(
+            publisher=publisher,
+            measurement=measurement,
+            batch_id=resolved_batch_id,
+            scope_key=scope_key,
+        )
+        if entity_outputs.get("status") == "blocked":
+            result.update(entity_outputs)
+            return result
+        result["entity_publish"] = entity_outputs
+        result["status"] = "published_side_by_side"
+        result["actual_counts"] = _actual_counts_from_outputs(entity_outputs)
+    else:
+        result["status"] = "cache_published" if apply_caches else result["status"]
+    return result
+
+
+def build_entity_publication_batch_id(measurement: EntityChainMeasurement) -> str:
+    payload = {
+        "summary": measurement.summary,
+        "symbols": [
+            {
+                "symbol": row.get("symbol"),
+                "entity_lei": row.get("entity_lei"),
+                "entity_attach_method": row.get("entity_attach_method"),
+                "entity_attach_reason": row.get("entity_attach_reason"),
+                "matched_compatible_isins": row.get("matched_compatible_isins"),
+            }
+            for row in measurement.symbol_rows
+        ],
+        "publication_gate": measurement.publication_gate,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    return f"entity_identity:{digest}"
+
+
+def _publication_blockers(measurement: EntityChainMeasurement) -> list[str]:
+    blockers: list[str] = []
+    gate = measurement.publication_gate
+    if gate.get("status") != "ready_machine_safe":
+        blockers.append("publication_gate_not_ready")
+    if int(gate.get("review_required_count") or 0) > 0:
+        blockers.append("heuristic_review_required")
+    if int(gate.get("group_conflict_count") or 0) > 0:
+        blockers.append("group_conflicts_present")
+    if int(measurement.summary.get("unresolved_multi_listing_entities_count") or 0) > 0:
+        blockers.append("unresolved_multi_listing_entities_present")
+    if not bool(measurement.summary.get("guardrail_pairs_unmerged", True)):
+        blockers.append("guardrail_pair_merged")
+    return blockers
+
+
+def _planned_counts(
+    *,
+    master_rows: list[dict[str, Any]],
+    listing_rows: list[dict[str, Any]],
+    review_rows: list[dict[str, Any]],
+    measurement: EntityChainMeasurement,
+) -> dict[str, Any]:
+    return {
+        "source_cache.openfigi_mapping_raw": len(measurement.openfigi_cache_rows),
+        "source_cache.listing_isin_raw": len(measurement.isin_cache_rows),
+        "source_cache.gleif_isin_lei_raw": len(measurement.gleif_cache_rows),
+        "source_cache.gleif_lei_isin_raw": len(measurement.gleif_lei_isin_cache_rows),
+        "feature_store.entity_master": len(master_rows),
+        "feature_store.entity_listing": len(listing_rows),
+        "feature_store.entity_identity_review": len(review_rows),
+        "feature_store.entity_identity_publication_batch": 1,
+    }
+
+
+def _verification_summary(measurement: EntityChainMeasurement) -> dict[str, Any]:
+    heuristic_rows = [
+        row for row in measurement.heuristic_attach_audit if row.get("attach_audit_kind") == "heuristic"
+    ]
+    short_or_acronym_rows = [
+        row
+        for row in heuristic_rows
+        if row.get("normalized_name_too_short") or row.get("normalized_name_acronym_only")
+    ]
+    attached_rows = [row for row in measurement.symbol_rows if row.get("entity_lei")]
+    provisional_rows = [
+        row
+        for row in measurement.symbol_rows
+        if not row.get("entity_lei") and row.get("candidate_lei") and row.get("listing_group_kind") == "single_listing"
+    ]
+    return {
+        "attached_count": len(attached_rows),
+        "attached_by_method": _count_by_field(attached_rows, "entity_attach_method"),
+        "listing_rows_by_lifecycle_state": {
+            "resolved": len(attached_rows),
+            "provisional": len(provisional_rows),
+        },
+        "total_heuristic_attaches": len(heuristic_rows),
+        "heuristic_attaches_by_method": _count_by_field(heuristic_rows, "attach_method"),
+        "cjk_apac_heuristic_attaches": len(measurement.cjk_apac_heuristic_attach_audit),
+        "short_or_acronym_heuristic_attaches": len(short_or_acronym_rows),
+        "review_required_count": int(measurement.publication_gate.get("review_required_count") or 0),
+        "review_required_symbols": list(measurement.publication_gate.get("review_required_symbols") or []),
+        "group_conflict_count": int(measurement.publication_gate.get("group_conflict_count") or 0),
+        "conflict_symbols": list(measurement.publication_gate.get("conflict_symbols") or []),
+        "unresolved_multi_listing_entities_count": int(
+            measurement.summary.get("unresolved_multi_listing_entities_count") or 0
+        ),
+        "unresolved_single_listing_provisional_candidates_count": int(
+            measurement.summary.get("unresolved_single_listing_provisional_candidates_count") or 0
+        ),
+        "candidate_lei_retained_provisional_count": int(
+            measurement.summary.get("candidate_lei_retained_provisional_count") or 0
+        ),
+        "provider_or_curated_by_listing_group_kind": dict(
+            measurement.summary.get("provider_or_curated_by_listing_group_kind") or {}
+        ),
+        "manual_review_by_listing_group_kind": dict(measurement.summary.get("manual_review_by_listing_group_kind") or {}),
+        "publication_gate_status": measurement.publication_gate.get("status") or "",
+    }
+
+
+def _publication_batch_row(
+    *,
+    measurement: EntityChainMeasurement,
+    batch_id: str,
+    scope_key: str,
+    mode: str,
+    status: str,
+    planned_counts: dict[str, Any],
+    actual_counts: dict[str, Any],
+    blocked_reasons: list[str],
+) -> dict[str, Any]:
+    return {
+        "batch_id": batch_id,
+        "scope_key": scope_key,
+        "source": "entity_identity_measurement",
+        "mode": mode,
+        "status": status,
+        "is_current": status == "published_side_by_side",
+        "publication_gate": measurement.publication_gate,
+        "summary": measurement.summary,
+        "planned_counts": planned_counts,
+        "actual_counts": actual_counts,
+        "verification_summary": _verification_summary(measurement),
+        "blocked_reasons": list(blocked_reasons),
+    }
+
+
+def _actual_counts_from_outputs(outputs: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for table, result in outputs.items():
+        if isinstance(result, dict) and "rows" in result:
+            counts[table] = int(result.get("rows") or 0)
+    return counts
+
+
+def _publication_mode(*, apply_caches: bool, apply_entities: bool) -> str:
+    if apply_caches and apply_entities:
+        return "apply_cache_and_entities"
+    if apply_caches:
+        return "apply_cache"
+    if apply_entities:
+        return "apply_entities"
+    return "dry_run"
+
+
+def _count_by_field(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        key = str(row.get(field) or "")
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _review_key(*, batch_id: str, symbol: Any, reason: Any) -> str:
+    raw = f"{batch_id}:{symbol or ''}:{reason or ''}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def entity_master_rows(records: list[EntityRecord]) -> list[dict[str, Any]]:
@@ -268,6 +610,7 @@ def _publication_listing_row(
     status: str,
     confidence: str,
     attach_method: str | None = None,
+    publication_batch_id: str,
 ) -> dict[str, Any]:
     method = attach_method or str(row.get("entity_attach_method") or "")
     return {
@@ -307,22 +650,32 @@ def _publication_listing_row(
             "lei_source": row.get("lei_source") or "",
             "isin_source": row.get("isin_source") or "",
         },
+        "publication_batch_id": publication_batch_id,
         "metadata": {
             "listing_group_kind": row.get("listing_group_kind") or "",
             "listing_group_symbols_in_measurement": list(row.get("listing_group_symbols_in_measurement") or []),
             "reevaluation_triggers": _reevaluation_triggers(),
+            "publication_batch_id": publication_batch_id,
         },
     }
 
 
-def _identity_review_row(*, row: dict[str, Any], entity_id: str | None, state: str) -> dict[str, Any]:
+def _identity_review_row(
+    *,
+    row: dict[str, Any],
+    entity_id: str | None,
+    state: str,
+    publication_batch_id: str,
+) -> dict[str, Any]:
+    review_reason = row.get("entity_attach_reason") or row.get("decision_bucket") or None
     return {
+        "review_key": _review_key(batch_id=publication_batch_id, symbol=row.get("symbol"), reason=review_reason),
         "symbol": row.get("symbol") or None,
         "entity_id": entity_id,
         "candidate_lei": row.get("candidate_lei") or row.get("foreign_issuer_candidate_lei") or None,
         "attach_method": row.get("entity_attach_method") or None,
         "resolution_state": state,
-        "review_reason": row.get("entity_attach_reason") or row.get("decision_bucket") or None,
+        "review_reason": review_reason,
         "evidence_summary": {
             "candidate_legal_name": row.get("candidate_legal_name") or "",
             "decision_bucket": row.get("decision_bucket") or "",
@@ -330,6 +683,7 @@ def _identity_review_row(*, row: dict[str, Any], entity_id: str | None, state: s
             "entity_attach_reasons": list(row.get("entity_attach_reasons") or []),
         },
         "conflicting_candidates": {},
+        "publication_batch_id": publication_batch_id,
     }
 
 
