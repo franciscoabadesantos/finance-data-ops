@@ -9,8 +9,9 @@ entity data.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -52,12 +53,39 @@ class ColumnState:
 
 
 @dataclass(frozen=True, slots=True)
+class CheckConstraintRequirement:
+    schema_name: str
+    table_name: str
+    constraint_name: str
+    column_name: str
+    allowed_values: tuple[str, ...]
+    nullable: bool = False
+
+    @property
+    def qualified_table(self) -> str:
+        return f"{self.schema_name}.{self.table_name}"
+
+    @property
+    def qualified_constraint(self) -> str:
+        return f"{self.qualified_table}.{self.constraint_name}"
+
+    @property
+    def expression_sql(self) -> str:
+        values = ", ".join(_sql_literal(value) for value in self.allowed_values)
+        membership = f"{self.column_name} in ({values})"
+        if self.nullable:
+            return f"({self.column_name} is null or {membership})"
+        return f"({membership})"
+
+
+@dataclass(frozen=True, slots=True)
 class SchemaState:
     tables: set[str]
     columns: dict[str, ColumnState]
     indexes: set[str]
     roles: set[str]
     grants: set[str] | None = None
+    check_constraints: dict[str, str] = field(default_factory=dict)
 
 
 CREATE_TABLE_SQL: dict[str, str] = {
@@ -273,6 +301,72 @@ REQUIRED_COLUMNS = (
     ColumnRequirement("feature_store", "entity_listing", "publication_batch_id", "text"),
 )
 
+LIFECYCLE_STATES = (
+    "resolved",
+    "provisional",
+    "needs_manual_review",
+    "conflict",
+    "rejected",
+    "superseded",
+    "ambiguous",
+    "unresolved",
+    "manual_review",
+)
+
+REQUIRED_CHECK_CONSTRAINTS = (
+    CheckConstraintRequirement(
+        "feature_store",
+        "entity_master",
+        "entity_master_resolution_status_check",
+        "resolution_status",
+        LIFECYCLE_STATES,
+    ),
+    CheckConstraintRequirement(
+        "feature_store",
+        "entity_listing",
+        "entity_listing_resolution_status_check",
+        "resolution_status",
+        LIFECYCLE_STATES,
+    ),
+    CheckConstraintRequirement(
+        "feature_store",
+        "entity_listing",
+        "entity_listing_review_state_check",
+        "review_state",
+        LIFECYCLE_STATES,
+        nullable=True,
+    ),
+    CheckConstraintRequirement(
+        "feature_store",
+        "entity_listing",
+        "entity_listing_attach_confidence_check",
+        "attach_confidence",
+        ("high", "medium", "low", "provisional"),
+        nullable=True,
+    ),
+    CheckConstraintRequirement(
+        "feature_store",
+        "entity_identity_review",
+        "entity_identity_review_resolution_state_check",
+        "resolution_state",
+        LIFECYCLE_STATES,
+    ),
+    CheckConstraintRequirement(
+        "feature_store",
+        "entity_identity_publication_batch",
+        "entity_identity_publication_batch_mode_check",
+        "mode",
+        ("dry_run", "apply_cache", "apply_entities", "apply_cache_and_entities"),
+    ),
+    CheckConstraintRequirement(
+        "feature_store",
+        "entity_identity_publication_batch",
+        "entity_identity_publication_batch_status_check",
+        "status",
+        ("planned", "published_side_by_side", "blocked", "failed", "superseded"),
+    ),
+)
+
 ADD_COLUMN_SQL = {
     "feature_store.entity_master.publication_batch_id": (
         "alter table feature_store.entity_master add column if not exists publication_batch_id text"
@@ -469,6 +563,24 @@ def build_reconciliation_plan(
             actions.append({"action": "add_missing_column", "object": key})
             sql.append(ADD_COLUMN_SQL[key])
 
+    for requirement in REQUIRED_CHECK_CONSTRAINTS:
+        if requirement.qualified_table not in state.tables:
+            continue
+        current_definition = state.check_constraints.get(requirement.qualified_constraint)
+        if current_definition and _check_constraint_is_compatible(requirement, current_definition):
+            continue
+        reason = "missing" if not current_definition else "incompatible"
+        actions.append(
+            {
+                "action": "reconcile_check_constraint",
+                "object": requirement.qualified_constraint,
+                "table": requirement.qualified_table,
+                "column": requirement.column_name,
+                "reason": reason,
+            }
+        )
+        sql.extend(_reconcile_check_constraint_sql(requirement))
+
     for index_name, statement in INDEX_SQL.items():
         if index_name not in state.indexes:
             actions.append({"action": "create_missing_index", "object": index_name})
@@ -526,13 +638,40 @@ def verify_schema(state: SchemaState) -> dict[str, Any]:
             )
     missing_indexes = [index_name for index_name in INDEX_SQL if index_name not in state.indexes]
     missing_grants = _missing_grants(state)
+    missing_check_constraints = []
+    mismatched_check_constraints = []
+    for requirement in REQUIRED_CHECK_CONSTRAINTS:
+        if requirement.qualified_table in missing_tables or requirement.qualified_table not in state.tables:
+            continue
+        current_definition = state.check_constraints.get(requirement.qualified_constraint)
+        if not current_definition:
+            missing_check_constraints.append(requirement.qualified_constraint)
+            continue
+        if not _check_constraint_is_compatible(requirement, current_definition):
+            mismatched_check_constraints.append(
+                {
+                    "constraint": requirement.qualified_constraint,
+                    "expected_allowed_values": list(requirement.allowed_values),
+                    "actual_definition": current_definition,
+                }
+            )
     return {
-        "ok": not (missing_tables or missing_columns or mismatched_columns or missing_indexes or missing_grants),
+        "ok": not (
+            missing_tables
+            or missing_columns
+            or mismatched_columns
+            or missing_indexes
+            or missing_grants
+            or missing_check_constraints
+            or mismatched_check_constraints
+        ),
         "missing_tables": missing_tables,
         "missing_columns": missing_columns,
         "mismatched_columns": mismatched_columns,
         "missing_indexes": missing_indexes,
         "missing_grants": missing_grants,
+        "missing_check_constraints": missing_check_constraints,
+        "mismatched_check_constraints": mismatched_check_constraints,
     }
 
 
@@ -543,6 +682,8 @@ def verification_summary(verification: dict[str, Any]) -> dict[str, Any]:
         "mismatched_columns": list(verification.get("mismatched_columns") or []),
         "missing_indexes": list(verification.get("missing_indexes") or []),
         "missing_grants": list(verification.get("missing_grants") or []),
+        "missing_check_constraints": list(verification.get("missing_check_constraints") or []),
+        "mismatched_check_constraints": list(verification.get("mismatched_check_constraints") or []),
     }
 
 
@@ -550,6 +691,7 @@ def apply_plan_to_state(state: SchemaState) -> SchemaState:
     tables = set(state.tables)
     columns = dict(state.columns)
     indexes = set(state.indexes)
+    check_constraints = dict(state.check_constraints)
     tables.update(REQUIRED_TABLES)
     for requirement in REQUIRED_COLUMNS:
         columns.setdefault(
@@ -561,7 +703,16 @@ def apply_plan_to_state(state: SchemaState) -> SchemaState:
             ),
         )
     indexes.update(INDEX_SQL)
-    return SchemaState(tables=tables, columns=columns, indexes=indexes, roles=set(state.roles), grants=set(state.grants or set()))
+    for requirement in REQUIRED_CHECK_CONSTRAINTS:
+        check_constraints[requirement.qualified_constraint] = _expected_check_constraint_definition(requirement)
+    return SchemaState(
+        tables=tables,
+        columns=columns,
+        indexes=indexes,
+        roles=set(state.roles),
+        grants=set(state.grants or set()),
+        check_constraints=check_constraints,
+    )
 
 
 def inspect_schema(conn: Any) -> SchemaState:
@@ -570,7 +721,15 @@ def inspect_schema(conn: Any) -> SchemaState:
     indexes = _fetch_indexes(conn)
     roles = _fetch_roles(conn)
     grants = _fetch_grants(conn)
-    return SchemaState(tables=tables, columns=columns, indexes=indexes, roles=roles, grants=grants)
+    check_constraints = _fetch_check_constraints(conn)
+    return SchemaState(
+        tables=tables,
+        columns=columns,
+        indexes=indexes,
+        roles=roles,
+        grants=grants,
+        check_constraints=check_constraints,
+    )
 
 
 def _fetch_tables(conn: Any) -> set[str]:
@@ -614,6 +773,21 @@ def _fetch_indexes(conn: Any) -> set[str]:
             """
         )
         return {str(row[0]) for row in cur.fetchall()}
+
+
+def _fetch_check_constraints(conn: Any) -> dict[str, str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select n.nspname, c.relname, con.conname, pg_get_constraintdef(con.oid, true)
+            from pg_constraint con
+            join pg_class c on c.oid = con.conrelid
+            join pg_namespace n on n.oid = c.relnamespace
+            where con.contype = 'c'
+              and n.nspname in ('source_cache', 'feature_store')
+            """
+        )
+        return {f"{row[0]}.{row[1]}.{row[2]}": str(row[3] or "") for row in cur.fetchall()}
 
 
 def _fetch_roles(conn: Any) -> set[str]:
@@ -709,7 +883,9 @@ def _grant_sql(backend_read_roles: tuple[str, ...]) -> str:
 def _assert_no_forbidden_sql(statements: list[str]) -> None:
     for statement in statements:
         normalized = " ".join(statement.lower().split())
-        if "drop " in normalized or " cascade" in normalized:
+        if " cascade" in normalized:
+            raise ValueError(f"forbidden_ddl_in_entity_schema_reconciliation: {normalized[:160]}")
+        if re.search(r"\bdrop\b", normalized) and not _is_allowed_check_constraint_drop(normalized):
             raise ValueError(f"forbidden_ddl_in_entity_schema_reconciliation: {normalized[:160]}")
 
 
@@ -724,6 +900,40 @@ def _normalize_type(value: str) -> str:
 
 def _sql_literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def _reconcile_check_constraint_sql(requirement: CheckConstraintRequirement) -> list[str]:
+    return [
+        (
+            f"alter table {requirement.qualified_table} "
+            f"drop constraint if exists {requirement.constraint_name}"
+        ),
+        (
+            f"alter table {requirement.qualified_table} "
+            f"add constraint {requirement.constraint_name} check {requirement.expression_sql}"
+        ),
+    ]
+
+
+def _is_allowed_check_constraint_drop(normalized_statement: str) -> bool:
+    return any(
+        normalized_statement
+        == f"alter table {requirement.qualified_table} drop constraint if exists {requirement.constraint_name}".lower()
+        for requirement in REQUIRED_CHECK_CONSTRAINTS
+    )
+
+
+def _expected_check_constraint_definition(requirement: CheckConstraintRequirement) -> str:
+    return f"CHECK {requirement.expression_sql}"
+
+
+def _check_constraint_is_compatible(requirement: CheckConstraintRequirement, definition: str) -> bool:
+    normalized = " ".join(str(definition or "").lower().replace("::text", "").split())
+    if requirement.column_name.lower() not in normalized:
+        return False
+    if requirement.nullable and "is null" not in normalized:
+        return False
+    return all(_sql_literal(value).lower() in normalized for value in requirement.allowed_values)
 
 
 def _empty_state() -> SchemaState:

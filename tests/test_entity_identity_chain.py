@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from finance_data_ops.identity.chain import (
     _heuristic_attach_audit,
     acceptance_fixture_candidates,
@@ -2133,14 +2135,19 @@ def test_controlled_entity_publish_cache_first_then_side_by_side_tables() -> Non
         "feature_store.entity_identity_publication_batch",
         "feature_store.entity_master",
         "feature_store.entity_listing",
+        "feature_store.entity_identity_publication_batch",
         "feature_store.entity_identity_publication_current",
     ]
     assert publisher.upserts[4]["on_conflict"] == "batch_id"
     assert publisher.upserts[5]["on_conflict"] == "entity_id"
     assert publisher.upserts[6]["on_conflict"] == "symbol"
-    assert publisher.upserts[7]["on_conflict"] == "scope_key"
+    assert publisher.upserts[7]["on_conflict"] == "batch_id"
+    assert publisher.upserts[8]["on_conflict"] == "scope_key"
     assert publisher.inserts == []
-    assert publisher.upserts[4]["rows"][0]["actual_counts"]["feature_store.entity_listing"] == 2
+    assert publisher.upserts[4]["rows"][0]["status"] == "planned"
+    assert publisher.upserts[4]["rows"][0]["is_current"] is False
+    assert publisher.upserts[7]["rows"][0]["status"] == "published_side_by_side"
+    assert publisher.upserts[7]["rows"][0]["actual_counts"]["feature_store.entity_listing"] == 2
     assert publisher.upserts[5]["rows"][0]["publication_batch_id"] == "test-batch-1"
     assert all(row["publication_batch_id"] == "test-batch-1" for row in publisher.upserts[6]["rows"])
 
@@ -2170,6 +2177,30 @@ def test_controlled_entity_publish_rerun_uses_idempotent_upserts() -> None:
     assert second.upserts[0]["rows"][0]["batch_id"] == "repeatable-batch"
     assert first.inserts == []
     assert second.inserts == []
+
+
+def test_side_by_side_publish_does_not_leave_published_batch_when_entity_write_fails() -> None:
+    measurement = _fixture_measurement(["SAP", "SAP.DE"])
+    publisher = _FailOnTablePublisher("feature_store.entity_master")
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        publish_entity_identity_side_by_side(
+            publisher=publisher,
+            measurement=measurement,
+            batch_id="failed-batch-retryable",
+        )
+
+    assert [call["table"] for call in publisher.upserts] == [
+        "feature_store.entity_identity_publication_batch",
+    ]
+    planned_batch = publisher.upserts[0]["rows"][0]
+    assert planned_batch["batch_id"] == "failed-batch-retryable"
+    assert planned_batch["status"] == "planned"
+    assert planned_batch["is_current"] is False
+    assert planned_batch["actual_counts"] == {}
+    assert "feature_store.entity_identity_publication_current" not in {
+        call["table"] for call in publisher.upserts
+    }
 
 
 def test_publication_batch_id_is_deterministic_for_same_measurement() -> None:
@@ -2488,6 +2519,17 @@ def test_side_by_side_publisher_blocks_unreviewed_heuristic_gate() -> None:
     assert result["reason"] == "publication_gate_blocked"
     assert publisher.upserts == []
     assert publisher.inserts == []
+
+
+class _FailOnTablePublisher(RecordingPublisher):
+    def __init__(self, table_to_fail: str):
+        super().__init__()
+        self.table_to_fail = table_to_fail
+
+    def upsert(self, table: str, rows: list[dict], *, on_conflict: str | None = None) -> dict:
+        if table == self.table_to_fail:
+            raise RuntimeError(f"simulated failure for {table}")
+        return super().upsert(table, rows, on_conflict=on_conflict)
 
 
 def _fixture_measurement(

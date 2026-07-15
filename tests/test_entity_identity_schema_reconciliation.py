@@ -64,8 +64,108 @@ def test_plan_uses_add_column_if_not_exists_and_no_drop_cascade() -> None:
     assert "alter table feature_store.entity_master add column if not exists publication_batch_id text" in sql
     assert "alter table feature_store.entity_listing add column if not exists attach_method text" in sql
     assert "alter table feature_store.entity_listing add column if not exists evidence_payload jsonb not null default '{}'::jsonb" in sql
-    assert "drop " not in sql
+    assert "drop table" not in sql
     assert " cascade" not in sql
+
+
+def test_forbidden_sql_guard_allows_only_known_constraint_drops() -> None:
+    allowed = (
+        "alter table feature_store.entity_master "
+        "drop constraint if exists entity_master_resolution_status_check"
+    )
+    reconcile._assert_no_forbidden_sql([allowed])
+
+    with pytest.raises(ValueError, match="forbidden_ddl"):
+        reconcile._assert_no_forbidden_sql(["drop index idx_entity_listing_entity_id"])
+
+    with pytest.raises(ValueError, match="forbidden_ddl"):
+        reconcile._assert_no_forbidden_sql(["alter table feature_store.entity_master drop constraint foo cascade"])
+
+
+def test_dry_run_reconciles_old_resolution_status_check_constraint() -> None:
+    state = reconcile.SchemaState(
+        tables={"feature_store.entity_master"},
+        columns={
+            "feature_store.entity_master.publication_batch_id": reconcile.ColumnState("text", "YES", ""),
+        },
+        indexes=set(),
+        roles=set(),
+        grants=set(),
+        check_constraints={
+            "feature_store.entity_master.entity_master_resolution_status_check": (
+                "CHECK (resolution_status = ANY (ARRAY['resolved'::text, 'ambiguous'::text, "
+                "'unresolved'::text, 'manual_review'::text]))"
+            )
+        },
+    )
+
+    plan = reconcile.build_reconciliation_plan(state)
+    actions = [action for action in plan["actions"] if action["action"] == "reconcile_check_constraint"]
+    sql = "\n".join(plan["sql"]).lower()
+
+    assert actions == [
+        {
+            "action": "reconcile_check_constraint",
+            "object": "feature_store.entity_master.entity_master_resolution_status_check",
+            "table": "feature_store.entity_master",
+            "column": "resolution_status",
+            "reason": "incompatible",
+        }
+    ]
+    assert "alter table feature_store.entity_master drop constraint if exists entity_master_resolution_status_check" in sql
+    assert "alter table feature_store.entity_master add constraint entity_master_resolution_status_check" in sql
+    assert "'provisional'" in sql
+    assert "drop table" not in sql
+    assert " cascade" not in sql
+
+
+def test_constraint_reconciliation_is_idempotent_after_apply_plan_to_state() -> None:
+    state = reconcile.apply_plan_to_state(
+        reconcile.SchemaState(
+            tables={"feature_store.entity_master"},
+            columns={
+                "feature_store.entity_master.publication_batch_id": reconcile.ColumnState("text", "YES", ""),
+            },
+            indexes=set(),
+            roles=set(),
+            grants=set(),
+            check_constraints={
+                "feature_store.entity_master.entity_master_resolution_status_check": (
+                    "CHECK (resolution_status in ('resolved', 'ambiguous'))"
+                )
+            },
+        )
+    )
+
+    plan = reconcile.build_reconciliation_plan(state)
+    action_types = {action["action"] for action in plan["actions"]}
+    verification = reconcile.verify_schema(state)
+
+    assert "reconcile_check_constraint" not in action_types
+    assert verification["ok"] is True
+
+
+def test_post_apply_verification_catches_incompatible_check_constraint() -> None:
+    state = reconcile.apply_plan_to_state(reconcile.SchemaState(tables=set(), columns={}, indexes=set(), roles=set(), grants=set()))
+    constraints = dict(state.check_constraints)
+    constraints["feature_store.entity_master.entity_master_resolution_status_check"] = (
+        "CHECK (resolution_status in ('resolved', 'ambiguous'))"
+    )
+    broken = reconcile.SchemaState(
+        tables=set(state.tables),
+        columns=dict(state.columns),
+        indexes=set(state.indexes),
+        roles=set(state.roles),
+        grants=set(state.grants or set()),
+        check_constraints=constraints,
+    )
+
+    verification = reconcile.verify_schema(broken)
+
+    assert verification["ok"] is False
+    assert verification["mismatched_check_constraints"][0]["constraint"] == (
+        "feature_store.entity_master.entity_master_resolution_status_check"
+    )
 
 
 def test_admin_role_check_blocks_worker_or_non_ddl_role() -> None:
@@ -90,6 +190,7 @@ def test_post_apply_verification_catches_missing_columns() -> None:
         indexes=set(state.indexes),
         roles=set(state.roles),
         grants=set(state.grants or set()),
+        check_constraints=dict(state.check_constraints),
     )
 
     verification = reconcile.verify_schema(broken)

@@ -268,15 +268,15 @@ def publish_entity_identity_side_by_side(
         "publication_gate": gate,
         "verification_summary": plan["verification_summary"],
     }
-    outputs["feature_store.entity_identity_publication_batch"] = publisher.upsert(
+    outputs["feature_store.entity_identity_publication_batch_planned"] = publisher.upsert(
         "feature_store.entity_identity_publication_batch",
         [
             {
                 **plan["feature_store.entity_identity_publication_batch"][0],
                 "mode": "apply_entities",
-                "status": "published_side_by_side",
-                "is_current": True,
-                "actual_counts": plan["planned_counts"],
+                "status": "planned",
+                "is_current": False,
+                "actual_counts": {},
             }
         ],
         on_conflict="batch_id",
@@ -297,6 +297,19 @@ def publish_entity_identity_side_by_side(
             plan["feature_store.entity_identity_review"],
             on_conflict="review_key",
         )
+    outputs["feature_store.entity_identity_publication_batch"] = publisher.upsert(
+        "feature_store.entity_identity_publication_batch",
+        [
+            {
+                **plan["feature_store.entity_identity_publication_batch"][0],
+                "mode": "apply_entities",
+                "status": "published_side_by_side",
+                "is_current": True,
+                "actual_counts": plan["planned_counts"],
+            }
+        ],
+        on_conflict="batch_id",
+    )
     if plan["feature_store.entity_identity_publication_current"]:
         outputs["feature_store.entity_identity_publication_current"] = publisher.upsert(
             "feature_store.entity_identity_publication_current",
@@ -523,6 +536,8 @@ def _publication_batch_row(
 def _actual_counts_from_outputs(outputs: dict[str, Any]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for table, result in outputs.items():
+        if str(table).endswith("_planned"):
+            continue
         if isinstance(result, dict) and "rows" in result:
             counts[table] = int(result.get("rows") or 0)
     return counts
