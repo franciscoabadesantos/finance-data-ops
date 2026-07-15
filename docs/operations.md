@@ -120,6 +120,66 @@ select count(*) from source_cache.etf_theme_readiness;
 reset role;"
 ```
 
+Entity identity side-by-side schema reconciliation:
+
+```bash
+python scripts/reconcile_entity_identity_schema.py
+python scripts/reconcile_entity_identity_schema.py --apply
+```
+
+The command is dry-run by default and is admin/DDL-role only when `--apply` is used. It reconciles schema prerequisites
+for Entity Layer cache-first and side-by-side publication by creating missing raw cache/review/publication tables,
+adding missing publication columns to old `feature_store.entity_master` and `feature_store.entity_listing` tables,
+creating indexes, and applying conditional worker/read grants. It does not write raw cache facts, does not publish
+`entity_master`/`entity_listing` data, and does not change product/read paths.
+
+Read-only verification after schema apply:
+
+```bash
+psql "$DATA_OPS_DATABASE_URL" -c "
+select table_schema, table_name
+from information_schema.tables
+where (table_schema, table_name) in (
+  ('source_cache', 'listing_isin_raw'),
+  ('source_cache', 'gleif_isin_lei_raw'),
+  ('source_cache', 'gleif_lei_isin_raw'),
+  ('feature_store', 'entity_master'),
+  ('feature_store', 'entity_listing'),
+  ('feature_store', 'entity_identity_review'),
+  ('feature_store', 'entity_identity_review_audit'),
+  ('feature_store', 'entity_identity_publication_batch'),
+  ('feature_store', 'entity_identity_publication_current')
+)
+order by 1, 2;"
+
+psql "$DATA_OPS_DATABASE_URL" -c "
+select table_schema, table_name, column_name, data_type, is_nullable, column_default
+from information_schema.columns
+where (table_schema, table_name, column_name) in (
+  ('feature_store', 'entity_master', 'publication_batch_id'),
+  ('feature_store', 'entity_listing', 'attach_method'),
+  ('feature_store', 'entity_listing', 'attach_confidence'),
+  ('feature_store', 'entity_listing', 'review_state'),
+  ('feature_store', 'entity_listing', 'evidence_payload'),
+  ('feature_store', 'entity_listing', 'source_freshness'),
+  ('feature_store', 'entity_listing', 'publication_batch_id')
+)
+order by 1, 2, 3;"
+
+psql "$DATA_OPS_DATABASE_URL" -c "
+select schemaname, indexname
+from pg_indexes
+where indexname in (
+  'idx_listing_isin_raw_isin',
+  'idx_gleif_isin_lei_raw_lei',
+  'idx_entity_master_publication_batch_id',
+  'idx_entity_listing_publication_batch_id',
+  'idx_entity_identity_review_publication_batch_id',
+  'idx_entity_identity_publication_batch_scope_current'
+)
+order by 1, 2;"
+```
+
 Wave A onboarding (ITB homebuilders + US-listed GDX gold miners):
 
 ```bash

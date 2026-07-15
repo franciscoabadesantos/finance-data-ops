@@ -136,6 +136,8 @@ Publication readiness is gated by full audit output for every non-direct attach,
 Controlled side-by-side entity publication is cache-first and dry-run by default:
 
 ```bash
+python scripts/reconcile_entity_identity_schema.py
+python scripts/reconcile_entity_identity_schema.py --apply
 python scripts/publish_entity_identity_side_by_side.py --source postgres
 python scripts/publish_entity_identity_side_by_side.py --source postgres --refresh-live --gleif-request-sleep-seconds 7
 python scripts/publish_entity_identity_side_by_side.py --source postgres --refresh-live --gleif-request-sleep-seconds 7 --apply-caches
