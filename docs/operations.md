@@ -133,6 +133,9 @@ adding missing publication columns to old `feature_store.entity_master` and `fea
 creating indexes, and applying conditional worker/read grants. It does not write raw cache facts, does not publish
 `entity_master`/`entity_listing` data, and does not change product/read paths.
 
+Raw cache publication uses idempotent upserts. If a cache-only apply fails partway through, earlier cache table writes
+may already be committed by the Postgres publisher and the same cache apply can be rerun after fixing the failing table.
+
 Read-only verification after schema apply:
 
 ```bash

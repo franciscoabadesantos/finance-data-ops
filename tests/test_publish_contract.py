@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+import sys
+import types
 
 import numpy as np
 import pandas as pd
 
-from finance_data_ops.publish.client import RecordingPublisher, _build_upsert_sql, to_json_safe
+from finance_data_ops.publish import client as publish_client
+from finance_data_ops.publish.client import PostgresPublisher, RecordingPublisher, _adapt_postgres_value, _build_upsert_sql, to_json_safe
 from finance_data_ops.publish.prices import publish_prices_surfaces
 from finance_data_ops.publish.status import publish_status_surfaces
 
@@ -176,6 +179,59 @@ def test_entity_attributes_name_upsert_preserves_existing_name() -> None:
     assert '"country" = excluded."country"' in query
 
 
+def test_gleif_lei_isin_raw_isin_list_adapts_as_postgres_text_array(monkeypatch) -> None:
+    Jsonb = _install_fake_jsonb_adapter(monkeypatch)
+
+    isin_list = _adapt_postgres_value(
+        ["AU000000CSL8"],
+        schema_name="source_cache",
+        table_name="gleif_lei_isin_raw",
+        column_name="isin_list",
+    )
+    payload = _adapt_postgres_value(
+        {"pages": [{"data": []}]},
+        schema_name="source_cache",
+        table_name="gleif_lei_isin_raw",
+        column_name="response_payload",
+    )
+
+    assert isin_list == ["AU000000CSL8"]
+    assert not isinstance(isin_list, Jsonb)
+    assert isinstance(payload, Jsonb)
+
+
+def test_postgres_publisher_preserves_text_array_for_gleif_lei_isin_raw(monkeypatch) -> None:
+    Jsonb = _install_fake_jsonb_adapter(monkeypatch)
+    captured: dict[str, object] = {}
+
+    def fake_connect(_database_dsn: str, _application_name: str):
+        return _FakeConnection(captured)
+
+    monkeypatch.setattr(publish_client, "_connect", fake_connect)
+    publisher = PostgresPublisher(database_dsn="postgresql://example")
+
+    publisher.upsert(
+        "source_cache.gleif_lei_isin_raw",
+        [
+            {
+                "lei": "529900ECSECK5ZDQTE14",
+                "response_payload": {"pages": [{"data": []}]},
+                "isin_list": ["AU000000CSL8"],
+                "status": "success",
+            }
+        ],
+        on_conflict="lei",
+    )
+
+    columns = captured["columns"]
+    values = captured["values"][0]
+    by_column = dict(zip(columns, values))
+
+    assert by_column["isin_list"] == ["AU000000CSL8"]
+    assert not isinstance(by_column["isin_list"], Jsonb)
+    assert isinstance(by_column["response_payload"], Jsonb)
+
+
 def test_to_json_safe_converts_supported_scalars() -> None:
     payload = {
         "timestamp": pd.Timestamp("2026-04-10T21:00:00+00:00"),
@@ -196,3 +252,52 @@ def test_to_json_safe_converts_supported_scalars() -> None:
     assert out["bool_value"] is True
     assert out["nan_value"] is None
     assert out["nat_value"] is None
+
+
+class _FakeConnection:
+    def __init__(self, captured: dict[str, object]) -> None:
+        self.captured = captured
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self):
+        return _FakeCursor(self.captured)
+
+
+class _FakeCursor:
+    def __init__(self, captured: dict[str, object]) -> None:
+        self.captured = captured
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def executemany(self, query: str, values: list[list[object]]) -> None:
+        self.captured["query"] = query
+        self.captured["values"] = values
+        start = query.index("(") + 1
+        end = query.index(")")
+        self.captured["columns"] = [column.strip().strip('"') for column in query[start:end].split(",")]
+
+
+def _install_fake_jsonb_adapter(monkeypatch):
+    class FakeJsonb:
+        def __init__(self, value):
+            self.value = value
+
+    psycopg_module = types.ModuleType("psycopg")
+    psycopg_types_module = types.ModuleType("psycopg.types")
+    psycopg_json_module = types.ModuleType("psycopg.types.json")
+    psycopg_json_module.Jsonb = FakeJsonb
+    psycopg_types_module.json = psycopg_json_module
+    psycopg_module.types = psycopg_types_module
+    monkeypatch.setitem(sys.modules, "psycopg", psycopg_module)
+    monkeypatch.setitem(sys.modules, "psycopg.types", psycopg_types_module)
+    monkeypatch.setitem(sys.modules, "psycopg.types.json", psycopg_json_module)
+    return FakeJsonb

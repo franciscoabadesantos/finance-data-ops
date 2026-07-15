@@ -11,6 +11,10 @@ from typing import Any, Protocol
 import numpy as np
 import pandas as pd
 
+TEXT_ARRAY_COLUMNS = {
+    ("source_cache", "gleif_lei_isin_raw", "isin_list"),
+}
+
 
 class Publisher(Protocol):
     def upsert(self, table: str, rows: list[dict[str, Any]], *, on_conflict: str | None = None) -> dict[str, Any]:
@@ -101,7 +105,18 @@ class PostgresPublisher:
             raise ValueError(f"on_conflict is required for Postgres upsert into {table}.")
 
         columns = _ordered_columns(normalized_rows)
-        values = [[_adapt_postgres_value(row.get(column)) for column in columns] for row in normalized_rows]
+        values = [
+            [
+                _adapt_postgres_value(
+                    row.get(column),
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_name=column,
+                )
+                for column in columns
+            ]
+            for row in normalized_rows
+        ]
         update_columns = [column for column in columns if column not in set(conflict_columns)]
         query = _build_upsert_sql(
             schema_name=schema_name,
@@ -121,7 +136,18 @@ class PostgresPublisher:
         normalized_rows = to_json_safe(rows)
         schema_name, table_name = _parse_table_name(table)
         columns = _ordered_columns(normalized_rows)
-        values = [[_adapt_postgres_value(row.get(column)) for column in columns] for row in normalized_rows]
+        values = [
+            [
+                _adapt_postgres_value(
+                    row.get(column),
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_name=column,
+                )
+                for column in columns
+            ]
+            for row in normalized_rows
+        ]
         query = _build_insert_sql(schema_name=schema_name, table_name=table_name, columns=columns)
         with _connect(self.database_dsn, self.application_name) as conn:
             with conn.cursor() as cur:
@@ -147,7 +173,19 @@ def _connect(database_dsn: str, application_name: str):
     return psycopg.connect(database_dsn, autocommit=True, application_name=application_name)
 
 
-def _adapt_postgres_value(value: Any) -> Any:
+def _adapt_postgres_value(
+    value: Any,
+    *,
+    schema_name: str | None = None,
+    table_name: str | None = None,
+    column_name: str | None = None,
+) -> Any:
+    if _is_text_array_column(schema_name=schema_name, table_name=table_name, column_name=column_name):
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple, set)):
+            return [str(item) for item in value if item is not None]
+        return value
     if isinstance(value, (dict, list)):
         try:
             from psycopg.types.json import Jsonb
@@ -155,6 +193,14 @@ def _adapt_postgres_value(value: Any) -> Any:
             raise RuntimeError("psycopg JSON adapters are unavailable.") from exc
         return Jsonb(value)
     return value
+
+
+def _is_text_array_column(*, schema_name: str | None, table_name: str | None, column_name: str | None) -> bool:
+    return (
+        str(schema_name or "").strip(),
+        str(table_name or "").strip(),
+        str(column_name or "").strip(),
+    ) in TEXT_ARRAY_COLUMNS
 
 
 def _build_upsert_sql(
