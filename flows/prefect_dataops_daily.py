@@ -36,6 +36,11 @@ from flows.dataops_macro_daily import run_dataops_macro_daily
 from flows.dataops_market_daily import run_dataops_market_daily
 from flows.dataops_release_calendar_daily import run_dataops_release_calendar_daily
 from flows.dataops_trading_calendar_daily import run_dataops_trading_calendar_daily
+from finance_data_ops.identity.post_onboard_refresh import (
+    DEFAULT_POST_ONBOARD_ENTITY_SCOPE_KEY,
+    PostOnboardEntityIdentityRefreshOptions,
+    run_post_onboard_entity_identity_refresh,
+)
 from finance_data_ops.ops.alerts import build_alert_payload, emit_alert, emit_alert_webhook
 from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.ticker_registry import publish_ticker_registry
@@ -65,6 +70,7 @@ DEFAULT_SCORECARD_BUILD_DEPLOYMENT_NAME = DEFAULT_FEATURE_SCORECARD_BUILD_DEPLOY
 DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME = (
     "technical-feature-backfill/technical-feature-backfill"
 )
+DEFAULT_ENTITY_IDENTITY_REFRESH_SCOPE_KEY = DEFAULT_POST_ONBOARD_ENTITY_SCOPE_KEY
 
 
 @dataclass(frozen=True, slots=True)
@@ -2000,6 +2006,44 @@ def dataops_ticker_onboarding_bulk_flow(
     }
 
 
+@flow(
+    name="dataops_entity_identity_refresh",
+    retries=0,
+    log_prints=True,
+)
+def dataops_entity_identity_refresh_flow(
+    *,
+    scope_key: str = DEFAULT_ENTITY_IDENTITY_REFRESH_SCOPE_KEY,
+    batch_id: str | None = None,
+    cache_root: str | None = None,
+    apply_caches: bool = False,
+    apply_entities: bool = False,
+    refresh_live: bool = False,
+    refresh_cache_misses: bool = False,
+    gleif_request_sleep_seconds: float = 0.5,
+) -> dict[str, Any]:
+    """Explicit post-onboarding Entity Layer refresh over the tracked universe."""
+
+    if bool(refresh_cache_misses) and not bool(refresh_live):
+        raise ValueError("refresh_cache_misses requires refresh_live.")
+    settings = load_settings(cache_root=cache_root)
+    return run_post_onboard_entity_identity_refresh(
+        options=PostOnboardEntityIdentityRefreshOptions(
+            source="postgres",
+            scope_key=str(scope_key or DEFAULT_ENTITY_IDENTITY_REFRESH_SCOPE_KEY).strip()
+            or DEFAULT_ENTITY_IDENTITY_REFRESH_SCOPE_KEY,
+            batch_id=_normalize_optional_text(batch_id),
+            cache_root=cache_root,
+            apply_caches=bool(apply_caches),
+            apply_entities=bool(apply_entities),
+            refresh_live=bool(refresh_live),
+            refresh_cache_misses=bool(refresh_cache_misses),
+            gleif_request_sleep_seconds=float(gleif_request_sleep_seconds),
+        ),
+        settings=settings,
+    )
+
+
 def _build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Prefect Data Ops flows locally.")
     parser.add_argument(
@@ -2015,6 +2059,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
             "ticker-validation",
             "ticker-onboarding",
             "ticker-remove",
+            "entity-identity-refresh",
         ],
         help="Domain flow to execute.",
     )
@@ -2175,6 +2220,15 @@ def main() -> None:
                 publish_enabled=not bool(args.no_publish),
                 trigger_technical_features=not bool(args.no_feature_build_trigger),
                 trigger_scorecard_build=not bool(args.no_feature_build_trigger),
+            )
+        elif args.domain == "entity-identity-refresh":
+            result = dataops_entity_identity_refresh_flow(
+                scope_key=DEFAULT_ENTITY_IDENTITY_REFRESH_SCOPE_KEY,
+                cache_root=args.cache_root,
+                apply_caches=False,
+                apply_entities=False,
+                refresh_live=False,
+                refresh_cache_misses=False,
             )
         else:
             result = dataops_ticker_remove_flow(

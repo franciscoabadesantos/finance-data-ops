@@ -41,6 +41,7 @@ Base deployments:
 - `ticker-onboarding`
 - `ticker-onboarding-bulk`
 - `ticker-remove`
+- `entity-identity-refresh`
 
 Cadence strategy (weekday UTC):
 
@@ -50,6 +51,7 @@ Cadence strategy (weekday UTC):
 - Fundamentals (`fundamentals-daily`): `03:00`
 - Macro (`macro-daily`): `06:15`, `14:45`, `22:45`
 - Economic release calendar (`release-calendar-daily`): `05:00`, `15:00`
+- Entity identity refresh (`entity-identity-refresh`): no schedule; run explicitly after onboarding waves.
 
 ## Data Ops to feature-store handoff
 
@@ -71,6 +73,13 @@ Orchestration order:
 2. The aggregate flow evaluates source watermarks for market, macro, calendars, fundamentals, and earnings.
 3. If blocking watermarks are ready, Data Ops triggers `FEATURE_BUILD_DAILY_DEPLOYMENT` with `{"as_of_date": "<YYYY-MM-DD>"}`.
 4. Macro daily no longer owns the default feature-store trigger. It can still opt in with `trigger_feature_build=true` for manual recovery runs.
+
+Post-onboarding entity identity refresh:
+
+- Deployment: `dataops_entity_identity_refresh/entity-identity-refresh`.
+- Default mode is dry-run, cache-first, no live providers, no cache writes, no entity writes.
+- It targets `feature_store.ticker_readiness.is_tracked = true` and publishes under scope key `tracked` only when `apply_entities=true`.
+- Cache-miss refresh is explicit with `refresh_live=true` and `refresh_cache_misses=true`; cache writes remain separate from entity writes.
 
 Tracked universe contract:
 

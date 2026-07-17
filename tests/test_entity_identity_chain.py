@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +30,11 @@ from finance_data_ops.identity.names import (
     legal_name_query_variants_from_listing,
     name_normalization_audit_flags,
     normalize_legal_name_conservative,
+)
+from finance_data_ops.identity.post_onboard_refresh import (
+    PostOnboardEntityIdentityRefreshOptions,
+    build_post_onboard_entity_refresh_batch_id,
+    run_post_onboard_entity_identity_refresh,
 )
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import (
@@ -2399,6 +2405,190 @@ def test_controlled_entity_publish_rerun_uses_idempotent_upserts() -> None:
     assert second.inserts == []
 
 
+def test_post_onboard_entity_refresh_targets_tracked_universe_cache_first() -> None:
+    captured_args = {}
+
+    def _builder(*, args, settings):
+        captured_args.update(vars(args))
+        return _fixture_measurement(["SAP", "SAP.DE"])
+
+    result = run_post_onboard_entity_identity_refresh(
+        options=PostOnboardEntityIdentityRefreshOptions(source="postgres", scope_key="tracked"),
+        settings=SimpleNamespace(database_dsn="", cache_root=None),
+        measurement_builder=_builder,
+        previous_batch_fetcher=lambda **_kwargs: "tracked-675-first-publish",
+    )
+
+    assert captured_args["source"] == "postgres"
+    assert captured_args["symbols"] == []
+    assert captured_args["tracked_only"] is True
+    assert captured_args["use_raw_cache"] is True
+    assert captured_args["offline"] is True
+    assert captured_args["refresh_cache_misses"] is False
+    assert result["summary"]["scope_key"] == "tracked"
+    assert result["summary"]["previous_batch_id"] == "tracked-675-first-publish"
+    assert result["summary"]["pointer_advanced"] is False
+
+
+def test_post_onboard_entity_refresh_tracked_scope_points_independently() -> None:
+    measurement = _fixture_measurement(["SAP", "SAP.DE"])
+    publisher = RecordingPublisher()
+
+    result = run_post_onboard_entity_identity_refresh(
+        options=PostOnboardEntityIdentityRefreshOptions(
+            source="fixtures",
+            scope_key="tracked",
+            batch_id="tracked-entity-refresh-test",
+            apply_entities=True,
+        ),
+        settings=SimpleNamespace(database_dsn="", cache_root=None),
+        measurement_builder=lambda **_kwargs: measurement,
+        publisher_factory=lambda _writes_enabled, _settings: publisher,
+        previous_batch_fetcher=lambda **_kwargs: "tracked-675-first-publish",
+    )
+
+    current_upsert = next(
+        call for call in publisher.upserts if call["table"] == "feature_store.entity_identity_publication_current"
+    )
+    assert result["status"] == "published_side_by_side"
+    assert result["summary"]["pointer_advanced"] is True
+    assert result["summary"]["previous_batch_id"] == "tracked-675-first-publish"
+    assert current_upsert["rows"] == [{"scope_key": "tracked", "batch_id": "tracked-entity-refresh-test"}]
+
+
+def test_post_onboard_entity_refresh_blocks_pointer_when_gate_not_ready() -> None:
+    measurement = _blocked_publication_measurement(_fixture_measurement(["GOOG", "GOOGL"]))
+    publisher = RecordingPublisher()
+
+    result = run_post_onboard_entity_identity_refresh(
+        options=PostOnboardEntityIdentityRefreshOptions(
+            source="fixtures",
+            scope_key="tracked",
+            batch_id="blocked-refresh",
+            apply_entities=True,
+        ),
+        settings=SimpleNamespace(database_dsn="", cache_root=None),
+        measurement_builder=lambda **_kwargs: measurement,
+        publisher_factory=lambda _writes_enabled, _settings: publisher,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["summary"]["pointer_advanced"] is False
+    assert result["summary"]["review_required_count"] == 1
+    assert publisher.upserts == []
+
+
+def test_post_onboard_entity_refresh_dry_run_reports_review_queue() -> None:
+    measurement = _blocked_publication_measurement(_fixture_measurement(["GOOG", "GOOGL"]))
+
+    result = run_post_onboard_entity_identity_refresh(
+        options=PostOnboardEntityIdentityRefreshOptions(source="fixtures", scope_key="tracked"),
+        settings=SimpleNamespace(database_dsn="", cache_root=None),
+        measurement_builder=lambda **_kwargs: measurement,
+    )
+
+    assert result["status"] == "dry_run"
+    assert result["summary"]["review_required_count"] == 1
+    assert result["summary"]["entity_review_planned_count"] > 0
+    assert result["summary"]["pointer_advanced"] is False
+
+
+def test_post_onboard_entity_refresh_publishes_provisional_single_listing() -> None:
+    measurement = _fixture_measurement(
+        ["ACME"],
+        extra_candidates=[
+            ListingCandidate(
+                symbol="ACME",
+                provider_symbol="ACME",
+                country="US",
+                currency="USD",
+                exchange="NMS",
+                name="ACME CORP",
+                source="test_fixture",
+            )
+        ],
+        openfigi_fixtures={"ACME": _security_fixture("ACME", "ACME CORP")},
+        isin_fixtures={"ACME": {"status": "not_found", "error_message": "no_isin"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={},
+        gleif_legal_name_fixtures={
+            "ACME": {
+                "status": "success",
+                "query": "ACME",
+                "candidates": [_legal_candidate("549300ACME000000001", "ACME CORP", country="US")],
+            }
+        },
+    )
+    publisher = RecordingPublisher()
+
+    result = run_post_onboard_entity_identity_refresh(
+        options=PostOnboardEntityIdentityRefreshOptions(
+            source="fixtures",
+            scope_key="tracked",
+            batch_id="provisional-refresh",
+            apply_entities=True,
+        ),
+        settings=SimpleNamespace(database_dsn="", cache_root=None),
+        measurement_builder=lambda **_kwargs: measurement,
+        publisher_factory=lambda _writes_enabled, _settings: publisher,
+    )
+
+    listing_upsert = next(call for call in publisher.upserts if call["table"] == "feature_store.entity_listing")
+    assert result["summary"]["provisional_count"] == 1
+    assert listing_upsert["rows"][0]["attach_method"] == "provisional_single_listing_candidate"
+    assert listing_upsert["rows"][0]["review_state"] == "provisional"
+
+
+def test_post_onboard_entity_refresh_same_batch_rerun_is_idempotent() -> None:
+    measurement = _fixture_measurement(["SAP", "SAP.DE"])
+    first = RecordingPublisher()
+    second = RecordingPublisher()
+    options = PostOnboardEntityIdentityRefreshOptions(
+        source="fixtures",
+        scope_key="tracked",
+        batch_id="repeatable-tracked-refresh",
+        apply_entities=True,
+    )
+
+    run_post_onboard_entity_identity_refresh(
+        options=options,
+        settings=SimpleNamespace(database_dsn="", cache_root=None),
+        measurement_builder=lambda **_kwargs: measurement,
+        publisher_factory=lambda _writes_enabled, _settings: first,
+    )
+    run_post_onboard_entity_identity_refresh(
+        options=options,
+        settings=SimpleNamespace(database_dsn="", cache_root=None),
+        measurement_builder=lambda **_kwargs: measurement,
+        publisher_factory=lambda _writes_enabled, _settings: second,
+    )
+
+    assert [(call["table"], call["on_conflict"]) for call in first.upserts] == [
+        (call["table"], call["on_conflict"]) for call in second.upserts
+    ]
+    assert first.upserts[0]["rows"][0]["batch_id"] == "repeatable-tracked-refresh"
+    assert second.upserts[0]["rows"][0]["batch_id"] == "repeatable-tracked-refresh"
+
+
+def test_post_onboard_entity_refresh_cache_miss_refresh_requires_live_refresh() -> None:
+    with pytest.raises(ValueError, match="refresh_cache_misses requires refresh_live"):
+        run_post_onboard_entity_identity_refresh(
+            options=PostOnboardEntityIdentityRefreshOptions(
+                source="fixtures",
+                refresh_live=False,
+                refresh_cache_misses=True,
+            ),
+            settings=SimpleNamespace(database_dsn="", cache_root=None),
+            measurement_builder=lambda **_kwargs: _fixture_measurement(["SAP"]),
+        )
+
+
+def test_post_onboard_batch_id_is_descriptive_timestamp() -> None:
+    batch_id = build_post_onboard_entity_refresh_batch_id(datetime(2026, 7, 17, 12, 34, 56, tzinfo=UTC))
+
+    assert batch_id == "tracked-entity-refresh-20260717-123456"
+
+
 def test_side_by_side_publish_does_not_leave_published_batch_when_entity_write_fails() -> None:
     measurement = _fixture_measurement(["SAP", "SAP.DE"])
     publisher = _FailOnTablePublisher("feature_store.entity_master")
@@ -3075,6 +3265,38 @@ class _FailOnTablePublisher(RecordingPublisher):
         if table == self.table_to_fail:
             raise RuntimeError(f"simulated failure for {table}")
         return super().upsert(table, rows, on_conflict=on_conflict)
+
+
+def _blocked_publication_measurement(measurement):
+    blocked_gate = {
+        **measurement.publication_gate,
+        "status": "blocked_pending_review",
+        "publication_allowed_without_review": False,
+        "review_required_count": 1,
+    }
+    blocked_audit = []
+    for index, row in enumerate(measurement.heuristic_attach_audit):
+        blocked_audit.append(
+            {
+                **row,
+                "review_status": "needs_review" if index == 0 else row.get("review_status"),
+                "review_reason": "test_review_required" if index == 0 else row.get("review_reason"),
+            }
+        )
+    return type(measurement)(
+        symbol_rows=measurement.symbol_rows,
+        pair_rows=measurement.pair_rows,
+        summary={**measurement.summary, "publication_gate_review_required_count": 1},
+        name_anchor_precision_audit=measurement.name_anchor_precision_audit,
+        heuristic_attach_audit=blocked_audit,
+        cjk_apac_heuristic_attach_audit=measurement.cjk_apac_heuristic_attach_audit,
+        publication_gate=blocked_gate,
+        openfigi_cache_rows=measurement.openfigi_cache_rows,
+        isin_cache_rows=measurement.isin_cache_rows,
+        gleif_cache_rows=measurement.gleif_cache_rows,
+        gleif_lei_isin_cache_rows=measurement.gleif_lei_isin_cache_rows,
+        gleif_entity_cache_rows=measurement.gleif_entity_cache_rows,
+    )
 
 
 def _measurement_args(

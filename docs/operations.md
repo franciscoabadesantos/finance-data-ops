@@ -145,6 +145,7 @@ Entity identity full-universe cache-read dry-run:
 ```bash
 python scripts/measure_entity_identity_chain.py --source postgres --tracked-only --offline --use-raw-cache
 python scripts/publish_entity_identity_side_by_side.py --source postgres --tracked-only --offline --use-raw-cache
+python scripts/run_post_onboard_entity_identity_refresh.py --source postgres --scope-key tracked
 ```
 
 `--tracked-only` restricts the Postgres universe to `feature_store.ticker_readiness.is_tracked = true`. In
@@ -156,6 +157,51 @@ legal-name cache facts.
 `source_cache.gleif_entity_raw` stores GLEIF legal-name search by conservative `normalized_query_name`, not by LEI. It
 persists the original query, candidates payload, response payload, status, and error message. Cached `not_found` rows
 are reused as known negatives; missing rows are reported as `cache_miss` and are not written as raw facts.
+
+Post-onboarding Entity Layer refresh:
+
+```bash
+# Dry-run current tracked universe, cache-first, no live providers and no writes.
+python scripts/run_post_onboard_entity_identity_refresh.py --source postgres --scope-key tracked
+
+# Fill raw-cache misses only, with provider throttles, without publishing entity tables.
+python scripts/run_post_onboard_entity_identity_refresh.py \
+  --source postgres \
+  --scope-key tracked \
+  --refresh-live \
+  --refresh-cache-misses \
+  --gleif-request-sleep-seconds 7 \
+  --apply-caches
+
+# Publish side-by-side entity tables only after the gate is green.
+python scripts/run_post_onboard_entity_identity_refresh.py \
+  --source postgres \
+  --scope-key tracked \
+  --batch-id tracked-entity-refresh-YYYYMMDD-HHMMSS \
+  --apply-entities
+```
+
+The post-onboarding command is a thin wrapper over `publish_entity_identity_side_by_side.py`: it reuses the same resolver,
+raw-cache read-through, publication gate, review routing, side-by-side batch rows, and current pointer update. Postgres
+mode always targets the current tracked universe from `feature_store.ticker_readiness.is_tracked = true`; it does not use
+a fixed symbol file. `tracked` is the growing scope key for future onboarding waves and is independent of the historical
+`tracked-675` pointer. The command advances `feature_store.entity_identity_publication_current(scope_key='tracked')` only
+when `--apply-entities` is supplied and the publication gate passes.
+
+Track B can trigger the no-schedule Prefect deployment after an onboarding wave completes:
+
+```bash
+prefect deployment run dataops_entity_identity_refresh/entity-identity-refresh \
+  --param scope_key=tracked \
+  --param apply_caches=false \
+  --param apply_entities=false \
+  --param refresh_live=false
+```
+
+For the apply run, set `apply_entities=true` and provide a reviewed `batch_id` after the dry-run summary is accepted.
+The JSON summary reports `scope_key`, `batch_id`, tracked count, planned entity/review rows, resolved/provisional/review
+counts, unresolved multi-listing count, publication gate status, cache-refresh stats, whether the pointer advanced, and
+the previous batch id.
 
 Entity master home-country cache-only backfill:
 

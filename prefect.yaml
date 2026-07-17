@@ -265,3 +265,18 @@ deployments:
       skip_existing: true
     schedules: []
     work_pool: *self_host_pool
+
+  - name: entity-identity-refresh
+    tags: [dataops, entity-identity, onboarding, self-host]
+    description: Explicit post-onboarding Entity Layer refresh over feature_store.ticker_readiness tracked universe.
+    entrypoint: flows/prefect_dataops_daily.py:dataops_entity_identity_refresh_flow
+    parameters:
+      scope_key: tracked
+      batch_id: null
+      apply_caches: false
+      apply_entities: false
+      refresh_live: false
+      refresh_cache_misses: false
+      gleif_request_sleep_seconds: 0.5
+    schedules: []
+    work_pool: *self_host_pool
