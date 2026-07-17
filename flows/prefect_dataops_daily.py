@@ -71,6 +71,14 @@ DEFAULT_TECHNICAL_FEATURE_BACKFILL_DEPLOYMENT_NAME = (
     "technical-feature-backfill/technical-feature-backfill"
 )
 DEFAULT_ENTITY_IDENTITY_REFRESH_SCOPE_KEY = DEFAULT_POST_ONBOARD_ENTITY_SCOPE_KEY
+NEGATIVE_TERMINAL_PREFECT_STATES = {
+    "failed",
+    "crashed",
+    "cancelled",
+    "canceled",
+    "timedout",
+    "timed_out",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,13 +538,23 @@ def trigger_technical_feature_backfill(
         flow_run_name=f"technical-backfill-{normalized_ticker.lower()}",
         idempotency_key=f"technical-backfill:{normalized_ticker}:{start}:{end}",
     )
+    flow_run_state = str(getattr(flow_run, "state_name", "") or "")
     return {
-        "status": "triggered",
+        "status": _deployment_status_from_state(flow_run_state),
         "deployment_name": deployment_name,
         "flow_run_id": str(flow_run.id),
-        "flow_run_state": str(getattr(flow_run, "state_name", "") or ""),
+        "flow_run_state": flow_run_state,
         "parameters": parameters,
     }
+
+
+def _deployment_status_from_state(state_name: str) -> str:
+    normalized = str(state_name or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if normalized == "completed":
+        return "completed"
+    if normalized in NEGATIVE_TERMINAL_PREFECT_STATES:
+        return "failed"
+    return "triggered"
 
 
 def _record_ticker_backfill_status(
@@ -1293,6 +1311,12 @@ def dataops_ticker_backfill_flow(
                 deployment_name=technical_features_deployment_name,
                 timeout_seconds=technical_features_timeout_seconds,
             )
+            if str(technical_features_summary.get("status") or "").strip().lower() != "completed":
+                raise RuntimeError(
+                    "Technical feature backfill did not complete "
+                    f"for {normalized_ticker} "
+                    f"(state={technical_features_summary.get('flow_run_state') or 'unknown'})."
+                )
         else:
             technical_features_summary = {
                 "status": "skipped",

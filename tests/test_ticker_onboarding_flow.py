@@ -6,9 +6,11 @@ import os
 
 import pytest
 
+from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.validation.ticker_registry import read_ticker_registry
 from flows.prefect_dataops_daily import (
     DEFAULT_TICKER_BACKFILL_START_DATE,
+    _deployment_status_from_state,
     dataops_ticker_backfill_flow,
     dataops_ticker_onboarding_bulk_flow,
     dataops_ticker_onboarding_flow,
@@ -23,6 +25,15 @@ LIVE_TICKER_REGISTRY_STATUS_VALUES = {"pending_validation", "active", "rejected"
 class FakeDeploymentRun:
     id: str
     state_name: str
+
+
+def test_deployment_status_from_state_maps_prefect_terminal_states() -> None:
+    assert _deployment_status_from_state("Completed") == "completed"
+    assert _deployment_status_from_state("Failed") == "failed"
+    assert _deployment_status_from_state("Crashed") == "failed"
+    assert _deployment_status_from_state("Cancelled") == "failed"
+    assert _deployment_status_from_state("Running") == "triggered"
+    assert _deployment_status_from_state("Scheduled") == "triggered"
 
 
 def test_onboarding_promotable_triggers_backfill(monkeypatch, tmp_path) -> None:
@@ -321,7 +332,7 @@ def test_ticker_backfill_defaults_full_history_caps_earnings_and_triggers_featur
     assert result["history_limit"] == 100
     assert result["materialization_status"] == {
         "source_data_status": "complete",
-        "technical_features_status": "triggered",
+        "technical_features_status": "completed",
         "scorecard_build_status": "triggered",
     }
     assert result["steps"]["technical_features"]["flow_run_id"] == "technical-run"
@@ -369,6 +380,47 @@ def test_ticker_backfill_isolated_cache_uses_temp_dir_and_cleans_up(monkeypatch,
     assert not os.path.exists(used)  # temp cache cleaned up after the run
     assert result["status"] == "success"
     assert result["materialization_status"]["source_data_status"] == "complete"
+
+
+def test_ticker_backfill_failed_technical_child_fails_parent_before_ready(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr("flows.prefect_dataops_daily.get_run_logger", lambda: logging.getLogger("test"))
+    monkeypatch.setattr(
+        "flows.prefect_dataops_daily.run_dataops_market_daily",
+        lambda **kwargs: {"run_id": "market-run"},
+    )
+    monkeypatch.setattr(
+        "flows.prefect_dataops_daily.run_dataops_earnings_daily",
+        lambda **kwargs: {"run_id": "earnings-run"},
+    )
+    monkeypatch.setattr(
+        "flows.prefect_dataops_daily.run_dataops_fundamentals_daily",
+        lambda **kwargs: {"run_id": "fundamentals-run"},
+    )
+
+    def _fake_run_deployment(name: str, **kwargs):
+        calls.append(name)
+        if name == "technical-feature-backfill/technical-feature-backfill":
+            return FakeDeploymentRun(id="technical-run", state_name="Failed")
+        return FakeDeploymentRun(id="scorecard-run", state_name="Scheduled")
+
+    monkeypatch.setattr("flows.prefect_dataops_daily.run_deployment", _fake_run_deployment)
+
+    with pytest.raises(RuntimeError, match="Technical feature backfill did not complete"):
+        dataops_ticker_backfill_flow.fn(
+            ticker="aapl",
+            end="2026-04-18",
+            cache_root=str(tmp_path),
+            publish_enabled=True,
+            isolated_cache=False,
+        )
+
+    status = read_parquet_table("ticker_backfill_status", cache_root=tmp_path, required=True)
+    row = status.loc[status["ticker"] == "AAPL"].iloc[-1].to_dict()
+    assert row["status"] == "failed"
+    assert row["failed_step"] == "technical_features"
+    assert row["technical_features_status"] == "failed"
+    assert calls == ["technical-feature-backfill/technical-feature-backfill"]
 
 
 def test_ticker_backfill_triggers_configured_scorecard_build_after_technicals(
