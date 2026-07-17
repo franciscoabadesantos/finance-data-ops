@@ -21,6 +21,7 @@ from finance_data_ops.identity.gleif import (
     GleifIsinLeiRecord,
     GleifLegalNameRecord,
     GleifLeiIsinRecord,
+    gleif_cache_rows,
 )
 from finance_data_ops.identity.isin import IsinRecord, YFinanceIsinClient, isin_prefix_policy_for_listing
 from finance_data_ops.identity.names import (
@@ -45,6 +46,7 @@ from scripts.measure_entity_identity_chain import (
     _gleif_lei_expansion_lookup_leis,
     _gleif_lei_expansion_lookup_plan,
     _merge_gleif_records,
+    _refreshable_gleif_isin_keys,
 )
 
 _PREFIX_MISMATCH_ISIN_REASONS = {
@@ -290,6 +292,68 @@ def test_gleif_lei_isins_persistent_429_is_rate_limited_not_not_found() -> None:
     assert "429 Client Error: Too Many Requests" in record.error_message
     assert sleeps == [0.5, 1.0]
     assert len(session.requested_urls) == 3
+
+
+def test_gleif_isin_lei_retries_429_retry_after_then_success() -> None:
+    sleeps: list[float] = []
+    session = _FakeGleifSession(
+        [
+            {"errors": [{"title": "Too Many Requests"}]},
+            {
+                "data": [
+                    {
+                        "id": "529900OKTALEI000001",
+                        "attributes": {
+                            "lei": "529900OKTALEI000001",
+                            "entity": {"legalName": {"name": "OKTA INC"}},
+                        },
+                    }
+                ]
+            },
+        ],
+        status_codes=[429, 200],
+        headers=[{"Retry-After": "3"}, {}],
+    )
+    client = GleifIsinLeiClient(
+        session=session,
+        lei_isin_max_retries=2,
+        retry_backoff_seconds=0.1,
+        retry_jitter_seconds=0.0,
+        sleep_func=sleeps.append,
+    )
+
+    record = client.lookup_isin("US6792951054")
+
+    assert record.status == "success"
+    assert record.lei == "529900OKTALEI000001"
+    assert record.legal_name == "OKTA INC"
+    assert sleeps == [3.0]
+    assert session.requested_params_list == [
+        {"filter[isin]": "US6792951054"},
+        {"filter[isin]": "US6792951054"},
+    ]
+
+
+def test_gleif_isin_lei_persistent_429_is_rate_limited_not_not_found() -> None:
+    session = _FakeGleifSession(
+        {"errors": [{"title": "Too Many Requests"}]},
+        status_codes=[429, 429],
+    )
+    client = GleifIsinLeiClient(
+        session=session,
+        lei_isin_max_retries=1,
+        retry_backoff_seconds=0.0,
+        retry_jitter_seconds=0.0,
+    )
+
+    record = client.lookup_isin("US7496601060")
+
+    assert record.status == "rate_limited"
+    assert record.lei == ""
+    assert "429 Client Error: Too Many Requests" in record.error_message
+    assert gleif_cache_rows([record])[0]["status"] == "rate_limited"
+    assert gleif_cache_rows([record])[0]["error_message"]
+    assert len(session.requested_urls) == 2
 
 
 def test_gleif_lei_isins_throttles_between_unique_lei_requests() -> None:
@@ -2646,6 +2710,330 @@ def test_acronym_name_anchor_with_expansion_only_isin_still_requires_review() ->
     assert row["review_status"] == "needs_review"
 
 
+def test_kddi_cjk_acronym_clears_with_bidirectional_deterministic_isin_support() -> None:
+    measurement = _fixture_measurement(
+        ["9433.T"],
+        extra_candidates=[
+            ListingCandidate(
+                symbol="9433.T",
+                provider_symbol="9433.T",
+                country="JP",
+                currency="JPY",
+                exchange="JP",
+                name="KDDI CORP",
+                source="test_fixture",
+            )
+        ],
+        openfigi_fixtures={"9433.T": _security_fixture("9433", "KDDI CORP", country="JP")},
+        isin_fixtures={"9433.T": {"status": "not_found", "error_message": "no_isin"}},
+        gleif_fixtures={
+            "JP3496400007": {
+                "lei": "5299003FU7V4I45FU310",
+                "legal_name": "KDDI株式会社",
+                "status": "success",
+            }
+        },
+        gleif_lei_isin_fixtures={
+            "LEI:5299003FU7V4I45FU310": {
+                "lei": "5299003FU7V4I45FU310",
+                "legal_name": "KDDI株式会社",
+                "isin_list": ["JP3496400007"],
+                "status": "success",
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:KDDI": {
+                "status": "success",
+                "query": "KDDI",
+                "candidates": [_legal_candidate("5299003FU7V4I45FU310", "KDDI株式会社", country="JP")],
+            }
+        },
+    )
+
+    row = measurement.symbol_rows[0]
+    audit = measurement.heuristic_attach_audit[0]
+
+    assert row["entity_attach_method"] == "name_anchor_confirmed"
+    assert row["matched_compatible_isins"] == ["JP3496400007"]
+    assert audit["cjk_name_collapsed_to_latin_acronym"] is True
+    assert audit["distinctive_tokens_removed"] is False
+    assert audit["strong_deterministic_isin_support"] is True
+    assert audit["review_status"] == "machine_verifiably_safe"
+    assert measurement.publication_gate["status"] == "ready_machine_safe"
+
+
+def test_rate_limited_forward_isin_lookup_is_retried_for_heuristic_gate_support() -> None:
+    measurement = _fixture_measurement(
+        ["OKTA"],
+        extra_candidates=[
+            ListingCandidate(
+                symbol="OKTA",
+                provider_symbol="OKTA",
+                country="US",
+                currency="USD",
+                exchange="NMS",
+                name="OKTA INC",
+                source="test_fixture",
+            )
+        ],
+        openfigi_fixtures={"OKTA": _security_fixture("OKTA", "OKTA INC")},
+        isin_fixtures={"OKTA": {"status": "not_found", "error_message": "no_isin"}},
+        gleif_fixtures={
+            "US6792951054": {
+                "status": "rate_limited",
+                "error_message": "429 Client Error: Too Many Requests",
+            }
+        },
+        gleif_lei_isin_fixtures={
+            "LEI:529900OKTALEI000001": {
+                "lei": "529900OKTALEI000001",
+                "legal_name": "OKTA INC",
+                "isin_list": ["US6792951054"],
+                "status": "success",
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:OKTA": {
+                "status": "success",
+                "query": "OKTA",
+                "candidates": [_legal_candidate("529900OKTALEI000001", "OKTA INC", country="US")],
+            }
+        },
+    )
+    rate_limited_record = GleifIsinLeiRecord(
+        isin="US6792951054",
+        status="rate_limited",
+        error_message="429 Client Error: Too Many Requests",
+    )
+
+    assert _audit_forward_lookup_isins(measurement, [rate_limited_record]) == ["US6792951054"]
+    assert _refreshable_gleif_isin_keys([rate_limited_record]) == ["US6792951054"]
+
+    session = _FakeGleifSession(
+        [
+            {"errors": [{"title": "Too Many Requests"}]},
+            {
+                "data": [
+                    {
+                        "id": "529900OKTALEI000001",
+                        "attributes": {
+                            "lei": "529900OKTALEI000001",
+                            "entity": {"legalName": {"name": "OKTA INC"}},
+                        },
+                    }
+                ]
+            },
+        ],
+        status_codes=[429, 200],
+    )
+    client = GleifIsinLeiClient(
+        session=session,
+        lei_isin_max_retries=1,
+        retry_backoff_seconds=0.0,
+        retry_jitter_seconds=0.0,
+    )
+    refreshed = client.lookup_isins(["US6792951054"])
+    remeasured = measure_entity_identity_chain(
+        candidates=[
+            ListingCandidate(symbol="OKTA", provider_symbol="OKTA", country="US", currency="USD", name="OKTA INC")
+        ],
+        openfigi_mappings=[
+            OpenFigiMapping(
+                symbol="OKTA",
+                request_hash="fixture",
+                status="success",
+                payload={"exchCode": "US"},
+                ticker="OKTA",
+                name="OKTA INC",
+                country="US",
+                figi="OKTA-FIGI",
+                composite_figi="OKTA-COMP",
+                share_class_figi="OKTA-SHARE",
+            )
+        ],
+        isin_records=[
+            IsinRecord(
+                symbol="OKTA",
+                provider="fixture_yfinance",
+                request_payload={"provider_symbol": "OKTA"},
+                response_payload={},
+                isin="",
+                status="not_found",
+                error_message="no_isin",
+            )
+        ],
+        gleif_records=refreshed,
+        gleif_lei_isin_records=[
+            GleifLeiIsinRecord(
+                lei="529900OKTALEI000001",
+                isin_list=["US6792951054"],
+                legal_name="OKTA INC",
+                status="success",
+            )
+        ],
+        gleif_legal_name_records=[
+            GleifLegalNameRecord(
+                query_name="OKTA",
+                normalized_query_name="OKTA",
+                candidates=[_legal_candidate("529900OKTALEI000001", "OKTA INC", country="US")],
+                status="success",
+            )
+        ],
+        gleif_lei_expansion_request_leis=["529900OKTALEI000001"],
+        gleif_lei_expansion_request_origin_leis={"legal_name_candidate": ["529900OKTALEI000001"]},
+        pairs=[],
+    )
+
+    assert refreshed[0].status == "success"
+    assert remeasured.heuristic_attach_audit[0]["strong_deterministic_isin_support"] is True
+    assert remeasured.publication_gate["status"] == "ready_machine_safe"
+
+
+def test_weak_name_only_heuristic_is_review_routed_until_explicitly_reviewed_safe() -> None:
+    measurement = _fixture_measurement(
+        ["WEAK"],
+        extra_candidates=[
+            ListingCandidate(
+                symbol="WEAK",
+                provider_symbol="WEAK",
+                country="US",
+                currency="USD",
+                exchange="NMS",
+                name="WEAK HOLDINGS INC",
+                source="test_fixture",
+            )
+        ],
+        openfigi_fixtures={"WEAK": _security_fixture("WEAK", "WEAK HOLDINGS INC")},
+        isin_fixtures={"WEAK": {"status": "not_found", "error_message": "no_isin"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:WEAKLEI000001": {
+                "lei": "WEAKLEI000001",
+                "legal_name": "WEAK HOLDINGS INC",
+                "isin_list": ["US0000000001"],
+                "status": "success",
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:WEAK HOLDINGS": {
+                "status": "success",
+                "query": "WEAK HOLDINGS",
+                "candidates": [_legal_candidate("WEAKLEI000001", "WEAK HOLDINGS INC", country="US")],
+            }
+        },
+    )
+
+    audit = measurement.heuristic_attach_audit[0]
+    assert audit["heuristic_support_kind"] == "weak_or_name_only"
+    assert audit["review_status"] == "needs_review"
+    assert audit["review_reason"] == "weak_heuristic_requires_review"
+    assert measurement.publication_gate["status"] == "blocked_pending_review"
+    assert measurement.summary["heuristic_weak_or_name_only_count"] == 1
+    assert measurement.summary["review_routed_weak_heuristic_count"] == 1
+
+    reviewed = _fixture_measurement(
+        ["WEAK"],
+        extra_candidates=[
+            ListingCandidate(
+                symbol="WEAK",
+                provider_symbol="WEAK",
+                country="US",
+                currency="USD",
+                exchange="NMS",
+                name="WEAK HOLDINGS INC",
+                source="test_fixture",
+            )
+        ],
+        openfigi_fixtures={"WEAK": _security_fixture("WEAK", "WEAK HOLDINGS INC")},
+        isin_fixtures={"WEAK": {"status": "not_found", "error_message": "no_isin"}},
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={
+            "LEI:WEAKLEI000001": {
+                "lei": "WEAKLEI000001",
+                "legal_name": "WEAK HOLDINGS INC",
+                "isin_list": ["US0000000001"],
+                "status": "success",
+            }
+        },
+        gleif_legal_name_fixtures={
+            "NAME:WEAK HOLDINGS": {
+                "status": "success",
+                "query": "WEAK HOLDINGS",
+                "candidates": [_legal_candidate("WEAKLEI000001", "WEAK HOLDINGS INC", country="US")],
+            }
+        },
+        reviewed_safe_heuristics=[
+            {
+                "symbol": "WEAK",
+                "lei": "WEAKLEI000001",
+                "attach_method": "name_anchor_confirmed",
+                "review_status": "reviewed_safe",
+            }
+        ],
+    )
+
+    reviewed_audit = reviewed.heuristic_attach_audit[0]
+    assert reviewed_audit["review_status"] == "reviewed_safe"
+    assert reviewed.publication_gate["status"] == "ready_machine_safe"
+    assert reviewed.summary["reviewed_safe_heuristic_count"] == 1
+
+
+def test_curated_identity_groups_hut_and_hut_to_and_clears_unresolved_multi_listing_tail() -> None:
+    candidates = [
+        ListingCandidate(symbol="HUT", provider_symbol="HUT", country="US", currency="USD", name="HUT 8 CORP"),
+        ListingCandidate(symbol="HUT.TO", provider_symbol="HUT.TO", country="CA", currency="CAD", name="HUT 8 CORP"),
+    ]
+    measurement = _fixture_measurement(
+        ["HUT", "HUT.TO"],
+        extra_candidates=candidates,
+        openfigi_fixtures={
+            "HUT": _security_fixture("HUT", "HUT 8 CORP"),
+            "HUT.TO": _security_fixture("HUT", "HUT 8 CORP", country="CA"),
+        },
+        isin_fixtures={
+            "HUT": {"status": "not_found", "error_message": "no_isin"},
+            "HUT.TO": {"status": "not_found", "error_message": "no_isin"},
+        },
+        gleif_fixtures={},
+        gleif_lei_isin_fixtures={},
+        gleif_legal_name_fixtures={},
+        curated_identity_decisions=[
+            {
+                "symbol": "HUT",
+                "lei": "98450066FEF9C1D3FC20",
+                "legal_name": "HUT 8 CORP.",
+                "attach_method": "curated_identity",
+                "lifecycle_state": "resolved",
+                "source": "test_curated_fixture",
+                "evidence": {"reason": "manual_curated_multi_listing_identity"},
+            },
+            {
+                "symbol": "HUT.TO",
+                "lei": "98450066FEF9C1D3FC20",
+                "legal_name": "HUT 8 CORP.",
+                "attach_method": "curated_identity",
+                "lifecycle_state": "resolved",
+                "source": "test_curated_fixture",
+                "evidence": {"reason": "manual_curated_multi_listing_identity"},
+            },
+        ],
+        pairs=[("HUT", "HUT.TO", "curated_multi_listing")],
+    )
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+    pair = measurement.pair_rows[0]
+    plan = build_side_by_side_entity_publication_plan(measurement)
+
+    assert rows["HUT"]["entity_attach_method"] == "curated_identity"
+    assert rows["HUT.TO"]["entity_attach_method"] == "curated_identity"
+    assert rows["HUT"]["entity_lei"] == "98450066FEF9C1D3FC20"
+    assert rows["HUT.TO"]["entity_lei"] == "98450066FEF9C1D3FC20"
+    assert pair["grouped"] is True
+    assert measurement.summary["curated_identity_attach_count"] == 2
+    assert measurement.summary["unresolved_multi_listing_entities_count"] == 0
+    assert plan["feature_store.entity_listing"][0]["attach_method"] == "curated_identity"
+    assert plan["feature_store.entity_listing"][0]["evidence_payload"]["curated_identity_source"] == "test_curated_fixture"
+
+
 def test_side_by_side_publisher_blocks_unreviewed_heuristic_gate() -> None:
     measurement = _fixture_measurement(["GOOG", "GOOGL"])
     blocked_gate = {
@@ -2726,6 +3114,8 @@ def _fixture_measurement(
     gleif_legal_name_fixtures: dict | None = None,
     openfigi_fixtures: dict | None = None,
     extra_candidates: list[ListingCandidate] | None = None,
+    curated_identity_decisions: list[dict] | None = None,
+    reviewed_safe_heuristics: list[dict] | None = None,
     pairs: list[tuple[str, str, str]] | None = None,
 ):
     candidates = acceptance_fixture_candidates(symbols=symbols)
@@ -2812,6 +3202,8 @@ def _fixture_measurement(
         gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
         gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
         gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
+        curated_identity_decisions=curated_identity_decisions,
+        reviewed_safe_heuristics=reviewed_safe_heuristics,
         pairs=pairs if pairs is not None else acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=openfigi.batch_split_retries,
     )
@@ -2828,6 +3220,8 @@ def _fixture_measurement(
             gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
             gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
             gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
+            curated_identity_decisions=curated_identity_decisions,
+            reviewed_safe_heuristics=reviewed_safe_heuristics,
             pairs=pairs if pairs is not None else acceptance_pairs_for_symbols(selected_symbols),
             batch_split_retries=openfigi.batch_split_retries,
         )

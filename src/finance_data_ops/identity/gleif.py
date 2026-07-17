@@ -108,20 +108,44 @@ class GleifIsinLeiClient:
                 error_message="offline_without_fixture",
             )
         try:
-            response = self.session.get(
-                GLEIF_LEI_RECORDS_URL,
-                params={"filter[isin]": cleaned_isin},
-                timeout=30,
-            )
-            response.raise_for_status()
+            response = self._get_isin_mapping_with_retry(cleaned_isin=cleaned_isin)
             payload = response.json()
             return _record_from_gleif_payload(cleaned_isin, payload)
         except Exception as exc:
+            if _is_rate_limit_exception(exc):
+                return GleifIsinLeiRecord(
+                    isin=cleaned_isin,
+                    status="rate_limited",
+                    error_message=str(exc),
+                )
             return GleifIsinLeiRecord(
                 isin=cleaned_isin,
                 status="error",
                 error_message=str(exc),
             )
+
+    def _get_isin_mapping_with_retry(self, *, cleaned_isin: str) -> requests.Response:
+        attempt = 0
+        while True:
+            response = self.session.get(
+                GLEIF_LEI_RECORDS_URL,
+                params={"filter[isin]": cleaned_isin},
+                timeout=30,
+            )
+            if getattr(response, "status_code", None) != 429:
+                response.raise_for_status()
+                return response
+            if attempt >= self.lei_isin_max_retries:
+                raise GleifRateLimitError(_isin_rate_limit_message(response=response, attempt=attempt))
+            delay = _retry_delay_seconds(
+                response=response,
+                attempt=attempt,
+                backoff_seconds=self.retry_backoff_seconds,
+                jitter_seconds=self.retry_jitter_seconds,
+            )
+            if delay > 0:
+                self.sleep_func(delay)
+            attempt += 1
 
     def lookup_lei_isins(self, leis: list[str]) -> list[GleifLeiIsinRecord]:
         out = []
@@ -480,6 +504,12 @@ def _rate_limit_message(*, response: Any, attempt: int) -> str:
     retry_after = getattr(response, "headers", {}).get("Retry-After") if hasattr(getattr(response, "headers", {}), "get") else None
     suffix = f"; retry_after={retry_after}" if retry_after else ""
     return f"429 Client Error: Too Many Requests for GLEIF LEI->ISIN expansion after {attempt + 1} attempts{suffix}"
+
+
+def _isin_rate_limit_message(*, response: Any, attempt: int) -> str:
+    retry_after = getattr(response, "headers", {}).get("Retry-After") if hasattr(getattr(response, "headers", {}), "get") else None
+    suffix = f"; retry_after={retry_after}" if retry_after else ""
+    return f"429 Client Error: Too Many Requests for GLEIF ISIN->LEI lookup after {attempt + 1} attempts{suffix}"
 
 
 def _record_from_gleif_payload(isin: str, payload: Any) -> GleifIsinLeiRecord:

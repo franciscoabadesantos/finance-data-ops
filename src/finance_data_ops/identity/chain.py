@@ -54,6 +54,8 @@ NON_DIRECT_ATTACH_METHODS = {
     "name_anchor_confirmed",
     "foreign_issuer_name_anchor_confirmed",
     "isin_direct_prefix_mismatch_name_confirmed",
+    "curated_identity",
+    "manual_curated_identity",
 }
 
 HEURISTIC_ATTACH_METHODS = {
@@ -61,6 +63,8 @@ HEURISTIC_ATTACH_METHODS = {
     "foreign_issuer_name_anchor_confirmed",
     "isin_direct_prefix_mismatch_name_confirmed",
 }
+
+CURATED_ATTACH_METHODS = {"curated_identity", "manual_curated_identity"}
 
 APAC_COUNTRIES = {"AU", "CN", "HK", "IL", "IN", "JP", "KR", "SG", "TW"}
 
@@ -110,6 +114,8 @@ def measure_entity_identity_chain(
     gleif_lei_expansion_request_leis: list[str] | None = None,
     gleif_lei_expansion_request_origin_leis: dict[str, list[str]] | None = None,
     gleif_lei_expansion_excluded_origin_leis: dict[str, list[str]] | None = None,
+    curated_identity_decisions: list[dict[str, Any]] | None = None,
+    reviewed_safe_heuristics: list[dict[str, Any]] | None = None,
     pairs: list[tuple[str, str, str]] | None = None,
     batch_split_retries: int = 0,
 ) -> EntityChainMeasurement:
@@ -145,6 +151,10 @@ def measure_entity_identity_chain(
         lei_expansion_request_set=lei_expansion_request_set,
         legal_name_records=legal_name_records,
     )
+    symbol_rows = _apply_curated_identity_decisions(
+        symbol_rows=symbol_rows,
+        curated_identity_decisions=curated_identity_decisions or [],
+    )
     rows_by_symbol = {row["symbol"]: row for row in symbol_rows}
     pair_rows = [_pair_row(left, right, pair_type, rows_by_symbol) for left, right, pair_type in selected_pairs]
     symbol_rows = _annotate_listing_group_profiles(symbol_rows, pair_rows)
@@ -158,7 +168,11 @@ def measure_entity_identity_chain(
         }
     )
     precision_audit = _name_anchor_precision_audit(symbol_rows)
-    heuristic_attach_audit = _heuristic_attach_audit(symbol_rows, gleif_by_isin=gleif_by_isin)
+    heuristic_attach_audit = _heuristic_attach_audit(
+        symbol_rows,
+        gleif_by_isin=gleif_by_isin,
+        reviewed_safe_heuristics=reviewed_safe_heuristics or [],
+    )
     cjk_apac_heuristic_attach_audit = _cjk_apac_heuristic_attach_audit(heuristic_attach_audit)
     publication_gate = _publication_gate(heuristic_attach_audit)
     summary = _summary(
@@ -269,6 +283,11 @@ def acceptance_gleif_fixtures() -> dict[str, dict[str, Any]]:
         "USN070592100": {"lei": "724500Y6DUVHQD8W8H93", "legal_name": "ASML HOLDING N.V.", "source": "fixture_gleif"},
         "US6701002056": {"lei": "549300DAQ1CVT6CXN342", "legal_name": "NOVO NORDISK A/S", "source": "fixture_gleif"},
         "US7672041008": {"lei": "213800YOEO5OQ72G2R82", "legal_name": "RIO TINTO PLC", "source": "fixture_gleif"},
+        "GB0005405286": {"lei": "MP6I5ZYZBEU3UXPYFY54", "legal_name": "HSBC HOLDINGS PLC", "source": "fixture_gleif"},
+        "US02079K1079": {"lei": "5493006MHB84DD0ZWV18", "legal_name": "ALPHABET INC.", "source": "fixture_gleif"},
+        "US02079K3059": {"lei": "5493006MHB84DD0ZWV18", "legal_name": "ALPHABET INC.", "source": "fixture_gleif"},
+        "US5260571048": {"lei": "529900G61XVRLX5TJX09", "legal_name": "LENNAR CORPORATION", "source": "fixture_gleif"},
+        "US5260573028": {"lei": "529900G61XVRLX5TJX09", "legal_name": "LENNAR CORPORATION", "source": "fixture_gleif"},
     }
 
 
@@ -684,6 +703,78 @@ def _attach_rows_via_lei_expansion(
                 gleif_by_isin=gleif_by_isin,
             )
         out.append(attached)
+    return out
+
+
+def _apply_curated_identity_decisions(
+    *,
+    symbol_rows: list[dict[str, Any]],
+    curated_identity_decisions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    decisions_by_symbol: dict[str, dict[str, Any]] = {}
+    for decision in curated_identity_decisions:
+        symbol = _symbol(decision.get("symbol"))
+        lei = _symbol(decision.get("lei") or decision.get("entity_lei"))
+        legal_name = str(decision.get("legal_name") or decision.get("entity_legal_name") or "").strip()
+        if not symbol or not lei or not legal_name:
+            continue
+        lifecycle_state = str(decision.get("lifecycle_state") or decision.get("resolution_state") or "resolved")
+        if lifecycle_state not in {"resolved", "reviewed_safe", "active"}:
+            continue
+        decisions_by_symbol[symbol] = {
+            "symbol": symbol,
+            "lei": lei,
+            "legal_name": legal_name,
+            "source": str(decision.get("source") or "curated_identity"),
+            "method": str(decision.get("attach_method") or "curated_identity"),
+            "confidence": str(decision.get("confidence") or "high"),
+            "evidence": decision.get("evidence") if isinstance(decision.get("evidence"), dict) else {},
+            "reviewed_by": str(decision.get("reviewed_by") or ""),
+            "reviewed_at": str(decision.get("reviewed_at") or ""),
+        }
+
+    if not decisions_by_symbol:
+        return symbol_rows
+
+    out = []
+    for row in symbol_rows:
+        symbol = _symbol(row.get("symbol"))
+        decision = decisions_by_symbol.get(symbol)
+        if not decision:
+            out.append(row)
+            continue
+        curated = dict(row)
+        curated.update(
+            {
+                "lei": decision["lei"],
+                "legal_name": decision["legal_name"],
+                "entity_lei": decision["lei"],
+                "entity_legal_name": decision["legal_name"],
+                "entity_attach_method": decision["method"],
+                "entity_attach_reason": "curated_identity_decision",
+                "entity_attach_reasons": ["curated_identity_decision"],
+                "decision_bucket": "attached",
+                "candidate_lei": decision["lei"],
+                "candidate_legal_name": decision["legal_name"],
+                "candidate_entity_status": "ACTIVE",
+                "candidate_registration_status": "REVIEWED",
+                "attachment_provenance": decision["method"],
+                "attachment_confidence": decision["confidence"],
+                "review_state": "reviewed_safe",
+                "curated_identity_source": decision["source"],
+                "curated_identity_evidence": {
+                    **decision["evidence"],
+                    "source": decision["source"],
+                    "reviewed_by": decision["reviewed_by"],
+                    "reviewed_at": decision["reviewed_at"],
+                },
+                "compatible_isin_gate_status": "curated_identity",
+                "compatible_isin_gate_reject_reason": "",
+                "legal_name_anchor_status": "curated_identity",
+                "legal_name_anchor_reject_reason": "",
+            }
+        )
+        out.append(curated)
     return out
 
 
@@ -1852,6 +1943,32 @@ def _summary(
         "heuristic_attach_audit_count": len(
             [row for row in heuristic_attach_audit if row.get("attach_audit_kind") == "heuristic"]
         ),
+        "heuristic_strong_deterministic_support_count": publication_gate.get(
+            "heuristic_strong_deterministic_support_count",
+            0,
+        ),
+        "heuristic_weak_or_name_only_count": publication_gate.get("heuristic_weak_or_name_only_count", 0),
+        "heuristic_weak_or_name_only_symbols": list(
+            publication_gate.get("heuristic_weak_or_name_only_symbols") or []
+        ),
+        "heuristic_weak_or_name_only_sample": list(publication_gate.get("heuristic_weak_or_name_only_sample") or []),
+        "review_routed_weak_heuristic_count": publication_gate.get("review_routed_weak_heuristic_count", 0),
+        "reviewed_safe_heuristic_count": publication_gate.get("reviewed_safe_heuristic_count", 0),
+        "curated_identity_attach_count": len(
+            [row for row in symbol_rows if row.get("entity_attach_method") in CURATED_ATTACH_METHODS]
+        ),
+        "curated_identity_symbols": [
+            row.get("symbol") or ""
+            for row in symbol_rows
+            if row.get("entity_attach_method") in CURATED_ATTACH_METHODS
+        ],
+        "curated_identity_sample": _sample_text(
+            [
+                row.get("symbol") or ""
+                for row in symbol_rows
+                if row.get("entity_attach_method") in CURATED_ATTACH_METHODS
+            ]
+        ),
         "cjk_apac_heuristic_attach_audit_count": len(_cjk_apac_heuristic_attach_audit(heuristic_attach_audit)),
         "heuristic_attach_normalization_risk_count": len(
             [row for row in heuristic_attach_audit if _has_normalization_risk_flags(row)]
@@ -2215,9 +2332,11 @@ def _heuristic_attach_audit(
     rows: list[dict[str, Any]],
     *,
     gleif_by_isin: dict[str, GleifIsinLeiRecord] | None = None,
+    reviewed_safe_heuristics: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     out = []
     entity_groups: dict[str, list[dict[str, Any]]] = {}
+    reviewed_safe_keys = _reviewed_safe_heuristic_keys(reviewed_safe_heuristics or [])
     for row in rows:
         entity_lei = _symbol(row.get("entity_lei") or row.get("lei"))
         if entity_lei:
@@ -2255,11 +2374,23 @@ def _heuristic_attach_audit(
             normalization_flags=normalization_flags,
             strong_deterministic_isin_support=strong_deterministic_isin_support,
         )
+        reviewed_safe = _heuristic_review_key(
+            symbol=row.get("symbol"),
+            entity_lei=entity_lei,
+            attach_method=method,
+        ) in reviewed_safe_keys
+        weak_heuristic = bool(method in HEURISTIC_ATTACH_METHODS and not strong_deterministic_isin_support)
         machine_safe = (
             deterministic_support
             and not any(conflict_flags.values())
             and not normalization_risk_blocks_publication
             and (not needs_name_match or conservative_name_match)
+            and not weak_heuristic
+        )
+        review_status = (
+            "machine_verifiably_safe"
+            if machine_safe
+            else ("reviewed_safe" if reviewed_safe and not any(conflict_flags.values()) else "needs_review")
         )
         out.append(
             {
@@ -2286,6 +2417,16 @@ def _heuristic_attach_audit(
                 "conservative_name_match": conservative_name_match,
                 "deterministic_support": deterministic_support,
                 "strong_deterministic_isin_support": strong_deterministic_isin_support,
+                "heuristic_support_kind": (
+                    "strong_bidirectional_deterministic"
+                    if method in HEURISTIC_ATTACH_METHODS and strong_deterministic_isin_support
+                    else (
+                        "weak_or_name_only"
+                        if method in HEURISTIC_ATTACH_METHODS
+                        else "deterministic_non_direct"
+                    )
+                ),
+                "reviewed_safe_input": reviewed_safe,
                 "matched_compatible_isins": list(row.get("matched_compatible_isins") or []),
                 "compatible_expanded_isin_count": int(row.get("compatible_expanded_isin_count") or 0),
                 "raw_isin": row.get("raw_isin") or row.get("foreign_issuer_raw_isin") or "",
@@ -2308,20 +2449,40 @@ def _heuristic_attach_audit(
                     }
                 ),
                 "entity_group_conflict_flags": conflict_flags,
-                "review_status": "machine_verifiably_safe" if machine_safe else "needs_review",
+                "review_status": review_status,
                 "review_reason": ""
-                if machine_safe
+                if review_status in {"machine_verifiably_safe", "reviewed_safe"}
                 else _audit_review_reason(
                     conflict_flags,
                     deterministic_support,
                     conservative_name_match,
                     normalization_flags,
                     strong_deterministic_isin_support,
+                    weak_heuristic,
                 ),
                 "evidence_payload": _audit_evidence_payload(row),
             }
         )
     return out
+
+
+def _reviewed_safe_heuristic_keys(reviewed_safe_heuristics: list[dict[str, Any]]) -> set[str]:
+    keys: set[str] = set()
+    for item in reviewed_safe_heuristics:
+        symbol = item.get("symbol")
+        entity_lei = item.get("entity_lei") or item.get("lei") or item.get("candidate_lei")
+        attach_method = item.get("attach_method") or item.get("entity_attach_method")
+        if not symbol or not entity_lei or not attach_method:
+            continue
+        state = str(item.get("review_status") or item.get("review_state") or item.get("lifecycle_state") or "").lower()
+        if state not in {"reviewed_safe", "approved", "machine_safe"}:
+            continue
+        keys.add(_heuristic_review_key(symbol=symbol, entity_lei=entity_lei, attach_method=attach_method))
+    return keys
+
+
+def _heuristic_review_key(*, symbol: Any, entity_lei: Any, attach_method: Any) -> str:
+    return "|".join((_symbol(symbol), _symbol(entity_lei), str(attach_method or "").strip()))
 
 
 def _cjk_apac_heuristic_attach_audit(heuristic_attach_audit: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2339,9 +2500,15 @@ def _cjk_apac_heuristic_attach_audit(heuristic_attach_audit: list[dict[str, Any]
 
 
 def _publication_gate(heuristic_attach_audit: list[dict[str, Any]]) -> dict[str, Any]:
-    review_required = [row for row in heuristic_attach_audit if row.get("review_status") != "machine_verifiably_safe"]
+    safe_statuses = {"machine_verifiably_safe", "reviewed_safe"}
+    review_required = [row for row in heuristic_attach_audit if row.get("review_status") not in safe_statuses]
     machine_safe = [row for row in heuristic_attach_audit if row.get("review_status") == "machine_verifiably_safe"]
+    reviewed_safe = [row for row in heuristic_attach_audit if row.get("review_status") == "reviewed_safe"]
     heuristic_rows = [row for row in heuristic_attach_audit if row.get("attach_audit_kind") == "heuristic"]
+    weak_heuristic_rows = [row for row in heuristic_rows if row.get("heuristic_support_kind") == "weak_or_name_only"]
+    strong_heuristic_rows = [
+        row for row in heuristic_rows if row.get("heuristic_support_kind") == "strong_bidirectional_deterministic"
+    ]
     conflict_rows = [
         row
         for row in heuristic_attach_audit
@@ -2353,9 +2520,20 @@ def _publication_gate(heuristic_attach_audit: list[dict[str, Any]]) -> dict[str,
         "non_direct_attach_count": len(heuristic_attach_audit),
         "heuristic_attach_count": len(heuristic_rows),
         "machine_verifiably_safe_count": len(machine_safe),
+        "reviewed_safe_count": len(reviewed_safe),
         "review_required_count": len(review_required),
         "group_conflict_count": len(conflict_rows),
         "review_required_symbols": [row.get("symbol") or "" for row in review_required],
+        "review_routed_weak_heuristic_count": len(
+            [row for row in weak_heuristic_rows if row.get("review_status") == "needs_review"]
+        ),
+        "reviewed_safe_heuristic_count": len(
+            [row for row in weak_heuristic_rows if row.get("review_status") == "reviewed_safe"]
+        ),
+        "heuristic_strong_deterministic_support_count": len(strong_heuristic_rows),
+        "heuristic_weak_or_name_only_count": len(weak_heuristic_rows),
+        "heuristic_weak_or_name_only_symbols": [row.get("symbol") or "" for row in weak_heuristic_rows],
+        "heuristic_weak_or_name_only_sample": _sample_text([row.get("symbol") or "" for row in weak_heuristic_rows]),
         "conflict_symbols": [row.get("symbol") or "" for row in conflict_rows],
         "required_gate": (
             "all non-direct/heuristic attaches must be reviewed or machine-verifiably safe before side-by-side entity publication"
@@ -2430,8 +2608,10 @@ def _normalization_risk_blocks_publication(
     normalization_flags: dict[str, bool],
     strong_deterministic_isin_support: bool,
 ) -> bool:
-    if normalization_flags.get("cjk_name_collapsed_to_latin_acronym") or normalization_flags.get("distinctive_tokens_removed"):
+    if normalization_flags.get("distinctive_tokens_removed"):
         return True
+    if normalization_flags.get("cjk_name_collapsed_to_latin_acronym"):
+        return not strong_deterministic_isin_support
     if normalization_flags.get("normalized_name_too_short") or normalization_flags.get("normalized_name_acronym_only"):
         return not strong_deterministic_isin_support
     return False
@@ -2452,6 +2632,8 @@ def _has_conservative_name_match(
 
 def _has_deterministic_attach_support(row: dict[str, Any]) -> bool:
     method = str(row.get("entity_attach_method") or "")
+    if method in CURATED_ATTACH_METHODS:
+        return bool(row.get("curated_identity_source") and _symbol(row.get("entity_lei")))
     if method == "isin_direct_prefix_mismatch_name_confirmed":
         return bool(row.get("direct_lei") or row.get("direct_prefix_mismatch_lei") or row.get("entity_lei"))
     if method == "foreign_issuer_name_anchor_confirmed":
@@ -2523,6 +2705,7 @@ def _audit_review_reason(
     conservative_name_match: bool,
     normalization_flags: dict[str, bool],
     strong_deterministic_isin_support: bool,
+    weak_heuristic: bool = False,
 ) -> str:
     if any(conflict_flags.values()):
         return "conflicting_group_identity"
@@ -2531,6 +2714,8 @@ def _audit_review_reason(
         strong_deterministic_isin_support=strong_deterministic_isin_support,
     ):
         return "name_normalization_requires_review"
+    if weak_heuristic:
+        return "weak_heuristic_requires_review"
     if not deterministic_support:
         return "missing_deterministic_support"
     if not conservative_name_match:
@@ -2558,6 +2743,8 @@ def _audit_evidence_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 def _attachment_confidence(method: str) -> str:
     if method in {"direct_isin", "lei_expansion", "isin_direct_prefix_mismatch_name_confirmed"}:
+        return "high"
+    if method in CURATED_ATTACH_METHODS:
         return "high"
     if method in {"name_anchor_confirmed", "foreign_issuer_name_anchor_confirmed"}:
         return "medium"

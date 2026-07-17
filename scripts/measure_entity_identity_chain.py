@@ -27,6 +27,7 @@ from finance_data_ops.identity.chain import (
     acceptance_pairs_for_symbols,
     measure_entity_identity_chain,
 )
+from finance_data_ops.identity.curation import load_curated_identity_inputs
 from finance_data_ops.identity.gleif import GleifIsinLeiClient
 from finance_data_ops.identity.isin import YFinanceIsinClient, isin_prefix_policy_for_listing
 from finance_data_ops.identity.names import legal_name_query_variants_from_listing, normalize_legal_name_conservative
@@ -94,6 +95,8 @@ def build_entity_identity_measurement(*, args, settings=None):
         gleif_fixtures = None
         gleif_lei_isin_fixtures = None
         gleif_legal_name_fixtures = None
+
+    curated_inputs = load_curated_identity_inputs(getattr(args, "curated_identity_file", None))
 
     selected_symbols = [candidate.symbol for candidate in candidates]
     if getattr(args, "use_raw_cache", False):
@@ -176,6 +179,8 @@ def build_entity_identity_measurement(*, args, settings=None):
         gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
         gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
         gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
+        curated_identity_decisions=curated_inputs["curated_identities"],
+        reviewed_safe_heuristics=curated_inputs["reviewed_safe_heuristics"],
         pairs=acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=openfigi_client.batch_split_retries,
     )
@@ -192,6 +197,8 @@ def build_entity_identity_measurement(*, args, settings=None):
             gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
             gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
             gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
+            curated_identity_decisions=curated_inputs["curated_identities"],
+            reviewed_safe_heuristics=curated_inputs["reviewed_safe_heuristics"],
             pairs=acceptance_pairs_for_symbols(selected_symbols),
             batch_split_retries=openfigi_client.batch_split_retries,
         )
@@ -199,6 +206,7 @@ def build_entity_identity_measurement(*, args, settings=None):
 
 
 def _build_measurement_with_raw_cache(*, args, candidates, selected_symbols: list[str], settings):
+    curated_inputs = load_curated_identity_inputs(getattr(args, "curated_identity_file", None))
     raw_cache = read_postgres_raw_cache_snapshot(database_dsn=settings.database_dsn, candidates=candidates)
     live_miss_refresh = bool(getattr(args, "refresh_cache_misses", False)) and not bool(args.offline)
 
@@ -239,8 +247,8 @@ def _build_measurement_with_raw_cache(*, args, candidates, selected_symbols: lis
     )
     gleif_records = raw_cache.gleif_records_for_isins(_gleif_lookup_isins(isin_records))
     if live_miss_refresh:
-        missing_isins = missing_record_keys(gleif_records, "isin")
-        gleif_records = merge_records_by_key(gleif_records, gleif_client.lookup_isins(missing_isins), "isin")
+        refresh_isins = _refreshable_gleif_isin_keys(gleif_records)
+        gleif_records = merge_records_by_key(gleif_records, gleif_client.lookup_isins(refresh_isins), "isin")
 
     direct_lei_by_isin = {record.isin: record.lei for record in gleif_records if record.lei and record.status == "success"}
     openfigi_by_symbol = {mapping.symbol: mapping for mapping in openfigi_mappings}
@@ -312,6 +320,8 @@ def _build_measurement_with_raw_cache(*, args, candidates, selected_symbols: lis
         gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
         gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
         gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
+        curated_identity_decisions=curated_inputs["curated_identities"],
+        reviewed_safe_heuristics=curated_inputs["reviewed_safe_heuristics"],
         pairs=acceptance_pairs_for_symbols(selected_symbols),
         batch_split_retries=batch_split_retries,
     )
@@ -319,8 +329,8 @@ def _build_measurement_with_raw_cache(*, args, candidates, selected_symbols: lis
     if audit_forward_isins:
         audit_records = raw_cache.gleif_records_for_isins(audit_forward_isins)
         if live_miss_refresh:
-            missing_isins = missing_record_keys(audit_records, "isin")
-            audit_records = merge_records_by_key(audit_records, gleif_client.lookup_isins(missing_isins), "isin")
+            refresh_isins = _refreshable_gleif_isin_keys(audit_records)
+            audit_records = merge_records_by_key(audit_records, gleif_client.lookup_isins(refresh_isins), "isin")
         gleif_records = _merge_gleif_records(gleif_records, audit_records)
         measurement = measure_entity_identity_chain(
             candidates=candidates,
@@ -332,6 +342,8 @@ def _build_measurement_with_raw_cache(*, args, candidates, selected_symbols: lis
             gleif_lei_expansion_request_leis=gleif_lei_expansion_plan["request_leis"],
             gleif_lei_expansion_request_origin_leis=gleif_lei_expansion_plan["origin_leis"],
             gleif_lei_expansion_excluded_origin_leis=gleif_lei_expansion_plan["excluded_origin_leis"],
+            curated_identity_decisions=curated_inputs["curated_identities"],
+            reviewed_safe_heuristics=curated_inputs["reviewed_safe_heuristics"],
             pairs=acceptance_pairs_for_symbols(selected_symbols),
             batch_split_retries=batch_split_retries,
         )
@@ -368,6 +380,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--apply-cache", action="store_true", help="Write only raw cache tables. Never writes entity tables.")
     parser.add_argument("--cache-root", default=None)
+    parser.add_argument(
+        "--curated-identity-file",
+        default=None,
+        help="Version-controlled reviewed identity decisions JSON. Defaults to data/entity_identity_curated.json.",
+    )
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--request-sleep-seconds", type=float, default=6.5)
     parser.add_argument("--gleif-page-size", type=int, default=200, help="GLEIF page[size] for LEI-to-ISIN expansion.")
@@ -413,7 +430,11 @@ def _gleif_lookup_isins(isin_records) -> list[str]:
 
 
 def _audit_forward_lookup_isins(measurement, gleif_records) -> list[str]:
-    existing = {str(record.isin or "").strip().upper() for record in gleif_records if str(record.isin or "").strip()}
+    existing = {
+        str(record.isin or "").strip().upper()
+        for record in gleif_records
+        if str(record.isin or "").strip() and not _is_retryable_gleif_record(record)
+    }
     out: list[str] = []
     seen: set[str] = set(existing)
     for audit_row in measurement.heuristic_attach_audit:
@@ -433,6 +454,31 @@ def _audit_forward_lookup_isins(measurement, gleif_records) -> list[str]:
                 out.append(normalized)
                 seen.add(normalized)
     return out
+
+
+def _refreshable_gleif_isin_keys(records) -> list[str]:
+    keys = missing_record_keys(records, "isin")
+    seen = set(keys)
+    for record in records:
+        isin = str(getattr(record, "isin", "") or "").strip().upper()
+        if isin and isin not in seen and _is_retryable_gleif_record(record):
+            keys.append(isin)
+            seen.add(isin)
+    return keys
+
+
+def _is_retryable_gleif_record(record) -> bool:
+    status = str(getattr(record, "status", "") or "").strip().lower()
+    error_message = str(getattr(record, "error_message", "") or "").strip().lower()
+    return status in {"rate_limited", "error"} and (
+        status == "rate_limited"
+        or "429" in error_message
+        or "too many requests" in error_message
+        or "timeout" in error_message
+        or "timed out" in error_message
+        or "temporar" in error_message
+        or "connection" in error_message
+    )
 
 
 def _merge_gleif_records(existing_records, new_records):

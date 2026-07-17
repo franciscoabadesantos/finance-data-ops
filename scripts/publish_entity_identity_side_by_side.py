@@ -77,6 +77,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-id", default=None, help="Optional operator-provided publication batch id.")
     parser.add_argument("--scope-key", default="default", help="Current-publication pointer scope.")
     parser.add_argument("--cache-root", default=None)
+    parser.add_argument(
+        "--curated-identity-file",
+        default=None,
+        help="Version-controlled reviewed identity decisions JSON. Defaults to data/entity_identity_curated.json.",
+    )
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--request-sleep-seconds", type=float, default=6.5)
     parser.add_argument("--gleif-page-size", type=int, default=200)

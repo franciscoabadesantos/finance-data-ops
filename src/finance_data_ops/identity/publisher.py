@@ -521,6 +521,17 @@ def _verification_summary(measurement: EntityChainMeasurement) -> dict[str, Any]
         "heuristic_attaches_by_method": _count_by_field(heuristic_rows, "attach_method"),
         "cjk_apac_heuristic_attaches": len(measurement.cjk_apac_heuristic_attach_audit),
         "short_or_acronym_heuristic_attaches": len(short_or_acronym_rows),
+        "heuristic_strong_deterministic_support_count": int(
+            measurement.summary.get("heuristic_strong_deterministic_support_count") or 0
+        ),
+        "heuristic_weak_or_name_only_count": int(measurement.summary.get("heuristic_weak_or_name_only_count") or 0),
+        "heuristic_weak_or_name_only_sample": list(measurement.summary.get("heuristic_weak_or_name_only_sample") or []),
+        "review_routed_weak_heuristic_count": int(
+            measurement.summary.get("review_routed_weak_heuristic_count") or 0
+        ),
+        "reviewed_safe_heuristic_count": int(measurement.summary.get("reviewed_safe_heuristic_count") or 0),
+        "curated_identity_attach_count": int(measurement.summary.get("curated_identity_attach_count") or 0),
+        "curated_identity_sample": list(measurement.summary.get("curated_identity_sample") or []),
         "review_required_count": int(measurement.publication_gate.get("review_required_count") or 0),
         "review_required_symbols": list(measurement.publication_gate.get("review_required_symbols") or []),
         "group_conflict_count": int(measurement.publication_gate.get("group_conflict_count") or 0),
@@ -694,6 +705,8 @@ def _publication_listing_row(
             "candidate_legal_name": row.get("candidate_legal_name") or "",
             "legal_name_anchor_status": row.get("legal_name_anchor_status") or "",
             "foreign_issuer_final_gate_status": row.get("foreign_issuer_final_gate_status") or "",
+            "curated_identity_source": row.get("curated_identity_source") or "",
+            "curated_identity_evidence": row.get("curated_identity_evidence") or {},
         },
         "source_freshness": {
             "openfigi_status": row.get("openfigi_status") or "",

@@ -1,0 +1,33 @@
+{
+  "curated_identities": [
+    {
+      "symbol": "HUT",
+      "lei": "98450066FEF9C1D3FC20",
+      "legal_name": "HUT 8 CORP.",
+      "attach_method": "curated_identity",
+      "confidence": "high",
+      "lifecycle_state": "resolved",
+      "source": "version_controlled_entity_identity_curation",
+      "reviewed_by": "data_ops",
+      "evidence": {
+        "reason": "manual_curated_multi_listing_identity",
+        "scope": "entity_layer_v0_2_publication_gate_cleanup"
+      }
+    },
+    {
+      "symbol": "HUT.TO",
+      "lei": "98450066FEF9C1D3FC20",
+      "legal_name": "HUT 8 CORP.",
+      "attach_method": "curated_identity",
+      "confidence": "high",
+      "lifecycle_state": "resolved",
+      "source": "version_controlled_entity_identity_curation",
+      "reviewed_by": "data_ops",
+      "evidence": {
+        "reason": "manual_curated_multi_listing_identity",
+        "scope": "entity_layer_v0_2_publication_gate_cleanup"
+      }
+    }
+  ],
+  "reviewed_safe_heuristics": []
+}
