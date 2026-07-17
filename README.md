@@ -148,6 +148,15 @@ python scripts/publish_entity_identity_side_by_side.py --source postgres --refre
 
 The publish command defaults to no live API refresh; `--refresh-live` is required to call OpenFIGI/yfinance/GLEIF, and the GLEIF/OpenFIGI throttle flags should be set for broader scopes. `--offline --use-raw-cache` reads existing `source_cache.*_raw` facts and reports explicit `cache_miss` gaps without calling providers or writing data. `source_cache.gleif_entity_raw` is the legal-name search cache keyed by conservative `normalized_query_name`; it stores success, not-found, ambiguous, error, and rate-limited legal-name outcomes so cached full-universe dry-runs can exercise the name-anchor path. `--curated-identity-file` can point to reviewed symbol-to-LEI and reviewed-safe heuristic decisions; the default is `data/entity_identity_curated.json`. `--tracked-only` scopes Postgres candidates to `feature_store.ticker_readiness.is_tracked = true`, which is the intended full product universe for entity identity measurement. Cache fill for missing raw facts is explicit: use `--use-raw-cache --refresh-live --refresh-cache-misses --apply-caches`; this writes only raw cache tables and leaves entity tables untouched. Entity writes are blocked unless the publication gate is green, unresolved multi-listing entities are zero, group conflicts are zero, and heuristic review-required rows are zero for the measured scope. The command writes raw cache tables before side-by-side entity tables when both apply flags are present. Raw cache writes are idempotent upserts by natural cache key; if a later cache table fails after earlier cache upserts committed, rerun the same command after fixing the issue. Synthetic `cache_miss` diagnostic rows are not written as raw facts; cached negative GLEIF outcomes are raw facts and are reused by offline runs. Transient GLEIF 429/timeout/transport errors remain retryable `rate_limited`/`error` facts and are not converted to `not_found` negatives. Publication batches are idempotent by `batch_id`, entity rows upsert by `entity_id`/`symbol`, and the current pointer is replaceable by `scope_key`. Product paths still do not consume these tables.
 
+Published `entity_master.home_country` can be backfilled cache-only from existing GLEIF raw cache without changing mappings or current pointers:
+
+```bash
+python scripts/backfill_entity_home_country.py --batch-id tracked-675-first-publish
+python scripts/backfill_entity_home_country.py --batch-id tracked-675-first-publish --apply
+```
+
+The command updates only null/blank `home_country` values for resolved rows in the selected publication batch and records source evidence in `metadata.home_country_backfill`.
+
 Post-publish verification examples for the server operator:
 
 ```sql

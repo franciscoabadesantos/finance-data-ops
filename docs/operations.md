@@ -155,6 +155,21 @@ legal-name cache facts.
 persists the original query, candidates payload, response payload, status, and error message. Cached `not_found` rows
 are reused as known negatives; missing rows are reported as `cache_miss` and are not written as raw facts.
 
+Entity master home-country cache-only backfill:
+
+```bash
+python scripts/backfill_entity_home_country.py --batch-id tracked-675-first-publish
+python scripts/backfill_entity_home_country.py --batch-id tracked-675-first-publish --apply
+python scripts/backfill_entity_home_country.py --batch-id tracked-675-first-publish
+```
+
+This reads the published batch from `feature_store.entity_master` and derives missing `home_country` values only from
+already persisted GLEIF raw cache rows (`source_cache.gleif_entity_raw` and `source_cache.gleif_isin_lei_raw`). It does
+not call APIs, does not change `entity_listing`, does not change entity ids or attach decisions, and does not update the
+publication current pointer. `--apply` updates only null/blank `entity_master.home_country` values for resolved entities
+in the selected batch and stores the GLEIF source table/field in `metadata.home_country_backfill`. Non-empty conflicting
+countries are reported and not overwritten.
+
 Entity identity cache-fill for missing raw facts remains separate from entity publication:
 
 ```bash
