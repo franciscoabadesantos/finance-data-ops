@@ -203,6 +203,39 @@ The JSON summary reports `scope_key`, `batch_id`, tracked count, planned entity/
 counts, unresolved multi-listing count, publication gate status, cache-refresh stats, whether the pointer advanced, and
 the previous batch id.
 
+Frontier pre-onboard entity dedup audit:
+
+```bash
+# Read-only audit for explicit frontier/onboarding candidates.
+python scripts/audit_frontier_entity_dedup.py \
+  --source postgres \
+  --scope-key tracked \
+  --symbols SAP.DE,NOVO-B.CO
+
+# Read-only audit for the ETF holding onboarding identity frontier source.
+python scripts/audit_frontier_entity_dedup.py \
+  --source postgres \
+  --scope-key tracked \
+  --candidate-source etf-holding-identity
+
+# Refresh only raw-cache misses before auditing; still no entity/frontier writes.
+python scripts/audit_frontier_entity_dedup.py \
+  --source postgres \
+  --scope-key tracked \
+  --symbols SAP.DE,NOVO-B.CO \
+  --refresh-live \
+  --refresh-cache-misses \
+  --gleif-request-sleep-seconds 7
+```
+
+The frontier audit is read-only. It resolves candidates with the same cache-first Entity Layer measurement path, reads
+the current `feature_store.entity_identity_publication_current(scope_key='tracked')` batch, and compares candidates only
+against resolved tracked entity listings. Provisional tracked rows are retained as evidence but are not treated as
+confirmed duplicate merges. Output rows include `entity_dedup_status`, matched entity id/LEI/legal name, tracked sibling
+symbols, confidence/method/reason, and `recommended_action` (`suppress`, `show_with_warning`, `onboard`, or `review`).
+The audit does not suppress automatically and does not write frontier, cache, entity, or product tables. Transient
+provider failures remain handled by the existing provider clients and are not converted to permanent `not_found` facts.
+
 Entity master home-country cache-only backfill:
 
 ```bash
