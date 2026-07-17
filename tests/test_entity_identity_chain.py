@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from finance_data_ops.identity.chain import (
+    EntityChainMeasurement,
     _heuristic_attach_audit,
     acceptance_fixture_candidates,
     acceptance_gleif_fixtures,
@@ -40,6 +41,7 @@ from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import (
     build_entity_publication_batch_id,
     build_side_by_side_entity_publication_plan,
+    build_side_by_side_entity_publication_plan_for_batch,
     publish_entity_identity_controlled,
     publish_entity_identity_raw_caches,
     publish_entity_identity_side_by_side,
@@ -2124,6 +2126,135 @@ def test_side_by_side_publication_plan_keeps_provisional_single_listing_evidence
     assert plan["verification_summary"]["candidate_lei_retained_provisional_count"] == 1
 
 
+def test_side_by_side_publication_plan_fills_home_country_from_gleif_cache() -> None:
+    measurement = EntityChainMeasurement(
+        symbol_rows=[
+            {
+                "symbol": "ASML",
+                "entity_lei": "ASMLLEI",
+                "candidate_legal_name": "ASML HOLDING N.V.",
+                "entity_attach_method": "direct_isin",
+                "entity_attach_reason": "direct_isin_to_lei",
+                "attachment_confidence": "high",
+            },
+            {
+                "symbol": "ASML.AS",
+                "entity_lei": "ASMLLEI",
+                "candidate_legal_name": "ASML HOLDING N.V.",
+                "entity_attach_method": "lei_expansion",
+                "entity_attach_reason": "legal_name_candidate_confirmed_by_lei_isin_expansion",
+                "attachment_confidence": "high",
+            },
+            {
+                "symbol": "AAPL",
+                "entity_lei": "AAPLLEI",
+                "candidate_legal_name": "APPLE INC.",
+                "entity_attach_method": "direct_isin",
+                "entity_attach_reason": "direct_isin_to_lei",
+                "attachment_confidence": "high",
+            },
+        ],
+        pair_rows=[],
+        summary={
+            "unresolved_multi_listing_entities_count": 0,
+            "guardrail_pairs_unmerged": True,
+            "candidate_lei_retained_provisional_count": 0,
+        },
+        name_anchor_precision_audit=[],
+        heuristic_attach_audit=[],
+        cjk_apac_heuristic_attach_audit=[],
+        publication_gate={"status": "ready_machine_safe", "review_required_count": 0, "group_conflict_count": 0},
+        openfigi_cache_rows=[],
+        isin_cache_rows=[],
+        gleif_cache_rows=[
+            {
+                "isin": "US0378331005",
+                "lei": "AAPLLEI",
+                "legal_name": "APPLE INC.",
+                "response_payload": {
+                    "data": {
+                        "id": "AAPLLEI",
+                        "attributes": {
+                            "lei": "AAPLLEI",
+                            "entity": {
+                                "legalName": {"name": "APPLE INC."},
+                                "legalAddress": {"country": "US"},
+                            },
+                        },
+                    }
+                },
+                "status": "success",
+                "error_message": None,
+            }
+        ],
+        gleif_lei_isin_cache_rows=[],
+        gleif_entity_cache_rows=[
+            {
+                "normalized_query_name": "ASML HOLDING",
+                "query_name": "ASML HOLDING N.V.",
+                "candidates_payload": [
+                    {
+                        "lei": "ASMLLEI",
+                        "legal_name": "ASML HOLDING N.V.",
+                        "legal_country": "NL",
+                    }
+                ],
+                "response_payload": {},
+                "status": "success",
+                "error_message": None,
+            }
+        ],
+    )
+
+    plan = build_side_by_side_entity_publication_plan_for_batch(
+        measurement=measurement,
+        batch_id="tracked-refresh-test",
+        scope_key="tracked",
+    )
+    master_by_id = {row["entity_id"]: row for row in plan["feature_store.entity_master"]}
+
+    assert master_by_id["lei:ASMLLEI"]["home_country"] == "NL"
+    assert master_by_id["lei:AAPLLEI"]["home_country"] == "US"
+    assert master_by_id["lei:ASMLLEI"]["metadata"]["home_country_source"] == "gleif_raw_cache"
+    assert master_by_id["lei:AAPLLEI"]["metadata"]["home_country_source"] == "gleif_raw_cache"
+
+
+def test_side_by_side_publication_plan_preserves_non_null_home_country_without_cache() -> None:
+    measurement = EntityChainMeasurement(
+        symbol_rows=[
+            {
+                "symbol": "SAP",
+                "entity_lei": "SAPLEI",
+                "candidate_legal_name": "SAP SE",
+                "home_country": "DE",
+                "entity_attach_method": "direct_isin",
+                "entity_attach_reason": "direct_isin_to_lei",
+                "attachment_confidence": "high",
+            }
+        ],
+        pair_rows=[],
+        summary={"unresolved_multi_listing_entities_count": 0, "guardrail_pairs_unmerged": True},
+        name_anchor_precision_audit=[],
+        heuristic_attach_audit=[],
+        cjk_apac_heuristic_attach_audit=[],
+        publication_gate={"status": "ready_machine_safe", "review_required_count": 0, "group_conflict_count": 0},
+        openfigi_cache_rows=[],
+        isin_cache_rows=[],
+        gleif_cache_rows=[],
+        gleif_lei_isin_cache_rows=[],
+        gleif_entity_cache_rows=[],
+    )
+
+    plan = build_side_by_side_entity_publication_plan_for_batch(
+        measurement=measurement,
+        batch_id="tracked-refresh-test",
+        scope_key="tracked",
+    )
+
+    assert plan["feature_store.entity_master"][0]["home_country"] == "DE"
+    assert plan["feature_store.entity_master"][0]["metadata"]["home_country_source"] == "measurement_row"
+
+
 def test_controlled_entity_publish_dry_run_writes_nothing_and_reports_counts() -> None:
     measurement = _fixture_measurement(["SAP", "SAP.DE"])
     publisher = RecordingPublisher()
@@ -2454,6 +2585,33 @@ def test_post_onboard_entity_refresh_tracked_scope_points_independently() -> Non
     assert result["summary"]["pointer_advanced"] is True
     assert result["summary"]["previous_batch_id"] == "tracked-675-first-publish"
     assert current_upsert["rows"] == [{"scope_key": "tracked", "batch_id": "tracked-entity-refresh-test"}]
+
+
+def test_post_onboard_entity_refresh_publish_plan_preserves_gleif_home_country_lifecycle() -> None:
+    publisher = RecordingPublisher()
+
+    result = run_post_onboard_entity_identity_refresh(
+        options=PostOnboardEntityIdentityRefreshOptions(
+            source="postgres",
+            scope_key="tracked",
+            batch_id="tracked-refresh-home-country-test",
+            apply_entities=True,
+        ),
+        settings=SimpleNamespace(database_dsn="postgresql://example.invalid/db", cache_root=None),
+        measurement_builder=lambda **_kwargs: _home_country_lifecycle_measurement(),
+        publisher_factory=lambda _writes_enabled, _settings: publisher,
+        previous_batch_fetcher=lambda **_kwargs: "tracked-entity-refresh-previous",
+    )
+
+    master_upsert = next(call for call in publisher.upserts if call["table"] == "feature_store.entity_master")
+    master_by_id = {row["entity_id"]: row for row in master_upsert["rows"]}
+
+    assert result["status"] == "published_side_by_side"
+    assert result["summary"]["scope_key"] == "tracked"
+    assert master_by_id["lei:ASMLLEI"]["home_country"] == "NL"
+    assert master_by_id["lei:AAPLLEI"]["home_country"] == "US"
+    assert master_by_id["lei:ASMLLEI"]["publication_batch_id"] == "tracked-refresh-home-country-test"
+    assert master_by_id["lei:AAPLLEI"]["publication_batch_id"] == "tracked-refresh-home-country-test"
 
 
 def test_post_onboard_entity_refresh_blocks_pointer_when_gate_not_ready() -> None:
@@ -3448,6 +3606,89 @@ def _fixture_measurement(
             batch_split_retries=openfigi.batch_split_retries,
         )
     return measurement
+
+
+def _home_country_lifecycle_measurement() -> EntityChainMeasurement:
+    return EntityChainMeasurement(
+        symbol_rows=[
+            {
+                "symbol": "ASML",
+                "entity_lei": "ASMLLEI",
+                "candidate_legal_name": "ASML HOLDING N.V.",
+                "entity_attach_method": "direct_isin",
+                "entity_attach_reason": "direct_isin_to_lei",
+                "attachment_confidence": "high",
+            },
+            {
+                "symbol": "ASML.AS",
+                "entity_lei": "ASMLLEI",
+                "candidate_legal_name": "ASML HOLDING N.V.",
+                "entity_attach_method": "lei_expansion",
+                "entity_attach_reason": "legal_name_candidate_confirmed_by_lei_isin_expansion",
+                "attachment_confidence": "high",
+            },
+            {
+                "symbol": "AAPL",
+                "entity_lei": "AAPLLEI",
+                "candidate_legal_name": "APPLE INC.",
+                "entity_attach_method": "direct_isin",
+                "entity_attach_reason": "direct_isin_to_lei",
+                "attachment_confidence": "high",
+            },
+        ],
+        pair_rows=[],
+        summary={
+            "candidate_count": 3,
+            "tracked_candidate_count": 3,
+            "unresolved_multi_listing_entities_count": 0,
+            "guardrail_pairs_unmerged": True,
+            "candidate_lei_retained_provisional_count": 0,
+        },
+        name_anchor_precision_audit=[],
+        heuristic_attach_audit=[],
+        cjk_apac_heuristic_attach_audit=[],
+        publication_gate={"status": "ready_machine_safe", "review_required_count": 0, "group_conflict_count": 0},
+        openfigi_cache_rows=[],
+        isin_cache_rows=[],
+        gleif_cache_rows=[
+            {
+                "isin": "US0378331005",
+                "lei": "AAPLLEI",
+                "legal_name": "APPLE INC.",
+                "response_payload": {
+                    "data": {
+                        "id": "AAPLLEI",
+                        "attributes": {
+                            "lei": "AAPLLEI",
+                            "entity": {
+                                "legalName": {"name": "APPLE INC."},
+                                "legalAddress": {"country": "US"},
+                            },
+                        },
+                    }
+                },
+                "status": "success",
+                "error_message": None,
+            }
+        ],
+        gleif_lei_isin_cache_rows=[],
+        gleif_entity_cache_rows=[
+            {
+                "normalized_query_name": "ASML HOLDING",
+                "query_name": "ASML HOLDING N.V.",
+                "candidates_payload": [
+                    {
+                        "lei": "ASMLLEI",
+                        "legal_name": "ASML HOLDING N.V.",
+                        "legal_country": "NL",
+                    }
+                ],
+                "response_payload": {},
+                "status": "success",
+                "error_message": None,
+            }
+        ],
+    )
 
 
 def _security_fixture(ticker: str, name: str, *, country: str = "US") -> dict:

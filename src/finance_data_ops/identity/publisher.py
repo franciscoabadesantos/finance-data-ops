@@ -8,6 +8,7 @@ from typing import Any
 
 from finance_data_ops.identity.audit import audit_rows
 from finance_data_ops.identity.chain import EntityChainMeasurement
+from finance_data_ops.identity.home_country_backfill import build_gleif_home_country_index
 from finance_data_ops.identity.models import EntityListingRecord, EntityRecord, IdentityAuditRecord, IdentityBuildResult
 from finance_data_ops.identity.raw_cache import cache_publishable_rows
 from finance_data_ops.publish.client import Publisher
@@ -96,6 +97,7 @@ def build_side_by_side_entity_publication_plan_for_batch(
     master_by_id: dict[str, dict[str, Any]] = {}
     listing_rows: list[dict[str, Any]] = []
     review_rows: list[dict[str, Any]] = []
+    home_country_by_lei = _home_country_by_lei_from_measurement(measurement)
 
     for row in measurement.symbol_rows:
         method = str(row.get("entity_attach_method") or "")
@@ -105,13 +107,18 @@ def build_side_by_side_entity_publication_plan_for_batch(
             status = "resolved"
             confidence = row.get("attachment_confidence") or _publication_confidence(method)
             legal_name = row.get("candidate_legal_name") or row.get("legal_name") or ""
+            home_country = _resolved_home_country(
+                row.get("candidate_legal_country") or row.get("home_country"),
+                entity_lei=entity_lei,
+                home_country_by_lei=home_country_by_lei,
+            )
             master_by_id.setdefault(
                 entity_id,
                 {
                     "entity_id": entity_id,
                     "legal_name": legal_name or None,
                     "display_name": legal_name or row.get("openfigi_name") or row.get("internal_candidate_name") or None,
-                    "home_country": row.get("candidate_legal_country") or row.get("home_country") or None,
+                    "home_country": home_country or None,
                     "lei": entity_lei,
                     "entity_source": "entity_identity_measurement",
                     "resolution_confidence": _confidence_score(str(confidence)),
@@ -123,6 +130,11 @@ def build_side_by_side_entity_publication_plan_for_batch(
                         "resolution_state": status,
                         "source": "entity_identity_measurement",
                         "publication_batch_id": batch_id,
+                        "home_country_source": _home_country_source(
+                            row.get("candidate_legal_country") or row.get("home_country"),
+                            entity_lei=entity_lei,
+                            home_country_by_lei=home_country_by_lei,
+                        ),
                     },
                 },
             )
@@ -152,13 +164,18 @@ def build_side_by_side_entity_publication_plan_for_batch(
 
         entity_id = f"provisional:{row.get('symbol')}"
         legal_name = row.get("candidate_legal_name") or row.get("foreign_issuer_candidate_legal_name") or ""
+        home_country = _resolved_home_country(
+            row.get("candidate_legal_country"),
+            entity_lei=candidate_lei,
+            home_country_by_lei=home_country_by_lei,
+        )
         master_by_id.setdefault(
             entity_id,
             {
                 "entity_id": entity_id,
                 "legal_name": legal_name or None,
                 "display_name": legal_name or row.get("openfigi_name") or row.get("internal_candidate_name") or None,
-                "home_country": row.get("candidate_legal_country") or None,
+                "home_country": home_country or None,
                 "lei": candidate_lei or None,
                 "entity_source": "entity_identity_measurement",
                 "resolution_confidence": _confidence_score("provisional"),
@@ -172,6 +189,11 @@ def build_side_by_side_entity_publication_plan_for_batch(
                     "candidate_legal_name": legal_name,
                     "promotion_triggers": _reevaluation_triggers(),
                     "publication_batch_id": batch_id,
+                    "home_country_source": _home_country_source(
+                        row.get("candidate_legal_country"),
+                        entity_lei=candidate_lei,
+                        home_country_by_lei=home_country_by_lei,
+                    ),
                 },
             },
         )
@@ -495,6 +517,39 @@ def _cache_publishable_counts(measurement: EntityChainMeasurement) -> dict[str, 
     }
 
 
+def _home_country_by_lei_from_measurement(measurement: EntityChainMeasurement) -> dict[str, str]:
+    index = build_gleif_home_country_index(
+        gleif_entity_rows=cache_publishable_rows(measurement.gleif_entity_cache_rows),
+        gleif_isin_lei_rows=cache_publishable_rows(measurement.gleif_cache_rows),
+    )
+    return {lei: evidence.home_country for lei, evidence in index.items() if evidence.home_country}
+
+
+def _resolved_home_country(
+    current_value: Any,
+    *,
+    entity_lei: str,
+    home_country_by_lei: dict[str, str],
+) -> str:
+    current = _country_code(current_value)
+    if current:
+        return current
+    return home_country_by_lei.get(str(entity_lei or "").strip().upper(), "")
+
+
+def _home_country_source(
+    current_value: Any,
+    *,
+    entity_lei: str,
+    home_country_by_lei: dict[str, str],
+) -> str:
+    if _country_code(current_value):
+        return "measurement_row"
+    if home_country_by_lei.get(str(entity_lei or "").strip().upper()):
+        return "gleif_raw_cache"
+    return ""
+
+
 def _verification_summary(measurement: EntityChainMeasurement) -> dict[str, Any]:
     heuristic_rows = [
         row for row in measurement.heuristic_attach_audit if row.get("attach_audit_kind") == "heuristic"
@@ -608,6 +663,11 @@ def _count_by_field(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
             continue
         counts[key] = counts.get(key, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _country_code(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    return text if len(text) == 2 and text.isalpha() else ""
 
 
 def _review_key(*, batch_id: str, symbol: Any, reason: Any) -> str:
