@@ -103,11 +103,15 @@ create table if not exists source_cache.openfigi_mapping_raw (
 """,
     "source_cache.gleif_entity_raw": """
 create table if not exists source_cache.gleif_entity_raw (
-  lei text primary key,
-  response_payload jsonb not null,
+  normalized_query_name text primary key,
+  query_name text not null,
+  candidates_payload jsonb not null default '[]'::jsonb,
+  response_payload jsonb,
   status text not null,
+  error_message text,
   fetched_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  check (status in ('success', 'not_found', 'ambiguous', 'error', 'rate_limited'))
 )
 """,
     "source_cache.listing_isin_raw": """
@@ -278,6 +282,18 @@ create table if not exists feature_store.entity_identity_publication_current (
 REQUIRED_TABLES = tuple(CREATE_TABLE_SQL)
 
 REQUIRED_COLUMNS = (
+    ColumnRequirement("source_cache", "gleif_entity_raw", "normalized_query_name", "text"),
+    ColumnRequirement("source_cache", "gleif_entity_raw", "query_name", "text"),
+    ColumnRequirement(
+        "source_cache",
+        "gleif_entity_raw",
+        "candidates_payload",
+        "jsonb",
+        is_nullable="NO",
+        column_default_contains="'[]'::jsonb",
+    ),
+    ColumnRequirement("source_cache", "gleif_entity_raw", "response_payload", "jsonb"),
+    ColumnRequirement("source_cache", "gleif_entity_raw", "error_message", "text"),
     ColumnRequirement("feature_store", "entity_master", "publication_batch_id", "text"),
     ColumnRequirement("feature_store", "entity_listing", "attach_method", "text"),
     ColumnRequirement("feature_store", "entity_listing", "attach_confidence", "text"),
@@ -365,9 +381,31 @@ REQUIRED_CHECK_CONSTRAINTS = (
         "status",
         ("planned", "published_side_by_side", "blocked", "failed", "superseded"),
     ),
+    CheckConstraintRequirement(
+        "source_cache",
+        "gleif_entity_raw",
+        "gleif_entity_raw_status_check",
+        "status",
+        ("success", "not_found", "ambiguous", "error", "rate_limited"),
+    ),
 )
 
 ADD_COLUMN_SQL = {
+    "source_cache.gleif_entity_raw.normalized_query_name": (
+        "alter table source_cache.gleif_entity_raw add column if not exists normalized_query_name text"
+    ),
+    "source_cache.gleif_entity_raw.query_name": (
+        "alter table source_cache.gleif_entity_raw add column if not exists query_name text"
+    ),
+    "source_cache.gleif_entity_raw.candidates_payload": (
+        "alter table source_cache.gleif_entity_raw add column if not exists candidates_payload jsonb not null default '[]'::jsonb"
+    ),
+    "source_cache.gleif_entity_raw.response_payload": (
+        "alter table source_cache.gleif_entity_raw add column if not exists response_payload jsonb"
+    ),
+    "source_cache.gleif_entity_raw.error_message": (
+        "alter table source_cache.gleif_entity_raw add column if not exists error_message text"
+    ),
     "feature_store.entity_master.publication_batch_id": (
         "alter table feature_store.entity_master add column if not exists publication_batch_id text"
     ),
@@ -392,6 +430,11 @@ ADD_COLUMN_SQL = {
 }
 
 INDEX_SQL: dict[str, str] = {
+    "idx_gleif_entity_raw_normalized_query_name": (
+        "create unique index if not exists idx_gleif_entity_raw_normalized_query_name "
+        "on source_cache.gleif_entity_raw (normalized_query_name)"
+    ),
+    "idx_gleif_entity_raw_status": "create index if not exists idx_gleif_entity_raw_status on source_cache.gleif_entity_raw (status)",
     "idx_listing_isin_raw_isin": "create index if not exists idx_listing_isin_raw_isin on source_cache.listing_isin_raw (isin)",
     "idx_gleif_isin_lei_raw_lei": "create index if not exists idx_gleif_isin_lei_raw_lei on source_cache.gleif_isin_lei_raw (lei)",
     "idx_entity_master_home_country": "create index if not exists idx_entity_master_home_country on feature_store.entity_master (home_country)",
@@ -563,6 +606,26 @@ def build_reconciliation_plan(
             actions.append({"action": "add_missing_column", "object": key})
             sql.append(ADD_COLUMN_SQL[key])
 
+    if (
+        "source_cache.gleif_entity_raw" in state.tables
+        and "source_cache.gleif_entity_raw.lei" in state.columns
+        and (
+            "source_cache.gleif_entity_raw.gleif_entity_raw_pkey" in state.check_constraints
+            or state.columns["source_cache.gleif_entity_raw.lei"].is_nullable.upper() == "NO"
+        )
+    ):
+        lei_state = state.columns["source_cache.gleif_entity_raw.lei"]
+        actions.append(
+            {
+                "action": "reconcile_legacy_gleif_entity_raw_key",
+                "object": "source_cache.gleif_entity_raw",
+                "reason": "normalized_query_name_is_current_cache_key",
+            }
+        )
+        sql.append("alter table source_cache.gleif_entity_raw drop constraint if exists gleif_entity_raw_pkey")
+        if lei_state.is_nullable.upper() == "NO":
+            sql.append("alter table source_cache.gleif_entity_raw alter column lei drop not null")
+
     for requirement in REQUIRED_CHECK_CONSTRAINTS:
         if requirement.qualified_table not in state.tables:
             continue
@@ -705,6 +768,14 @@ def apply_plan_to_state(state: SchemaState) -> SchemaState:
     indexes.update(INDEX_SQL)
     for requirement in REQUIRED_CHECK_CONSTRAINTS:
         check_constraints[requirement.qualified_constraint] = _expected_check_constraint_definition(requirement)
+    check_constraints.pop("source_cache.gleif_entity_raw.gleif_entity_raw_pkey", None)
+    if "source_cache.gleif_entity_raw.lei" in columns:
+        current = columns["source_cache.gleif_entity_raw.lei"]
+        columns["source_cache.gleif_entity_raw.lei"] = ColumnState(
+            data_type=current.data_type,
+            is_nullable="YES",
+            column_default=current.column_default,
+        )
     return SchemaState(
         tables=tables,
         columns=columns,
@@ -783,7 +854,7 @@ def _fetch_check_constraints(conn: Any) -> dict[str, str]:
             from pg_constraint con
             join pg_class c on c.oid = con.conrelid
             join pg_namespace n on n.oid = c.relnamespace
-            where con.contype = 'c'
+            where con.contype in ('c', 'p')
               and n.nspname in ('source_cache', 'feature_store')
             """
         )
@@ -916,6 +987,10 @@ def _reconcile_check_constraint_sql(requirement: CheckConstraintRequirement) -> 
 
 
 def _is_allowed_check_constraint_drop(normalized_statement: str) -> bool:
+    if normalized_statement == "alter table source_cache.gleif_entity_raw alter column lei drop not null":
+        return True
+    if normalized_statement == "alter table source_cache.gleif_entity_raw drop constraint if exists gleif_entity_raw_pkey":
+        return True
     return any(
         normalized_statement
         == f"alter table {requirement.qualified_table} drop constraint if exists {requirement.constraint_name}".lower()

@@ -511,6 +511,8 @@ def test_runtime_schema_contains_entity_layer_tables_indexes_and_grants() -> Non
     for snippet in [
         "create table if not exists source_cache.openfigi_mapping_raw",
         "create table if not exists source_cache.gleif_entity_raw",
+        "normalized_query_name text primary key",
+        "candidates_payload jsonb not null default '[]'::jsonb",
         "create table if not exists source_cache.listing_isin_raw",
         "create table if not exists source_cache.gleif_isin_lei_raw",
         "create table if not exists source_cache.gleif_lei_isin_raw",
@@ -528,6 +530,7 @@ def test_runtime_schema_contains_entity_layer_tables_indexes_and_grants() -> Non
         "evidence_payload jsonb not null default '{}'::jsonb",
         "source_freshness jsonb not null default '{}'::jsonb",
         "idx_listing_isin_raw_isin",
+        "idx_gleif_entity_raw_status",
         "idx_gleif_isin_lei_raw_lei",
         "idx_entity_listing_entity_id",
         "idx_entity_listing_isin",

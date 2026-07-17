@@ -139,7 +139,12 @@ class RawCacheSnapshot:
         return out
 
     def legal_name_records_for_queries(self, queries: list[str]) -> list[GleifLegalNameRecord]:
-        cached_candidates = _gleif_entity_candidates(self.gleif_entity_rows)
+        rows_by_normalized = {
+            _clean_text(row.get("normalized_query_name"), upper=True): row
+            for row in self.gleif_entity_rows
+            if _clean_text(row.get("normalized_query_name"), upper=True)
+        }
+        legacy_candidates = _gleif_entity_candidates(self.gleif_entity_rows)
         out: list[GleifLegalNameRecord] = []
         seen: set[str] = set()
         for query in queries:
@@ -148,19 +153,36 @@ class RawCacheSnapshot:
             if not query_name or not normalized or normalized in seen:
                 continue
             seen.add(normalized)
+            row = rows_by_normalized.get(_clean_text(normalized, upper=True))
+            if row is not None:
+                out.append(_legal_name_record_from_cache_row(query_name=query_name, normalized=normalized, row=row))
+                continue
             candidates = [
                 candidate
-                for candidate in cached_candidates
+                for candidate in legacy_candidates
                 if candidate.get("lei") and candidate.get("normalized_legal_name") == normalized
             ]
+            if candidates:
+                out.append(
+                    GleifLegalNameRecord(
+                        query_name=query_name,
+                        normalized_query_name=normalized,
+                        candidates=candidates,
+                        response_payload={"source_cache.gleif_entity_raw_legacy": len(self.gleif_entity_rows)},
+                        status="success" if len(candidates) == 1 else "ambiguous",
+                        error_message="",
+                        source="raw_cache_gleif_entity",
+                    )
+                )
+                continue
             out.append(
                 GleifLegalNameRecord(
                     query_name=query_name,
                     normalized_query_name=normalized,
-                    candidates=candidates,
-                    response_payload={"source_cache.gleif_entity_raw": len(self.gleif_entity_rows)} if candidates else None,
-                    status="success" if candidates else "not_found",
-                    error_message="" if candidates else CACHE_MISS,
+                    candidates=[],
+                    response_payload=None,
+                    status="not_found",
+                    error_message=CACHE_MISS,
                     source="raw_cache_gleif_entity",
                 )
             )
@@ -192,7 +214,20 @@ class RawCacheSnapshot:
             "gleif_lei_isin_cached_count": _non_miss_count(gleif_lei_isin_records),
             "gleif_lei_isin_cache_miss_count": _miss_count(gleif_lei_isin_records),
             "gleif_entity_cached_count": len(self.gleif_entity_rows),
+            "legal_name_cached_count": _non_miss_count(legal_name_records),
+            "legal_name_cache_miss_count": _miss_count(legal_name_records),
+            "legal_name_not_found_cached_count": _status_count(legal_name_records, "not_found", exclude_cache_miss=True),
             "legal_name_cache_gap_count": _miss_count(legal_name_records),
+            "gleif_isin_lei_cached_success": _status_count(gleif_records, "success"),
+            "gleif_isin_lei_cached_not_found": _status_count(gleif_records, "not_found", exclude_cache_miss=True),
+            "gleif_isin_lei_cache_miss": _miss_count(gleif_records),
+            "gleif_lei_isin_cached_success": _status_count(gleif_lei_isin_records, "success"),
+            "gleif_lei_isin_cached_not_found": _status_count(
+                gleif_lei_isin_records,
+                "not_found",
+                exclude_cache_miss=True,
+            ),
+            "gleif_lei_isin_cache_miss": _miss_count(gleif_lei_isin_records),
             "cache_missing_samples": {
                 "openfigi": _miss_sample(openfigi_mappings, "symbol"),
                 "listing_isin": _miss_sample(isin_records, "symbol"),
@@ -271,6 +306,24 @@ def cache_publishable_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for row in rows
         if _clean_text(row.get("error_message"), upper=False) != CACHE_MISS
     ]
+
+
+def _legal_name_record_from_cache_row(*, query_name: str, normalized: str, row: dict[str, Any]) -> GleifLegalNameRecord:
+    candidates = [
+        candidate
+        for candidate in (_list_or_empty(row.get("candidates_payload")) or _list_or_empty(row.get("candidates")))
+        if isinstance(candidate, dict)
+    ]
+    status = _clean_text(row.get("status"), upper=False) or ("success" if candidates else "not_found")
+    return GleifLegalNameRecord(
+        query_name=_clean_text(row.get("query_name")) or query_name,
+        normalized_query_name=_clean_text(row.get("normalized_query_name"), upper=True) or normalized,
+        candidates=candidates,
+        response_payload=_dict_or_none(row.get("response_payload")),
+        status=status,
+        error_message=_clean_text(row.get("error_message"), upper=False),
+        source="raw_cache_gleif_entity",
+    )
 
 
 def _openfigi_mapping_from_cache_row(*, request: OpenFigiRequest, row: dict[str, Any]) -> OpenFigiMapping:
@@ -397,6 +450,18 @@ def _miss_count(records: list[Any]) -> int:
     return sum(1 for record in records if _clean_text(getattr(record, "error_message", ""), upper=False) == CACHE_MISS)
 
 
+def _status_count(records: list[Any], status: str, *, exclude_cache_miss: bool = False) -> int:
+    return sum(
+        1
+        for record in records
+        if _clean_text(getattr(record, "status", ""), upper=False) == status
+        and (
+            not exclude_cache_miss
+            or _clean_text(getattr(record, "error_message", ""), upper=False) != CACHE_MISS
+        )
+    )
+
+
 def _miss_sample(records: list[Any], key_attr: str, limit: int = 10) -> list[str]:
     return [
         _clean_text(getattr(record, key_attr, ""), upper=True)
@@ -421,6 +486,10 @@ def _dict_or_empty(value: Any) -> dict[str, Any]:
 
 def _dict_or_none(value: Any) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
+
+
+def _list_or_empty(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def _clean_text(value: Any, *, upper: bool = False) -> str:

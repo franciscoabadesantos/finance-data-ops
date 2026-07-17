@@ -1985,6 +1985,7 @@ def test_cache_apply_publishes_only_raw_cache_tables() -> None:
         "source_cache.listing_isin_raw",
         "source_cache.gleif_isin_lei_raw",
         "source_cache.gleif_lei_isin_raw",
+        "source_cache.gleif_entity_raw",
     ]
     assert all(not call["table"].startswith("feature_store.entity_") for call in publisher.upserts)
     assert publisher.inserts == []
@@ -2130,9 +2131,91 @@ def test_postgres_offline_with_raw_cache_reports_cache_miss_explicitly(monkeypat
     assert measurement.isin_cache_rows[0]["error_message"] == "cache_miss"
     assert measurement.summary["openfigi_cache_miss_count"] == 1
     assert measurement.summary["cache_missing_samples"]["openfigi"] == ["SAP"]
+    sap = next(row for row in measurement.symbol_rows if row["symbol"] == "SAP")
+    assert "legal_name_cache_miss" in sap["entity_attach_reasons"]
+    assert "legal_name_search_no_match" not in sap["entity_attach_reasons"]
     publish_result = publish_entity_identity_raw_caches(publisher=RecordingPublisher(), measurement=measurement)
     assert publish_result["source_cache.openfigi_mapping_raw"]["rows"] == 0
     assert publish_result["source_cache.listing_isin_raw"]["rows"] == 0
+    assert publish_result["source_cache.gleif_entity_raw"]["rows"] == 0
+
+
+def test_postgres_offline_with_raw_cache_legal_name_success_recreates_name_anchor(monkeypatch) -> None:
+    cached_measurement = _fixture_measurement(["GOOG", "GOOGL"])
+    candidates = acceptance_fixture_candidates(symbols=["GOOG", "GOOGL"])
+    snapshot = RawCacheSnapshot(
+        openfigi_rows=cached_measurement.openfigi_cache_rows,
+        listing_isin_rows=cached_measurement.isin_cache_rows,
+        gleif_isin_lei_rows=cached_measurement.gleif_cache_rows,
+        gleif_lei_isin_rows=cached_measurement.gleif_lei_isin_cache_rows,
+        gleif_entity_rows=cached_measurement.gleif_entity_cache_rows,
+    )
+    monkeypatch.setattr(measure_script, "read_postgres_candidate_universe", lambda **_kwargs: candidates)
+    monkeypatch.setattr(measure_script, "read_postgres_raw_cache_snapshot", lambda **_kwargs: snapshot)
+
+    measurement = measure_script.build_entity_identity_measurement(
+        args=_measurement_args(source="postgres", offline=True, use_raw_cache=True, symbols=["GOOG,GOOGL"]),
+        settings=SimpleNamespace(database_dsn="postgresql://example.invalid/db", cache_root=None),
+    )
+
+    rows = {row["symbol"]: row for row in measurement.symbol_rows}
+    assert rows["GOOG"]["entity_attach_method"] == "name_anchor_confirmed"
+    assert rows["GOOGL"]["entity_attach_method"] == "name_anchor_confirmed"
+    assert measurement.summary["legal_name_cached_count"] >= 1
+    assert measurement.summary["legal_name_cache_miss_count"] == 0
+
+
+def test_postgres_offline_with_raw_cache_legal_name_not_found_is_reused(monkeypatch) -> None:
+    candidates = [
+        ListingCandidate(
+            symbol="ACME",
+            provider_symbol="ACME",
+            country="US",
+            currency="USD",
+            exchange="NMS",
+            name="ACME CORP",
+            source="test_fixture",
+        )
+    ]
+    snapshot = RawCacheSnapshot(
+        openfigi_rows=[],
+        listing_isin_rows=[
+            {
+                "symbol": "ACME",
+                "provider": "yfinance",
+                "request_payload": {"provider_symbol": "ACME"},
+                "response_payload": {},
+                "isin": None,
+                "status": "not_found",
+                "error_message": "provider_isin_missing",
+            }
+        ],
+        gleif_isin_lei_rows=[],
+        gleif_lei_isin_rows=[],
+        gleif_entity_rows=[
+            {
+                "normalized_query_name": "ACME",
+                "query_name": "Acme Corp",
+                "candidates_payload": [],
+                "response_payload": {},
+                "status": "not_found",
+                "error_message": "no_gleif_legal_name_candidates",
+            }
+        ],
+    )
+    monkeypatch.setattr(measure_script, "read_postgres_candidate_universe", lambda **_kwargs: candidates)
+    monkeypatch.setattr(measure_script, "read_postgres_raw_cache_snapshot", lambda **_kwargs: snapshot)
+
+    measurement = measure_script.build_entity_identity_measurement(
+        args=_measurement_args(source="postgres", offline=True, use_raw_cache=True, symbols=["ACME"]),
+        settings=SimpleNamespace(database_dsn="postgresql://example.invalid/db", cache_root=None),
+    )
+
+    row = measurement.symbol_rows[0]
+    assert "legal_name_search_no_match" in row["entity_attach_reasons"]
+    assert "legal_name_cache_miss" not in row["entity_attach_reasons"]
+    assert measurement.summary["legal_name_not_found_cached_count"] == 1
+    assert measurement.summary["legal_name_cache_miss_count"] == 0
 
 
 def test_controlled_entity_publish_blocks_when_gate_not_ready() -> None:
@@ -2197,31 +2280,32 @@ def test_controlled_entity_publish_cache_first_then_side_by_side_tables() -> Non
 
     assert result["status"] == "published_side_by_side"
     assert result["batch_id"] == "test-batch-1"
-    assert [call["table"] for call in publisher.upserts[:4]] == [
+    assert [call["table"] for call in publisher.upserts[:5]] == [
         "source_cache.openfigi_mapping_raw",
         "source_cache.listing_isin_raw",
         "source_cache.gleif_isin_lei_raw",
         "source_cache.gleif_lei_isin_raw",
+        "source_cache.gleif_entity_raw",
     ]
-    assert [call["table"] for call in publisher.upserts[4:]] == [
+    assert [call["table"] for call in publisher.upserts[5:]] == [
         "feature_store.entity_identity_publication_batch",
         "feature_store.entity_master",
         "feature_store.entity_listing",
         "feature_store.entity_identity_publication_batch",
         "feature_store.entity_identity_publication_current",
     ]
-    assert publisher.upserts[4]["on_conflict"] == "batch_id"
-    assert publisher.upserts[5]["on_conflict"] == "entity_id"
-    assert publisher.upserts[6]["on_conflict"] == "symbol"
-    assert publisher.upserts[7]["on_conflict"] == "batch_id"
-    assert publisher.upserts[8]["on_conflict"] == "scope_key"
+    assert publisher.upserts[5]["on_conflict"] == "batch_id"
+    assert publisher.upserts[6]["on_conflict"] == "entity_id"
+    assert publisher.upserts[7]["on_conflict"] == "symbol"
+    assert publisher.upserts[8]["on_conflict"] == "batch_id"
+    assert publisher.upserts[9]["on_conflict"] == "scope_key"
     assert publisher.inserts == []
-    assert publisher.upserts[4]["rows"][0]["status"] == "planned"
-    assert publisher.upserts[4]["rows"][0]["is_current"] is False
-    assert publisher.upserts[7]["rows"][0]["status"] == "published_side_by_side"
-    assert publisher.upserts[7]["rows"][0]["actual_counts"]["feature_store.entity_listing"] == 2
-    assert publisher.upserts[5]["rows"][0]["publication_batch_id"] == "test-batch-1"
-    assert all(row["publication_batch_id"] == "test-batch-1" for row in publisher.upserts[6]["rows"])
+    assert publisher.upserts[5]["rows"][0]["status"] == "planned"
+    assert publisher.upserts[5]["rows"][0]["is_current"] is False
+    assert publisher.upserts[8]["rows"][0]["status"] == "published_side_by_side"
+    assert publisher.upserts[8]["rows"][0]["actual_counts"]["feature_store.entity_listing"] == 2
+    assert publisher.upserts[6]["rows"][0]["publication_batch_id"] == "test-batch-1"
+    assert all(row["publication_batch_id"] == "test-batch-1" for row in publisher.upserts[7]["rows"])
 
 
 def test_controlled_entity_publish_rerun_uses_idempotent_upserts() -> None:
@@ -2582,6 +2666,7 @@ def test_side_by_side_publisher_blocks_unreviewed_heuristic_gate() -> None:
         isin_cache_rows=measurement.isin_cache_rows,
         gleif_cache_rows=measurement.gleif_cache_rows,
         gleif_lei_isin_cache_rows=measurement.gleif_lei_isin_cache_rows,
+        gleif_entity_cache_rows=measurement.gleif_entity_cache_rows,
     )
     publisher = RecordingPublisher()
 

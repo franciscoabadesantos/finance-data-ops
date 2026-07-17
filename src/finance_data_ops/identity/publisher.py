@@ -67,6 +67,11 @@ def publish_entity_identity_raw_caches(
             cache_publishable_rows(measurement.gleif_lei_isin_cache_rows),
             on_conflict="lei",
         ),
+        "source_cache.gleif_entity_raw": publisher.upsert(
+            "source_cache.gleif_entity_raw",
+            cache_publishable_rows(measurement.gleif_entity_cache_rows),
+            on_conflict="normalized_query_name",
+        ),
     }
 
 
@@ -357,6 +362,7 @@ def publish_entity_identity_controlled(
             "source_cache.listing_isin_raw": cache_counts["source_cache.listing_isin_raw"],
             "source_cache.gleif_isin_lei_raw": cache_counts["source_cache.gleif_isin_lei_raw"],
             "source_cache.gleif_lei_isin_raw": cache_counts["source_cache.gleif_lei_isin_raw"],
+            "source_cache.gleif_entity_raw": cache_counts["source_cache.gleif_entity_raw"],
             "feature_store.entity_identity_publication_batch": 1,
             "feature_store.entity_master": len(plan["feature_store.entity_master"]),
             "feature_store.entity_listing": len(plan["feature_store.entity_listing"]),
@@ -380,6 +386,10 @@ def publish_entity_identity_controlled(
             },
             "source_cache.gleif_lei_isin_raw": {
                 "rows": cache_counts["source_cache.gleif_lei_isin_raw"],
+                "status": "planned",
+            },
+            "source_cache.gleif_entity_raw": {
+                "rows": cache_counts["source_cache.gleif_entity_raw"],
                 "status": "planned",
             },
         }
@@ -467,6 +477,7 @@ def _planned_counts(
         "source_cache.listing_isin_raw": cache_counts["source_cache.listing_isin_raw"],
         "source_cache.gleif_isin_lei_raw": cache_counts["source_cache.gleif_isin_lei_raw"],
         "source_cache.gleif_lei_isin_raw": cache_counts["source_cache.gleif_lei_isin_raw"],
+        "source_cache.gleif_entity_raw": cache_counts["source_cache.gleif_entity_raw"],
         "feature_store.entity_master": len(master_rows),
         "feature_store.entity_listing": len(listing_rows),
         "feature_store.entity_identity_review": len(review_rows),
@@ -480,6 +491,7 @@ def _cache_publishable_counts(measurement: EntityChainMeasurement) -> dict[str, 
         "source_cache.listing_isin_raw": len(cache_publishable_rows(measurement.isin_cache_rows)),
         "source_cache.gleif_isin_lei_raw": len(cache_publishable_rows(measurement.gleif_cache_rows)),
         "source_cache.gleif_lei_isin_raw": len(cache_publishable_rows(measurement.gleif_lei_isin_cache_rows)),
+        "source_cache.gleif_entity_raw": len(cache_publishable_rows(measurement.gleif_entity_cache_rows)),
     }
 
 

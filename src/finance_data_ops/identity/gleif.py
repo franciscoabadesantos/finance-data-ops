@@ -420,6 +420,25 @@ def gleif_lei_isin_cache_rows(records: list[GleifLeiIsinRecord]) -> list[dict[st
     ]
 
 
+def gleif_legal_name_cache_rows(records: list[GleifLegalNameRecord]) -> list[dict[str, Any]]:
+    rows = []
+    for record in records:
+        status = record.status
+        if status == "success" and len(record.candidates) > 1:
+            status = "ambiguous"
+        rows.append(
+            {
+                "normalized_query_name": record.normalized_query_name,
+                "query_name": record.query_name,
+                "candidates_payload": list(record.candidates),
+                "response_payload": record.response_payload or {},
+                "status": status,
+                "error_message": record.error_message or None,
+            }
+        )
+    return rows
+
+
 def _is_rate_limit_exception(exc: Exception) -> bool:
     return isinstance(exc, GleifRateLimitError) or "429" in str(exc) or "Too Many Requests" in str(exc)
 

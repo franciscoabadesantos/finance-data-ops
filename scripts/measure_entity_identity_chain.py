@@ -33,6 +33,7 @@ from finance_data_ops.identity.names import legal_name_query_variants_from_listi
 from finance_data_ops.identity.openfigi import OpenFigiClient
 from finance_data_ops.identity.publisher import publish_entity_identity_raw_caches
 from finance_data_ops.identity.raw_cache import (
+    CACHE_MISS,
     missing_candidate_symbols_from_isins,
     missing_candidate_symbols_from_openfigi,
     missing_record_keys,
@@ -264,11 +265,15 @@ def _build_measurement_with_raw_cache(*, args, candidates, selected_symbols: lis
     ]
     legal_name_records = raw_cache.legal_name_records_for_queries(legal_name_queries)
     if live_miss_refresh:
-        successful_names = {record.normalized_query_name for record in legal_name_records if record.status == "success"}
+        cached_names = {
+            record.normalized_query_name
+            for record in legal_name_records
+            if record.error_message != CACHE_MISS
+        }
         live_queries = [
             query
             for query in legal_name_queries
-            if query and normalize_legal_name_conservative(query) not in successful_names
+            if query and normalize_legal_name_conservative(query) not in cached_names
         ]
         legal_name_records = merge_records_by_key(
             legal_name_records,

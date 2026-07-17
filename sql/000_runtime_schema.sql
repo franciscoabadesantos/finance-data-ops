@@ -108,12 +108,19 @@ create table if not exists source_cache.openfigi_mapping_raw (
 );
 
 create table if not exists source_cache.gleif_entity_raw (
-  lei text primary key,
-  response_payload jsonb not null,
+  normalized_query_name text primary key,
+  query_name text not null,
+  candidates_payload jsonb not null default '[]'::jsonb,
+  response_payload jsonb,
   status text not null,
+  error_message text,
   fetched_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  check (status in ('success', 'not_found', 'ambiguous', 'error', 'rate_limited'))
 );
+
+create index if not exists idx_gleif_entity_raw_status
+  on source_cache.gleif_entity_raw (status);
 
 create table if not exists source_cache.listing_isin_raw (
   symbol text not null,

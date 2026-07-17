@@ -49,6 +49,35 @@ def test_dry_run_plans_missing_columns_on_existing_entity_tables() -> None:
     assert "feature_store.entity_listing.publication_batch_id" in add_columns
 
 
+def test_dry_run_reconciles_legacy_gleif_entity_raw_query_key() -> None:
+    state = reconcile.SchemaState(
+        tables={"source_cache.gleif_entity_raw"},
+        columns={
+            "source_cache.gleif_entity_raw.lei": reconcile.ColumnState("text", "NO", ""),
+            "source_cache.gleif_entity_raw.response_payload": reconcile.ColumnState("jsonb", "NO", ""),
+            "source_cache.gleif_entity_raw.status": reconcile.ColumnState("text", "NO", ""),
+        },
+        indexes=set(),
+        roles=set(),
+        grants=set(),
+        check_constraints={
+            "source_cache.gleif_entity_raw.gleif_entity_raw_pkey": "PRIMARY KEY (lei)",
+        },
+    )
+
+    plan = reconcile.build_reconciliation_plan(state)
+    actions = [action["action"] for action in plan["actions"]]
+    sql = "\n".join(plan["sql"]).lower()
+
+    assert "add_missing_column" in actions
+    assert "reconcile_legacy_gleif_entity_raw_key" in actions
+    assert "alter table source_cache.gleif_entity_raw add column if not exists normalized_query_name text" in sql
+    assert "alter table source_cache.gleif_entity_raw drop constraint if exists gleif_entity_raw_pkey" in sql
+    assert "alter table source_cache.gleif_entity_raw alter column lei drop not null" in sql
+    assert "idx_gleif_entity_raw_normalized_query_name" in sql
+    assert " cascade" not in sql
+
+
 def test_plan_uses_add_column_if_not_exists_and_no_drop_cascade() -> None:
     state = reconcile.SchemaState(
         tables={"feature_store.entity_master", "feature_store.entity_listing"},
@@ -74,6 +103,9 @@ def test_forbidden_sql_guard_allows_only_known_constraint_drops() -> None:
         "drop constraint if exists entity_master_resolution_status_check"
     )
     reconcile._assert_no_forbidden_sql([allowed])
+    reconcile._assert_no_forbidden_sql(
+        ["alter table source_cache.gleif_entity_raw drop constraint if exists gleif_entity_raw_pkey"]
+    )
 
     with pytest.raises(ValueError, match="forbidden_ddl"):
         reconcile._assert_no_forbidden_sql(["drop index idx_entity_listing_entity_id"])

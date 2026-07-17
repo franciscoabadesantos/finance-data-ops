@@ -151,6 +151,9 @@ python scripts/publish_entity_identity_side_by_side.py --source postgres --track
 OpenFIGI, yfinance, or GLEIF live calls are made, and no data is written without the existing apply flags. The summary
 includes raw-cache coverage and samples of missing OpenFIGI, listing ISIN, GLEIF ISIN-to-LEI, GLEIF LEI-to-ISIN, and
 legal-name cache facts.
+`source_cache.gleif_entity_raw` stores GLEIF legal-name search by conservative `normalized_query_name`, not by LEI. It
+persists the original query, candidates payload, response payload, status, and error message. Cached `not_found` rows
+are reused as known negatives; missing rows are reported as `cache_miss` and are not written as raw facts.
 
 Entity identity cache-fill for missing raw facts remains separate from entity publication:
 

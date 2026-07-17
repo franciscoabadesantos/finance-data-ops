@@ -10,6 +10,7 @@ from finance_data_ops.identity.gleif import (
     GleifLegalNameRecord,
     GleifLeiIsinRecord,
     gleif_cache_rows,
+    gleif_legal_name_cache_rows,
     gleif_lei_isin_cache_rows,
 )
 from finance_data_ops.identity.isin import (
@@ -77,6 +78,7 @@ class EntityChainMeasurement:
     isin_cache_rows: list[dict[str, Any]]
     gleif_cache_rows: list[dict[str, Any]]
     gleif_lei_isin_cache_rows: list[dict[str, Any]]
+    gleif_entity_cache_rows: list[dict[str, Any]]
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +94,7 @@ class EntityChainMeasurement:
                 "source_cache.listing_isin_raw": len(self.isin_cache_rows),
                 "source_cache.gleif_isin_lei_raw": len(self.gleif_cache_rows),
                 "source_cache.gleif_lei_isin_raw": len(self.gleif_lei_isin_cache_rows),
+                "source_cache.gleif_entity_raw": len(self.gleif_entity_cache_rows),
             },
         }
 
@@ -183,6 +186,7 @@ def measure_entity_identity_chain(
         isin_cache_rows=isin_cache_rows(isin_records),
         gleif_cache_rows=gleif_cache_rows(gleif_records),
         gleif_lei_isin_cache_rows=gleif_lei_isin_cache_rows(gleif_lei_isin_records or []),
+        gleif_entity_cache_rows=gleif_legal_name_cache_rows(gleif_legal_name_records or []),
     )
 
 
@@ -1016,6 +1020,7 @@ def _evaluate_name_anchor(
         return base
 
     record = None
+    cache_miss_record = None
     for candidate_query in query_names or [query_name]:
         normalized_query = normalize_legal_name_conservative(candidate_query)
         candidate_record = legal_name_records.get(_symbol(normalized_query))
@@ -1025,7 +1030,13 @@ def _evaluate_name_anchor(
             normalized_listing_name = normalized_query
             base["listing_name_used_for_legal_name_search"] = candidate_query
             break
+        if candidate_record and candidate_record.error_message == "cache_miss":
+            cache_miss_record = candidate_record
     if not record:
+        if cache_miss_record:
+            base["status"] = "not_found"
+            base["reject_reason"] = "legal_name_cache_miss"
+            return base
         base["status"] = "not_found"
         base["reject_reason"] = "legal_name_search_no_match"
         return base
@@ -2110,6 +2121,7 @@ def _primary_unattached_reason(reasons: list[str]) -> str:
         "valid_isin_no_gleif_lei",
         "openfigi_not_found",
         "no_listing_name_for_legal_name_search",
+        "legal_name_cache_miss",
         "legal_name_search_no_match",
         "yfinance_isin_suspect",
         "provider_isin_missing",
