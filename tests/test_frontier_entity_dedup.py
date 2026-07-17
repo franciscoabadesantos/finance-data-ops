@@ -46,6 +46,47 @@ def test_frontier_candidate_matching_existing_tracked_lei_is_suppressed() -> Non
     assert rows[0]["matched_tracked_symbols"] == ["SAP"]
 
 
+def test_frontier_candidate_already_tracked_by_symbol_suppresses_even_when_resolution_misses() -> None:
+    rows = classify_frontier_candidates(
+        measurement=_measurement(
+            [
+                {
+                    "symbol": "GOOGL",
+                    "openfigi_status": "not_found",
+                    "entity_attach_method": "unattached_no_anchor",
+                    "entity_attach_reason": "openfigi_not_found",
+                }
+            ]
+        ),
+        candidates=[_candidate("GOOGL", country="US", name="ALPHABET INC.")],
+        tracked_entities=[
+            TrackedEntityListing(
+                symbol="GOOG",
+                entity_id="lei:5493006MHB84DD0ZWV18",
+                entity_lei="5493006MHB84DD0ZWV18",
+                legal_name="ALPHABET INC.",
+                resolution_status="resolved",
+            ),
+            TrackedEntityListing(
+                symbol="GOOGL",
+                entity_id="lei:5493006MHB84DD0ZWV18",
+                entity_lei="5493006MHB84DD0ZWV18",
+                legal_name="ALPHABET INC.",
+                resolution_status="resolved",
+            ),
+        ],
+    )
+
+    assert rows[0]["entity_dedup_status"] == "already_tracked_entity"
+    assert rows[0]["recommended_action"] == "suppress"
+    assert rows[0]["reason"] == "candidate_symbol_already_tracked"
+    assert rows[0]["candidate_entity_id"] == "lei:5493006MHB84DD0ZWV18"
+    assert rows[0]["candidate_lei"] == "5493006MHB84DD0ZWV18"
+    assert rows[0]["candidate_legal_name"] == "ALPHABET INC."
+    assert rows[0]["matched_entity_legal_name"] == "ALPHABET INC."
+    assert rows[0]["matched_tracked_symbols"] == ["GOOG", "GOOGL"]
+
+
 def test_frontier_candidate_matching_existing_tracked_entity_id_without_lei_is_suppressed() -> None:
     rows = classify_frontier_candidates(
         measurement=_measurement(
@@ -182,6 +223,36 @@ def test_frontier_provisional_current_tracked_rows_do_not_suppress() -> None:
     assert rows[0]["matched_tracked_symbols"] == []
 
 
+def test_frontier_candidate_already_tracked_by_symbol_ignores_provisional_tracked_rows() -> None:
+    rows = classify_frontier_candidates(
+        measurement=_measurement(
+            [
+                {
+                    "symbol": "PROV",
+                    "openfigi_status": "not_found",
+                    "entity_attach_method": "unattached_no_anchor",
+                    "entity_attach_reason": "openfigi_not_found",
+                }
+            ]
+        ),
+        candidates=[_candidate("PROV", country="US", name="PROVISIONAL INC.")],
+        tracked_entities=[
+            TrackedEntityListing(
+                symbol="PROV",
+                entity_id="provisional:PROV",
+                entity_lei="549300PROVISIONAL",
+                legal_name="PROVISIONAL INC.",
+                resolution_status="provisional",
+            )
+        ],
+    )
+
+    assert rows[0]["entity_dedup_status"] == "provisional_or_unresolved"
+    assert rows[0]["recommended_action"] == "show_with_warning"
+    assert rows[0]["reason"] == "openfigi_not_found"
+    assert rows[0]["matched_tracked_symbols"] == []
+
+
 def test_frontier_dedup_uses_cache_first_measurement_without_live_refresh(monkeypatch) -> None:
     captured = {}
 
@@ -223,6 +294,62 @@ def test_frontier_dedup_uses_cache_first_measurement_without_live_refresh(monkey
     assert captured["args"].refresh_cache_misses is False
     assert captured["selected_symbols"] == ["SAP.DE"]
     assert result["candidates"][0]["entity_dedup_status"] == "already_tracked_entity"
+
+
+def test_frontier_dedup_summary_splits_symbol_and_resolved_entity_suppression(monkeypatch) -> None:
+    def _fake_raw_cache_measurement(*, args, candidates, selected_symbols, settings):
+        return _measurement(
+            [
+                {
+                    "symbol": "GOOGL",
+                    "openfigi_status": "not_found",
+                    "entity_attach_method": "unattached_no_anchor",
+                    "entity_attach_reason": "openfigi_not_found",
+                },
+                {
+                    "symbol": "SAP.DE",
+                    "entity_lei": "529900D6BF99LW9R2E68",
+                    "entity_attach_method": "lei_expansion",
+                    "entity_attach_reason": "single_compatible_expanded_lei",
+                },
+            ],
+            summary={"candidate_count": 2, "raw_cache_enabled": True},
+        )
+
+    monkeypatch.setattr("finance_data_ops.identity.frontier_dedup._build_measurement_with_raw_cache", _fake_raw_cache_measurement)
+
+    result = run_frontier_entity_dedup_audit(
+        options=FrontierDedupOptions(source="postgres", symbols=("GOOGL", "SAP.DE"), scope_key="tracked"),
+        settings=SimpleNamespace(database_dsn="", cache_root=None),
+        candidates=[_candidate("GOOGL", name="ALPHABET INC."), _candidate("SAP.DE", country="DE", name="SAP SE")],
+        tracked_entities=[
+            TrackedEntityListing(
+                symbol="GOOG",
+                entity_id="lei:5493006MHB84DD0ZWV18",
+                entity_lei="5493006MHB84DD0ZWV18",
+                legal_name="ALPHABET INC.",
+                resolution_status="resolved",
+            ),
+            TrackedEntityListing(
+                symbol="GOOGL",
+                entity_id="lei:5493006MHB84DD0ZWV18",
+                entity_lei="5493006MHB84DD0ZWV18",
+                legal_name="ALPHABET INC.",
+                resolution_status="resolved",
+            ),
+            TrackedEntityListing(
+                symbol="SAP",
+                entity_id="lei:529900D6BF99LW9R2E68",
+                entity_lei="529900D6BF99LW9R2E68",
+                legal_name="SAP SE",
+                resolution_status="resolved",
+            ),
+        ],
+    )
+
+    assert result["summary"]["already_tracked_by_symbol_count"] == 1
+    assert result["summary"]["already_tracked_by_resolved_entity_count"] == 1
+    assert result["summary"]["recommended_action_counts"]["suppress"] == 2
 
 
 def test_frontier_dedup_cache_miss_refresh_requires_live_refresh() -> None:

@@ -105,7 +105,7 @@ def classify_frontier_candidates(
     candidates: list[ListingCandidate],
     tracked_entities: list[TrackedEntityListing],
 ) -> list[dict[str, Any]]:
-    tracked_by_entity_id, tracked_by_lei = _tracked_indexes(tracked_entities)
+    tracked_by_symbol, tracked_by_entity_id, tracked_by_lei = _tracked_indexes(tracked_entities)
     audit_by_symbol = {
         str(row.get("symbol") or "").strip().upper(): row for row in getattr(measurement, "heuristic_attach_audit", []) or []
     }
@@ -119,8 +119,12 @@ def classify_frontier_candidates(
         audit_row = audit_by_symbol.get(symbol, {})
         entity_lei = str(row.get("entity_lei") or row.get("lei") or "").strip().upper()
         entity_id = str(row.get("entity_id") or (f"lei:{entity_lei}" if entity_lei else "")).strip()
+        tracked_symbol_match = tracked_by_symbol.get(symbol)
+        matched_by_symbol = tracked_symbol_match is not None
         tracked_matches = []
-        if entity_id and entity_id in tracked_by_entity_id:
+        if tracked_symbol_match and tracked_symbol_match.entity_id:
+            tracked_matches = tracked_by_entity_id.get(tracked_symbol_match.entity_id, [tracked_symbol_match])
+        elif entity_id and entity_id in tracked_by_entity_id:
             tracked_matches = tracked_by_entity_id[entity_id]
         elif entity_lei and entity_lei in tracked_by_lei:
             tracked_matches = tracked_by_lei[entity_lei]
@@ -130,8 +134,11 @@ def classify_frontier_candidates(
             audit_row=audit_row,
             tracked_matches=tracked_matches,
             has_resolved_entity=bool(entity_id or entity_lei),
+            matched_by_symbol=matched_by_symbol,
         )
         matched_entity = tracked_matches[0] if tracked_matches else None
+        output_entity_id = entity_id or (matched_entity.entity_id if matched_by_symbol and matched_entity else "")
+        output_entity_lei = entity_lei or (matched_entity.entity_lei if matched_by_symbol and matched_entity else "")
         out.append(
             {
                 "candidate_symbol": symbol,
@@ -140,11 +147,12 @@ def classify_frontier_candidates(
                 "candidate_country": candidate.country or row.get("derived_listing_country") or row.get("listing_country") or "",
                 "candidate_exchange": candidate.exchange or row.get("openfigi_exchange") or "",
                 "entity_dedup_status": status,
-                "candidate_entity_id": entity_id,
-                "candidate_lei": entity_lei,
+                "candidate_entity_id": output_entity_id,
+                "candidate_lei": output_entity_lei,
                 "candidate_legal_name": row.get("entity_legal_name")
                 or row.get("candidate_legal_name")
                 or row.get("legal_name")
+                or (matched_entity.legal_name if matched_by_symbol and matched_entity else "")
                 or "",
                 "matched_entity_id": matched_entity.entity_id if matched_entity else "",
                 "matched_entity_lei": matched_entity.entity_lei if matched_entity else "",
@@ -315,6 +323,24 @@ def fixture_tracked_entity_listings() -> list[TrackedEntityListing]:
             attach_method="direct_isin",
             review_state="resolved",
             resolution_status="resolved",
+        ),
+        TrackedEntityListing(
+            symbol="GOOG",
+            entity_id="lei:5493006MHB84DD0ZWV18",
+            entity_lei="5493006MHB84DD0ZWV18",
+            legal_name="ALPHABET INC.",
+            attach_method="direct_isin",
+            review_state="resolved",
+            resolution_status="resolved",
+        ),
+        TrackedEntityListing(
+            symbol="GOOGL",
+            entity_id="lei:5493006MHB84DD0ZWV18",
+            entity_lei="5493006MHB84DD0ZWV18",
+            legal_name="ALPHABET INC.",
+            attach_method="direct_isin",
+            review_state="resolved",
+            resolution_status="resolved",
         )
     ]
 
@@ -325,7 +351,10 @@ def _classify_row(
     audit_row: dict[str, Any],
     tracked_matches: list[TrackedEntityListing],
     has_resolved_entity: bool,
+    matched_by_symbol: bool,
 ) -> tuple[str, str, str]:
+    if matched_by_symbol and tracked_matches:
+        return "already_tracked_entity", "suppress", "candidate_symbol_already_tracked"
     if tracked_matches and has_resolved_entity:
         return "already_tracked_entity", "suppress", "resolved_entity_already_tracked"
     if _is_review_required(row=row, audit_row=audit_row):
@@ -365,15 +394,21 @@ def _has_cache_miss(row: dict[str, Any]) -> bool:
 
 def _tracked_indexes(
     tracked_entities: list[TrackedEntityListing],
-) -> tuple[dict[str, list[TrackedEntityListing]], dict[str, list[TrackedEntityListing]]]:
+) -> tuple[
+    dict[str, TrackedEntityListing],
+    dict[str, list[TrackedEntityListing]],
+    dict[str, list[TrackedEntityListing]],
+]:
+    by_symbol: dict[str, TrackedEntityListing] = {}
     by_entity_id: dict[str, list[TrackedEntityListing]] = {}
     by_lei: dict[str, list[TrackedEntityListing]] = {}
     for row in tracked_entities:
         if row.entity_id and row.resolution_status == "resolved":
+            by_symbol[_symbol(row.symbol)] = row
             by_entity_id.setdefault(row.entity_id, []).append(row)
         if row.entity_lei and row.resolution_status == "resolved":
             by_lei.setdefault(row.entity_lei, []).append(row)
-    return by_entity_id, by_lei
+    return by_symbol, by_entity_id, by_lei
 
 
 def _summary(*, rows: list[dict[str, Any]], measurement_summary: dict[str, Any], options: FrontierDedupOptions) -> dict[str, Any]:
@@ -382,6 +417,12 @@ def _summary(*, rows: list[dict[str, Any]], measurement_summary: dict[str, Any],
     for row in rows:
         status_counts[str(row.get("entity_dedup_status") or "")] = status_counts.get(str(row.get("entity_dedup_status") or ""), 0) + 1
         action_counts[str(row.get("recommended_action") or "")] = action_counts.get(str(row.get("recommended_action") or ""), 0) + 1
+    already_tracked_by_symbol_count = len(
+        [row for row in rows if row.get("reason") == "candidate_symbol_already_tracked"]
+    )
+    already_tracked_by_resolved_entity_count = len(
+        [row for row in rows if row.get("reason") == "resolved_entity_already_tracked"]
+    )
     return {
         "scope_key": options.scope_key,
         "candidate_count": len(rows),
@@ -391,6 +432,8 @@ def _summary(*, rows: list[dict[str, Any]], measurement_summary: dict[str, Any],
         "refresh_cache_misses": bool(options.refresh_cache_misses),
         "raw_cache_enabled": options.source == "postgres",
         "cache_miss_count": status_counts.get("cache_miss", 0),
+        "already_tracked_by_symbol_count": already_tracked_by_symbol_count,
+        "already_tracked_by_resolved_entity_count": already_tracked_by_resolved_entity_count,
         "measurement_cache_miss_counts": {
             "openfigi": int(measurement_summary.get("openfigi_cache_miss_count") or 0),
             "listing_isin": int(measurement_summary.get("listing_isin_cache_miss_count") or 0),
