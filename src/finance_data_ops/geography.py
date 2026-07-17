@@ -16,6 +16,22 @@ REGION_APAC = "APAC"
 REGION_OTHER = "OTHER"
 
 _MISSING_TOKENS = {"", "NAN", "NONE", "NULL"}
+_REGION_OR_AGGREGATE_TOKENS = {
+    "ALL",
+    "AMER",
+    "AMERICAS",
+    "APAC",
+    "ASIA PACIFIC",
+    "EMEA",
+    "EU",
+    "EUROPE",
+    "GLOBAL",
+    "INTL",
+    "INTERNATIONAL",
+    "LATAM",
+    "OTHER",
+    "WORLD",
+}
 
 _COUNTRY_NAME_TO_ISO2 = {
     "ARGENTINA": "AR",
@@ -144,6 +160,14 @@ _APAC_COUNTRIES = {
 }
 
 SUFFIX_TO_COUNTRY = YAHOO_SUFFIX_TO_COUNTRY
+_ISO2_COUNTRIES = (
+    set(_COUNTRY_NAME_TO_ISO2.values())
+    | _US_COUNTRIES
+    | _AMER_COUNTRIES
+    | _EU_COUNTRIES
+    | _APAC_COUNTRIES
+    | set(YAHOO_SUFFIX_TO_COUNTRY.values())
+)
 
 
 def normalize_country(raw: Any) -> str:
@@ -152,11 +176,13 @@ def normalize_country(raw: Any) -> str:
     token = _normalize_token(raw)
     if token in _MISSING_TOKENS:
         return ""
+    if token in _REGION_OR_AGGREGATE_TOKENS:
+        return ""
     if token in _CODE_ALIASES:
         return _CODE_ALIASES[token]
     if token in _COUNTRY_NAME_TO_ISO2:
         return _COUNTRY_NAME_TO_ISO2[token]
-    if len(token) == 2 and token.isalpha():
+    if len(token) == 2 and token.isalpha() and token in _ISO2_COUNTRIES:
         return token
     return token
 

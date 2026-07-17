@@ -17,6 +17,14 @@ def test_normalize_country_accepts_full_names_and_codes() -> None:
     assert normalize_country("Turkey") == "TR"
 
 
+def test_normalize_country_rejects_region_tokens_as_countries() -> None:
+    assert normalize_country("EU") == ""
+    assert normalize_country("APAC") == ""
+    assert normalize_country("AMER") == ""
+    assert normalize_country("EMEA") == ""
+    assert normalize_country("GLOBAL") == ""
+
+
 def test_region_for_country_uses_canonical_taxonomy() -> None:
     assert region_for_country("US") == "US"
     assert region_for_country("BR") == "AMER"
@@ -42,3 +50,16 @@ def test_country_from_source_or_symbol_lets_foreign_numeric_suffix_beat_stale_us
     assert country_from_source_or_symbol("US", "0700.HK") == "HK"
     assert country_from_source_or_symbol("US", "6758.T") == "JP"
     assert country_from_source_or_symbol("Bermuda", "AAPL") == "BM"
+
+
+def test_country_from_source_or_symbol_rejects_regions_for_bare_symbols() -> None:
+    assert country_from_source_or_symbol("EU", "GRMN") == "US"
+    assert country_from_source_or_symbol("APAC", "GRMN") == "US"
+    assert country_from_source_or_symbol("AMER", "GRMN") == "US"
+
+
+def test_country_from_source_or_symbol_keeps_suffix_country_when_source_is_region() -> None:
+    assert country_from_source_or_symbol("EU", "SAP.DE") == "DE"
+    assert country_from_source_or_symbol("EU", "HSBA.L") == "GB"
+    assert country_from_source_or_symbol("APAC", "0700.HK") == "HK"
+    assert country_from_source_or_symbol("AMER", "CSL.AX") == "AU"

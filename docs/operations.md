@@ -48,6 +48,8 @@ python scripts/run_entity_attributes_static_backfill.py --write-cache --publish
 
 This re-publishes `feature_store.entity_attributes_static` from the cached entity attributes table after applying the
 canonical symbol normalization, ISO-2 `normalize_country`, `region_for_country`, and `home_country` mapping.
+Region or aggregate tokens such as `EU`, `APAC`, `AMER`, and `EMEA` are not valid listing countries; bare symbols fall
+back to the safe no-suffix listing-country policy, while suffixed symbols continue to use suffix-derived countries.
 
 Provider symbol ownership:
 
