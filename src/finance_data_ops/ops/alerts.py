@@ -7,6 +7,7 @@ import logging
 import urllib.request
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 
 def build_alert_payload(
@@ -41,18 +42,22 @@ def emit_alert_webhook(
     if not destination:
         return False
 
-    body = json.dumps(payload, default=str).encode("utf-8")
-    request = urllib.request.Request(
-        url=destination,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    sink = logger or logging.getLogger("finance_data_ops.alerts")
     try:
+        parsed = urlparse(destination)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            sink.warning("alert_webhook_disabled_invalid_url=%r", destination)
+            return False
+        body = json.dumps(payload, default=str).encode("utf-8")
+        request = urllib.request.Request(
+            url=destination,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         with urllib.request.urlopen(request, timeout=int(timeout_seconds)):
             pass
         return True
     except Exception as exc:  # pragma: no cover - defensive network boundary
-        sink = logger or logging.getLogger("finance_data_ops.alerts")
         sink.warning("alert_webhook_failed=%s", repr(exc))
         return False

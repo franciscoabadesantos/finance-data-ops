@@ -16,6 +16,10 @@ ExecutionMode = Literal["normal", "catch-up", "gap-repair"]
 Cadence = Literal["business", "calendar"]
 
 
+class CanonicalWatermarkLookupError(RuntimeError):
+    """A configured canonical Postgres watermark source could not be read."""
+
+
 @dataclass(frozen=True, slots=True)
 class RecurringExecutionPlan:
     domain: str
@@ -290,6 +294,35 @@ def _fetch_dates_from_postgres(
     dsn = str(database_dsn).strip()
     if not dsn:
         return None
+    try:
+        import psycopg
+    except ImportError as exc:
+        raise CanonicalWatermarkLookupError(
+            "Postgres is configured as the canonical watermark source, but psycopg is unavailable."
+        ) from exc
+    try:
+        schema_name, relation_name = _parse_relation_name(table_name)
+        _validate_identifier(date_column)
+        query = (
+            f'select distinct "{date_column}" from "{schema_name}"."{relation_name}" '
+            f'where "{date_column}" is not null and "{date_column}" >= %s and "{date_column}" <= %s'
+        )
+        out: set[date] = set()
+        with psycopg.connect(dsn, connect_timeout=30) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (start_date, end_date))
+                for (value,) in cur.fetchall():
+                    parsed = _to_date(value)
+                    if parsed is not None and start_date <= parsed <= end_date:
+                        out.add(parsed)
+        return out
+    except CanonicalWatermarkLookupError:
+        raise
+    except Exception as exc:
+        raise CanonicalWatermarkLookupError(
+            "Failed to read canonical Postgres watermark "
+            f'for {table_name}.{date_column}; parquet fallback is disabled when database_dsn is configured.'
+        ) from exc
 
 
 def _fetch_dates_by_symbol_from_postgres(
@@ -327,28 +360,6 @@ def _fetch_dates_by_symbol_from_postgres(
                     parsed = _to_date(date_value)
                     if symbol in out and parsed is not None and start_date <= parsed <= end_date:
                         out[symbol].add(parsed)
-        return out
-    except Exception:
-        return None
-    try:
-        import psycopg
-    except ImportError:
-        return None
-    try:
-        schema_name, relation_name = _parse_relation_name(table_name)
-        _validate_identifier(date_column)
-        query = (
-            f'select distinct "{date_column}" from "{schema_name}"."{relation_name}" '
-            f'where "{date_column}" is not null and "{date_column}" >= %s and "{date_column}" <= %s'
-        )
-        out: set[date] = set()
-        with psycopg.connect(dsn, connect_timeout=30) as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, (start_date, end_date))
-                for (value,) in cur.fetchall():
-                    parsed = _to_date(value)
-                    if parsed is not None and start_date <= parsed <= end_date:
-                        out.add(parsed)
         return out
     except Exception:
         return None

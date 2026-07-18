@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -194,6 +194,33 @@ def test_feature_build_trigger_skips_and_alerts_when_market_watermark_is_not_rea
     assert alerts[0]["context"]["blocked"][0]["domain"] == "market"
 
 
+def test_feature_build_trigger_skips_when_alert_webhook_is_placeholder(monkeypatch, tmp_path) -> None:
+    def _fake_resolve_watermark_execution(**kwargs):
+        domain = str(kwargs["domain"])
+        return _FakePlan(
+            domain=domain,
+            table_name=str(kwargs["table_name"]),
+            date_column=str(kwargs["date_column"]),
+            gap_exists=domain == "market",
+            latest_complete_canonical_date="2026-06-29" if domain == "market" else "2026-06-30",
+        )
+
+    monkeypatch.setattr(prefect_dataops_daily, "resolve_watermark_execution", _fake_resolve_watermark_execution)
+    monkeypatch.setattr(
+        prefect_dataops_daily,
+        "run_deployment",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("feature build must not run")),
+    )
+
+    result = prefect_dataops_daily.trigger_feature_build_daily_if_ready(
+        as_of_date="2026-06-30",
+        settings=replace(_settings(tmp_path), alert_webhook_url="placeholder"),
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "watermarks_not_ready"
+
+
 def test_feature_build_trigger_uses_configured_deployment(monkeypatch, tmp_path) -> None:
     deployments: list[dict[str, Any]] = []
 
@@ -298,3 +325,51 @@ def test_dataops_daily_flow_invokes_feature_build_gate_after_source_domains(monk
     assert captured["trigger_kwargs"]["as_of_date"] == "2026-06-30"
     assert captured["trigger_kwargs"]["deployment_name"] == "feature-build-daily/feature-build-daily"
     assert result["feature_build_trigger"] == {"status": "triggered", "as_of_date": "2026-06-30"}
+
+
+def test_dataops_daily_flow_triggers_feature_build_deployment_once_when_gate_is_ready(monkeypatch, tmp_path) -> None:
+    def _fake_domain(name: str):
+        return lambda **_kwargs: {"execution": {"end_date": "2026-06-30"}, "domain": name}
+
+    deployments: list[dict[str, Any]] = []
+
+    def _fake_resolve_watermark_execution(**kwargs):
+        return _FakePlan(
+            domain=str(kwargs["domain"]),
+            table_name=str(kwargs["table_name"]),
+            date_column=str(kwargs["date_column"]),
+            gap_exists=False,
+        )
+
+    def _fake_run_deployment(name, **kwargs):
+        deployments.append({"name": name, **kwargs})
+        return SimpleNamespace(id="feature-run-1", state_name="Scheduled")
+
+    monkeypatch.setattr(prefect_dataops_daily, "load_settings", lambda **_kwargs: _settings(tmp_path))
+    monkeypatch.setattr(prefect_dataops_daily.dataops_release_calendar_daily_flow, "fn", _fake_domain("release"))
+    monkeypatch.setattr(prefect_dataops_daily.dataops_macro_daily_flow, "fn", _fake_domain("macro"))
+    monkeypatch.setattr(prefect_dataops_daily.dataops_earnings_daily_flow, "fn", _fake_domain("earnings"))
+    monkeypatch.setattr(prefect_dataops_daily.dataops_fundamentals_daily_flow, "fn", _fake_domain("fundamentals"))
+    monkeypatch.setattr(prefect_dataops_daily.dataops_market_daily_flow, "fn", _fake_domain("market"))
+    monkeypatch.setattr(prefect_dataops_daily, "resolve_watermark_execution", _fake_resolve_watermark_execution)
+    monkeypatch.setattr(prefect_dataops_daily, "run_deployment", _fake_run_deployment)
+    monkeypatch.setattr(prefect_dataops_daily, "get_run_logger", lambda: logging.getLogger("test-feature-build"))
+
+    result = prefect_dataops_daily.dataops_daily_flow.fn(
+        region="all",
+        end="2026-06-30",
+        cache_root=str(tmp_path),
+        publish_enabled=True,
+    )
+
+    assert result["feature_build_trigger"]["status"] == "triggered"
+    assert deployments == [
+        {
+            "name": "feature-build-daily/feature-build-daily",
+            "parameters": {"as_of_date": "2026-06-30"},
+            "timeout": None,
+            "poll_interval": 10,
+            "flow_run_name": "feature-build-daily-2026-06-30",
+            "idempotency_key": "feature-build-daily:2026-06-30",
+        }
+    ]
