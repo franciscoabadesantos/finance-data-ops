@@ -34,6 +34,24 @@ REGISTRY_COLUMNS = [
     "updated_at",
 ]
 
+# entity_attributes_static is a latest descriptive-metadata surface.  Keep its
+# payload deliberately narrow: mutable numerics belong in report-dated raw
+# fundamentals, never this table.
+ENTITY_ATTRIBUTES_STATIC_COLUMNS = [
+    "entity_id",
+    "name",
+    "country",
+    "home_country",
+    "region",
+    "exchange",
+    "exchange_mic",
+    "currency",
+    "sector",
+    "industry",
+    "description",
+    "updated_at",
+]
+
 
 def build_ticker_registry_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
@@ -97,6 +115,8 @@ def build_entity_attributes_static_payload(rows: list[dict[str, Any]]) -> list[d
                 "exchange_mic": row.get("exchange_mic"),
                 "currency": row.get("currency"),
                 "sector": extras.get("sector"),
+                "industry": _nullable_text(extras.get("industry")),
+                "description": _nullable_text(extras.get("description") or extras.get("about")),
                 "updated_at": now_utc,
             }
         )
@@ -150,6 +170,8 @@ def build_entity_attributes_static_backfill_payload(
             "exchange_mic": _nullable_text(raw.get("exchange_mic"), upper=True),
             "currency": _nullable_text(raw.get("currency"), upper=True),
             "sector": _nullable_text(raw.get("sector")),
+            "industry": _nullable_text(raw.get("industry")),
+            "description": _nullable_text(raw.get("description") or raw.get("about")),
             "updated_at": now_utc,
         }
     return list(out_by_entity.values())

@@ -5,6 +5,7 @@ from typing import Any
 import pandas as pd
 
 from finance_data_ops.publish.ticker_registry import (
+    ENTITY_ATTRIBUTES_STATIC_COLUMNS,
     build_entity_attributes_static_backfill_payload,
     build_entity_attributes_static_payload,
     build_ticker_registry_payload,
@@ -122,6 +123,30 @@ def test_entity_attributes_payload_normalizes_country_and_recomputes_region() ->
     assert by_entity["NOKIA"]["region"] == "EU"
     assert by_entity["MYST"]["country"] == "ATLANTIS"
     assert by_entity["MYST"]["region"] == "OTHER"
+
+
+def test_entity_attributes_payload_excludes_mutable_numeric_profile_fields() -> None:
+    payload = build_entity_attributes_static_payload(
+        [
+            {
+                "input_symbol": "AAPL",
+                "normalized_symbol": "AAPL",
+                "country": "US",
+                "name": "Apple Inc.",
+                "industry": "Consumer Electronics",
+                "description": "Descriptive metadata remains allowed.",
+                "market_cap": 3_000_000_000_000.0,
+                "beta": 1.2,
+                "beta_3y": 1.1,
+            }
+        ]
+    )
+
+    assert payload[0]["entity_id"] == "AAPL"
+    assert payload[0]["industry"] == "Consumer Electronics"
+    assert payload[0]["description"] == "Descriptive metadata remains allowed."
+    assert set(payload[0]) == set(ENTITY_ATTRIBUTES_STATIC_COLUMNS)
+    assert {"market_cap", "beta", "beta_3y"}.isdisjoint(payload[0])
 
 
 def test_entity_attributes_backfill_payload_repairs_existing_regions() -> None:
