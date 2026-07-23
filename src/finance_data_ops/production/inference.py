@@ -52,6 +52,19 @@ class ActiveProductionBundle:
     active_bundle: dict[str, Any]
 
 
+class NoActiveProductionPointer(RuntimeError):
+    """Raised when no active registry pointer exists for the requested production key."""
+
+    def __init__(self, *, strategy_family: str, universe: str, environment: str) -> None:
+        self.strategy_family = strategy_family
+        self.universe = universe
+        self.environment = environment
+        super().__init__(
+            "No registry active pointer found for "
+            f"strategy_family={strategy_family} universe={universe} environment={environment}."
+        )
+
+
 def run_daily_production_inference(
     *,
     database_dsn: str,
@@ -64,12 +77,22 @@ def run_daily_production_inference(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     resolved_date = date.fromisoformat(target_date) if target_date else datetime.now(UTC).date()
-    active = resolve_active_production_bundle(
-        database_dsn=database_dsn,
-        strategy_family=strategy_family,
-        universe=universe,
-        environment=environment,
-    )
+    try:
+        active = resolve_active_production_bundle(
+            database_dsn=database_dsn,
+            strategy_family=strategy_family,
+            universe=universe,
+            environment=environment,
+        )
+    except NoActiveProductionPointer:
+        return {
+            "status": "skipped",
+            "reason": "no_active_pointer",
+            "strategy_family": strategy_family,
+            "universe": universe,
+            "environment": environment,
+            "signals_written": 0,
+        }
     payload = {
         "job_type": "daily_inference",
         "backend_job_id": f"dataops-daily-inference-{resolved_date.isoformat()}-{uuid4().hex[:8]}",
@@ -158,9 +181,10 @@ def resolve_active_production_bundle(
             )
             row = cur.fetchone()
     if row is None:
-        raise RuntimeError(
-            "No registry active pointer found for "
-            f"strategy_family={strategy_family} universe={universe} environment={environment}."
+        raise NoActiveProductionPointer(
+            strategy_family=strategy_family,
+            universe=universe,
+            environment=environment,
         )
     return ActiveProductionBundle(
         active_pointer=dict(row["active_pointer_json"] or {}),
