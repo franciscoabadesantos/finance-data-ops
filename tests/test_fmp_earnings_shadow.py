@@ -31,14 +31,15 @@ class _Repository:
         self.raw_rows.append(dict(row))
 
     def upsert_provider_observations(self, rows: list[dict[str, Any]]) -> None:
-        self.observation_rows.extend(dict(row) for row in rows)
+        by_id = {str(row["provider_observation_id"]): row for row in self.observation_rows}
+        for row in rows:
+            by_id[str(row["provider_observation_id"])] = dict(row)
+        self.observation_rows = list(by_id.values())
 
     def load_yahoo_observations(self, *, symbols: list[str]) -> list[dict[str, Any]]:
-        assert symbols == ["AAPL"]
         return list(self.yahoo_rows)
 
     def load_quarterly_revenue_statement_items(self, *, symbols: list[str]) -> list[dict[str, Any]]:
-        assert symbols == ["AAPL"]
         return list(self.statement_revenue_rows)
 
 
@@ -52,7 +53,13 @@ class _Client:
         return self.result
 
 
-def _result(*, payload: Any, status: str = "success", http_status: int | None = 200) -> FmpFetchResult:
+def _result(
+    *,
+    payload: Any,
+    status: str = "success",
+    http_status: int | None = 200,
+    error_payload: dict[str, Any] | None = None,
+) -> FmpFetchResult:
     return FmpFetchResult(
         provider_symbol="AAPL",
         endpoint=FMP_EARNINGS_ENDPOINT,
@@ -61,7 +68,7 @@ def _result(*, payload: Any, status: str = "success", http_status: int | None = 
         status=status,
         http_status=http_status,
         response_payload=payload,
-        error_payload=None,
+        error_payload=error_payload,
         observed_at=datetime(2026, 7, 24, 10, 0, tzinfo=UTC),
     )
 
@@ -134,6 +141,7 @@ def test_success_raw_writes_normalized_fmp_observation_and_preserves_revenue() -
     assert report["status"] == "completed"
     assert report["live_calls"] == 1
     assert report["status_counts"]["success"] == 1
+    assert report["symbol_statuses"] == {"AAPL": {"status": "success", "http_status": 200, "reason": None}}
     assert report["provider_observations"]["written"] == 1
     assert repository.raw_rows[0]["provider"] == "fmp"
     assert repository.raw_rows[0]["request_params"] == {"symbol": "AAPL"}
@@ -143,7 +151,33 @@ def test_success_raw_writes_normalized_fmp_observation_and_preserves_revenue() -
     assert observation["revenue_actual"] == 100.0
     assert observation["revenue_estimate"] == 99.0
     assert observation["raw_payload_ref"] == repository.raw_rows[0]["raw_payload_ref"]
+    assert observation["data_quality_flags"]["revenueSanity"]["status"] == "unverified"
     assert report["coverage"] == {"revenue": 1, "eps": 1}
+
+
+def test_exact_revenue_sanity_marks_fmp_observation_as_eligible_for_arbitration() -> None:
+    repository = _Repository(
+        statement_revenue_rows=[
+            {
+                "symbol": "AAPL",
+                "period_end": date(2026, 6, 30),
+                "known_at": date(2026, 7, 24),
+                "value": 100.0,
+            }
+        ]
+    )
+    client = _Client(_result(payload=_fmp_payload()))
+
+    report = run_fmp_earnings_shadow(
+        symbols=["AAPL"],
+        repository=repository,
+        client=client,
+        env=_enabled_env(),
+        request_sleep_seconds=0,
+    )
+
+    assert report["revenue_sanity"]["by_symbol"]["AAPL"]["status"] == "passed"
+    assert repository.observation_rows[0]["data_quality_flags"]["revenueSanity"]["status"] == "passed"
 
 
 def test_fmp_observation_does_not_infer_timezone_confirmation_or_market_session() -> None:
@@ -196,7 +230,32 @@ def test_rate_limited_response_is_not_not_found_and_writes_no_observation() -> N
 
     assert report["status_counts"]["rate_limited"] == 1
     assert report["status_counts"]["not_found"] == 0
+    assert report["symbol_statuses"] == {"AAPL": {"status": "rate_limited", "http_status": 429, "reason": None}}
     assert repository.raw_rows[0]["status"] == "rate_limited"
+    assert repository.observation_rows == []
+
+
+def test_http_402_is_visible_per_symbol_without_provider_observation() -> None:
+    repository = _Repository()
+    client = _Client(
+        _result(
+            payload={"error": "plan limited"},
+            status="error",
+            http_status=402,
+            error_payload={"error": "http_402"},
+        )
+    )
+
+    report = run_fmp_earnings_shadow(
+        symbols=["ASML"],
+        repository=repository,
+        client=client,
+        env=_enabled_env(),
+        request_sleep_seconds=0,
+    )
+
+    assert report["status"] == "completed"
+    assert report["symbol_statuses"] == {"ASML": {"status": "error", "http_status": 402, "reason": "http_402"}}
     assert repository.observation_rows == []
 
 

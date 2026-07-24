@@ -378,6 +378,7 @@ def run_fmp_earnings_shadow(
                 time.sleep(float(request_sleep_seconds))
 
         _increment_status(report, status)
+        report["symbol_statuses"][symbol] = _symbol_status(raw_row=raw_row, status=status)
         if status != "success":
             continue
         observations = normalize_fmp_provider_observations(
@@ -400,6 +401,10 @@ def run_fmp_earnings_shadow(
         report["revenue_sanity"] = _unavailable_revenue_sanity_report()
     else:
         report["revenue_sanity"] = build_revenue_sanity_report(fmp_observations, statement_revenue_rows)
+        if fmp_observations:
+            repository.upsert_provider_observations(
+                _with_revenue_sanity_flags(fmp_observations, revenue_sanity=report["revenue_sanity"])
+            )
     return report
 
 
@@ -551,12 +556,22 @@ def build_revenue_sanity_report(
         recent_period_limit=recent_period_limit,
     )
     sequence_rows_considered = 0
+    symbol_summaries: dict[str, dict[str, int]] = {
+        symbol: {
+            "exact_matches": 0,
+            "mismatches": 0,
+            "missing_statement_comparators": 0,
+            "scale_anomalies": 0,
+        }
+        for symbol in fmp_rows_by_symbol
+    }
     for symbol, fmp_rows in fmp_rows_by_symbol.items():
         statement_rows = statement_rows_by_symbol.get(symbol, [])
         for rank, fmp in enumerate(fmp_rows, start=1):
             sequence_rows_considered += 1
             fmp_revenue = _coerce_number(fmp.get("revenue_actual"))
             if rank > len(statement_rows):
+                symbol_summaries[symbol]["missing_statement_comparators"] += 1
                 missing_comparators.append(
                     {
                         **_quality_example(fmp=fmp, yahoo=None),
@@ -568,6 +583,7 @@ def build_revenue_sanity_report(
             statement = statement_rows[rank - 1]
             statement_revenue = _coerce_number(statement.get("value"))
             if statement_revenue is None:
+                symbol_summaries[symbol]["missing_statement_comparators"] += 1
                 missing_comparators.append(
                     {
                         **_quality_example(fmp=fmp, yahoo=None),
@@ -587,11 +603,14 @@ def build_revenue_sanity_report(
                 "revenue_delta": fmp_revenue - statement_revenue,
             }
             if _same_number(fmp_revenue, statement_revenue):
+                symbol_summaries[symbol]["exact_matches"] += 1
                 exact_matches.append(example)
                 continue
+            symbol_summaries[symbol]["mismatches"] += 1
             mismatches.append(example)
             scale_factor = _scale_anomaly_factor(fmp_revenue, statement_revenue)
             if scale_factor is not None:
+                symbol_summaries[symbol]["scale_anomalies"] += 1
                 scale_anomalies.append({**example, "scale_factor": scale_factor})
     return {
         "status": "completed",
@@ -606,6 +625,13 @@ def build_revenue_sanity_report(
         "mismatches": _examples_summary(mismatches, sort_by_delta=True),
         "missing_statement_comparators": _examples_summary(missing_comparators),
         "scale_anomalies": _examples_summary(scale_anomalies, sort_by_delta=True),
+        "by_symbol": {
+            symbol: {
+                **summary,
+                "status": _revenue_sanity_status(summary),
+            }
+            for symbol, summary in sorted(symbol_summaries.items())
+        },
     }
 
 
@@ -671,6 +697,58 @@ def _statement_observation_sort_key(row: dict[str, Any]) -> tuple[date, str, flo
         str(row.get("source") or ""),
         float("-inf") if value is None else value,
     )
+
+
+def _revenue_sanity_status(summary: dict[str, int]) -> str:
+    if summary["mismatches"] or summary["scale_anomalies"]:
+        return "blocked"
+    if summary["exact_matches"]:
+        return "passed"
+    return "unverified"
+
+
+def _with_revenue_sanity_flags(
+    observations: list[dict[str, Any]],
+    *,
+    revenue_sanity: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Attach per-symbol shadow-quality state without changing source values."""
+    mapping_policy = _text(revenue_sanity.get("mapping_policy"))
+    summaries = revenue_sanity.get("by_symbol")
+    by_symbol = summaries if isinstance(summaries, dict) else {}
+    flagged: list[dict[str, Any]] = []
+    for observation in observations:
+        symbol = _symbol(observation.get("symbol"))
+        summary = by_symbol.get(symbol)
+        quality = summary if isinstance(summary, dict) else {}
+        flags = dict(observation.get("data_quality_flags") or {})
+        flags["revenueSanity"] = {
+            "status": _text(quality.get("status")) or "unverified",
+            "mappingPolicy": mapping_policy,
+            "exactMatches": int(quality.get("exact_matches") or 0),
+            "mismatches": int(quality.get("mismatches") or 0),
+            "scaleAnomalies": int(quality.get("scale_anomalies") or 0),
+        }
+        row = {**observation, "data_quality_flags": flags}
+        row["observation_hash"] = _payload_hash(
+            {
+                key: value
+                for key, value in row.items()
+                if key not in {"provider_observation_id", "ingested_at", "observation_hash"}
+            }
+        )
+        flagged.append(row)
+    return flagged
+
+
+def _symbol_status(*, raw_row: dict[str, Any], status: str) -> dict[str, Any]:
+    error_payload = raw_row.get("error_payload")
+    error_code = error_payload.get("error") if isinstance(error_payload, dict) else None
+    return {
+        "status": status if status in _RAW_STATUSES else "error",
+        "http_status": raw_row.get("http_status"),
+        "reason": _text(error_code),
+    }
 
 
 def _fiscal_period_unavailable(row: dict[str, Any]) -> bool:
@@ -800,6 +878,7 @@ def _new_shadow_report(*, symbols: list[str]) -> dict[str, Any]:
         "raw_cache_hits": 0,
         "live_calls": 0,
         "status_counts": {status: 0 for status in sorted(_RAW_STATUSES)},
+        "symbol_statuses": {},
         "provider_observations": {"written": 0, "planned": 0},
         "coverage": {"revenue": 0, "eps": 0},
         "overlap_with_yahoo": 0,
