@@ -158,6 +158,23 @@ FMP_API_KEY=... DATA_OPS_CORPORATE_ACTION_PROVIDERS=fmp,yahoo_finance \
   python scripts/run_corporate_actions_shadow.py --symbols AAPL MSFT ASML 9684.T
 ```
 
+### SEC filings shadow
+
+`scripts/run_filings_shadow.py` is a manual SEC EDGAR-only shadow runner. It
+stores only `source_cache.filing_provider_raw` and
+`source_cache.filing_provider_observations`; it does not create canonical
+filings, build records, product calls, or schedules. `SEC_EDGAR_USER_AGENT`
+must be a recognizable contact string configured for SEC access. The runner
+uses the cached ticker/CIK mapping and submissions payloads first. Unmapped
+symbols are reported as unresolved rather than failing the run, and references
+to historical `filings.files` are retained without fetching them in Phase 1.
+
+```bash
+DATA_OPS_FILING_PROVIDERS=sec_edgar \
+SEC_EDGAR_USER_AGENT='Example Company contact@example.com' \
+python scripts/run_filings_shadow.py --symbols AAPL MSFT ASML 9684.T
+```
+
 Raw cache reuse is keyed by provider, symbol, action type, endpoint, and safe
 request hash. The JSON report exposes provider/action status, cache and live
 call counts, coverage, FMP/Yahoo ex-date overlap, and capped date/amount/factor
