@@ -26,6 +26,8 @@ from finance_data_ops.publish.client import PostgresPublisher
 
 SEC_EDGAR_EVENT_CANDIDATES = "sec_edgar_event_candidates"
 IR_PUBLIC_PAGE = "ir_public_page"
+_OPERATOR_PROVIDER_ALIASES = {"sec_edgar": SEC_EDGAR_EVENT_CANDIDATES}
+_SUPPORTED_PROVIDERS = {SEC_EDGAR_EVENT_CANDIDATES, IR_PUBLIC_PAGE}
 _RAW_STATUSES = {"success", "not_found", "rate_limited", "error"}
 _CACHEABLE_RAW_STATUSES = {"success", "not_found", "rate_limited"}
 _MAX_EXAMPLES = 25
@@ -187,7 +189,8 @@ def run_investor_events_shadow(
     if not enabled:
         return _skipped(report, "no_investor_event_providers_enabled")
     sec_enabled = SEC_EDGAR_EVENT_CANDIDATES in enabled
-    ir_enabled = IR_PUBLIC_PAGE in enabled
+    ir_requested = IR_PUBLIC_PAGE in enabled
+    ir_enabled = ir_requested
     report["providers"][SEC_EDGAR_EVENT_CANDIDATES]["enabled"] = sec_enabled
     ir_user_agent = str(env_map.get("DATA_OPS_IR_PUBLIC_PAGE_USER_AGENT") or "").strip()
     if ir_enabled and not ir_user_agent:
@@ -196,7 +199,12 @@ def run_investor_events_shadow(
         ir_enabled = False
     report["providers"][IR_PUBLIC_PAGE]["enabled"] = ir_enabled
     if not sec_enabled and not ir_enabled:
-        return _skipped(report, "ir_public_page_user_agent_missing")
+        return _skipped(
+            report,
+            "ir_public_page_user_agent_missing"
+            if ir_requested
+            else "no_investor_event_providers_enabled",
+        )
     if dry_run:
         report["status"] = "dry_run"
         report["provider_observations"]["planned"] = len(requested) * int(sec_enabled or ir_enabled)
@@ -455,7 +463,13 @@ def _warning(report: dict[str, Any], warning: str) -> None:
     if warning not in report["warnings"]: report["warnings"].append(warning)
 def _symbol_provider_status(report: dict[str, Any], symbol: str, provider: str, status: str, reason: str | None, cache_hit: bool = False) -> None: report["symbol_statuses"].setdefault(symbol, {})[provider] = {"status": status, "reason": reason, "cache_hit": cache_hit}
 def _example(row: Mapping[str, Any]) -> dict[str, Any]: return {key: row.get(key) for key in ("symbol", "title_raw", "event_type_raw", "related_filing_accession", "source_url", "extraction_confidence")}
-def _provider_allowlist(env: Mapping[str, str]) -> set[str]: return {item.strip().lower() for item in str(env.get("DATA_OPS_INVESTOR_EVENT_PROVIDERS") or "").split(",") if item.strip()}
+def _provider_allowlist(env: Mapping[str, str]) -> set[str]:
+    requested = {
+        _OPERATOR_PROVIDER_ALIASES.get(item.strip().lower(), item.strip().lower())
+        for item in str(env.get("DATA_OPS_INVESTOR_EVENT_PROVIDERS") or "").split(",")
+        if item.strip()
+    }
+    return requested & _SUPPORTED_PROVIDERS
 def _host_allowed(url: str, allowed_host: str) -> bool: return (urlparse(url).hostname or "").lower() == allowed_host.lower()
 def _same_host_url(value: Any, config: Mapping[str, Any]) -> str | None:
     url = _text(value)

@@ -98,6 +98,16 @@ def test_missing_providers_skips_without_network_or_database() -> None:
     assert report["live_calls"] == 0
 
 
+def test_unknown_provider_skips_without_ir_user_agent_warning() -> None:
+    report = run_investor_events_shadow(
+        symbols=["AAPL"],
+        env={"DATA_OPS_INVESTOR_EVENT_PROVIDERS": "unknown_provider"},
+    )
+    assert report["status"] == "skipped"
+    assert report["reason"] == "no_investor_event_providers_enabled"
+    assert report["warnings"] == []
+
+
 def test_missing_ir_user_agent_skips_ir_without_network() -> None:
     report = run_investor_events_shadow(symbols=["AAPL"], env={"DATA_OPS_INVESTOR_EVENT_PROVIDERS": IR_PUBLIC_PAGE})
     assert report["status"] == "skipped"
@@ -142,7 +152,7 @@ def test_sec_runner_uses_only_observed_filings_and_reports_candidates() -> None:
     report = run_investor_events_shadow(
         symbols=["AAPL", "MSFT"],
         repository=repository,
-        env={"DATA_OPS_INVESTOR_EVENT_PROVIDERS": SEC_EDGAR_EVENT_CANDIDATES},
+        env={"DATA_OPS_INVESTOR_EVENT_PROVIDERS": "sec_edgar"},
         now=lambda: NOW,
     )
     assert report["live_calls"] == 0

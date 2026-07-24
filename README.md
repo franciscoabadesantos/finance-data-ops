@@ -184,8 +184,10 @@ investor-event candidates. It writes only
 canonical surface, build records, product calls, schedules, or fetch event
 documents.
 
-`sec_edgar` derives low/medium-confidence candidates only from already observed
-SEC filing observations, so it does not make new SEC requests in this phase.
+`sec_edgar` is the operator-facing alias for the internal
+`sec_edgar_event_candidates` provider. It derives low/medium-confidence
+candidates only from already observed SEC filing observations, so it does not
+make new SEC requests in this phase.
 `ir_public_page` fetches exactly one configured public IR page per symbol and
 requires `DATA_OPS_IR_PUBLIC_PAGE_USER_AGENT`. The source is fail-closed: each
 symbol must be enabled in versioned `data/investor_event_sources.json`, and its
