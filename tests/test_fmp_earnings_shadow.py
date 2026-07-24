@@ -10,6 +10,7 @@ from finance_data_ops.shadow.fmp_earnings import (
     FmpFetchResult,
     PostgresFmpEarningsShadowRepository,
     _to_psycopg_dsn,
+    build_revenue_sanity_report,
     normalize_fmp_provider_observations,
     run_fmp_earnings_shadow,
 )
@@ -19,6 +20,7 @@ from finance_data_ops.shadow.fmp_earnings import (
 class _Repository:
     cached_raw: dict[str, Any] | None = None
     yahoo_rows: list[dict[str, Any]] = field(default_factory=list)
+    statement_revenue_rows: list[dict[str, Any]] = field(default_factory=list)
     raw_rows: list[dict[str, Any]] = field(default_factory=list)
     observation_rows: list[dict[str, Any]] = field(default_factory=list)
 
@@ -34,6 +36,10 @@ class _Repository:
     def load_yahoo_observations(self, *, symbols: list[str]) -> list[dict[str, Any]]:
         assert symbols == ["AAPL"]
         return list(self.yahoo_rows)
+
+    def load_quarterly_revenue_statement_items(self, *, symbols: list[str]) -> list[dict[str, Any]]:
+        assert symbols == ["AAPL"]
+        return list(self.statement_revenue_rows)
 
 
 @dataclass
@@ -253,6 +259,95 @@ def test_conflicts_against_yahoo_are_reported_without_canonical_write() -> None:
     assert report["conflicts"]["revenue_available_only_in_fmp"]["count"] == 1
     assert repository.raw_rows and repository.observation_rows
     assert not hasattr(repository, "canonical_rows")
+
+
+def test_unknown_fmp_fiscal_period_is_unavailable_not_a_provider_conflict() -> None:
+    repository = _Repository(
+        yahoo_rows=[
+            {
+                "provider": "yahoo_finance",
+                "symbol": "AAPL",
+                "fiscal_period": "2026Q2",
+                "report_date": date(2026, 7, 30),
+                "eps_actual": 1.5,
+                "eps_estimate": 1.4,
+                "revenue_actual": None,
+                "revenue_estimate": None,
+            }
+        ]
+    )
+    client = _Client(_result(payload=_fmp_payload(fiscalDateEnding=None)))
+
+    report = run_fmp_earnings_shadow(
+        symbols=["AAPL"],
+        repository=repository,
+        client=client,
+        env=_enabled_env(),
+        request_sleep_seconds=0,
+    )
+
+    assert report["conflicts"]["fmp_fiscal_period_unavailable"]["count"] == 1
+    assert report["conflicts"]["fiscal_period_mismatch"]["count"] == 0
+
+
+def test_eps_quality_buckets_large_conflict_with_representative_example() -> None:
+    repository = _Repository(
+        yahoo_rows=[
+            {
+                "provider": "yahoo_finance",
+                "symbol": "AAPL",
+                "fiscal_period": "2024Q4",
+                "report_date": date(2024, 10, 31),
+                "eps_actual": 0.97,
+                "eps_estimate": 0.95,
+                "revenue_actual": None,
+                "revenue_estimate": None,
+            }
+        ]
+    )
+    client = _Client(
+        _result(
+            payload=_fmp_payload(
+                date="2024-10-31",
+                fiscalDateEnding="2024-12-31",
+                epsActual=1.64,
+                epsEstimated=1.60,
+            )
+        )
+    )
+
+    report = run_fmp_earnings_shadow(
+        symbols=["AAPL"],
+        repository=repository,
+        client=client,
+        env=_enabled_env(),
+        request_sleep_seconds=0,
+    )
+
+    large = report["conflicts"]["eps_conflicts"]["large_eps_conflict"]
+    assert large["count"] == 1
+    assert large["examples"][0]["report_date"] == date(2024, 10, 31)
+    assert large["examples"][0]["eps_actual_delta"] == 0.67
+
+
+def test_revenue_sanity_reports_exact_mismatch_missing_and_scale_anomaly() -> None:
+    fmp_rows = [
+        {"symbol": "AAPL", "report_date": date(2026, 1, 30), "revenue_actual": 100.0, "fiscal_period": "unknown"},
+        {"symbol": "AAPL", "report_date": date(2026, 4, 30), "revenue_actual": 100.0, "fiscal_period": "unknown"},
+        {"symbol": "AAPL", "report_date": date(2026, 7, 30), "revenue_actual": 100.0, "fiscal_period": "unknown"},
+    ]
+    statement_rows = [
+        {"symbol": "AAPL", "known_at": date(2026, 1, 30), "period_end": date(2025, 12, 31), "value": 100.0},
+        {"symbol": "AAPL", "known_at": date(2026, 4, 30), "period_end": date(2026, 3, 31), "value": 0.1},
+    ]
+
+    report = build_revenue_sanity_report(fmp_rows, statement_rows)
+
+    assert report["exact_matches"]["count"] == 1
+    assert report["mismatches"]["count"] == 1
+    assert report["missing_statement_comparators"]["count"] == 1
+    assert report["scale_anomalies"]["count"] == 1
+    assert report["scale_anomalies"]["examples"][0]["scale_factor"] == 1_000
 
 
 def test_observation_ids_and_hashes_are_deterministic() -> None:

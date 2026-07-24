@@ -124,7 +124,7 @@ FMP_API_KEY=... DATA_OPS_EARNINGS_PROVIDERS=yahoo_finance,fmp \
   python scripts/run_fmp_earnings_shadow.py --symbols AAPL
 ```
 
-The JSON report includes cache/live-call counts, raw statuses, observation counts, EPS/revenue coverage, Yahoo overlap, and visible conflicts. Canonical revenue fill and Yahoo/FMP arbitration remain Phase 3. FMP is not part of any scheduled flow in this phase.
+The JSON report includes cache/live-call counts, raw statuses, observation counts, EPS/revenue coverage, Yahoo overlap, visible conflicts, and shadow-only FMP revenue checks against quarterly statement revenue when the report-date mapping is exact. Phase 3 is quality reporting only: canonical revenue fill and Yahoo/FMP arbitration remain future work. FMP is not part of any scheduled flow in this phase.
 
 Source-universe audit/reconciliation:
 

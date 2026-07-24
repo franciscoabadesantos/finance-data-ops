@@ -39,6 +39,9 @@ class FmpEarningsShadowRepository(Protocol):
     def load_yahoo_observations(self, *, symbols: list[str]) -> list[dict[str, Any]]:
         ...
 
+    def load_quarterly_revenue_statement_items(self, *, symbols: list[str]) -> list[dict[str, Any]]:
+        ...
+
 
 class FmpHttpClient(Protocol):
     def fetch(self, *, symbol: str, observed_at: datetime) -> "FmpFetchResult":
@@ -297,6 +300,27 @@ class PostgresFmpEarningsShadowRepository:
                 columns = [description.name for description in cur.description]
                 return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
 
+    def load_quarterly_revenue_statement_items(self, *, symbols: list[str]) -> list[dict[str, Any]]:
+        if not symbols:
+            return []
+        with _connect(self._database_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT symbol, value, currency, fiscal_year, fiscal_quarter,
+                           period_end, known_at, source
+                    FROM feature_store.financial_statement_line_items
+                    WHERE statement_type = 'income_statement'
+                      AND line_item_id = 'revenue'
+                      AND period_type = 'quarterly'
+                      AND UPPER(symbol) = ANY(%s)
+                    ORDER BY symbol, known_at DESC, period_end DESC
+                    """,
+                    (symbols,),
+                )
+                columns = [description.name for description in cur.description]
+                return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+
 
 def run_fmp_earnings_shadow(
     *,
@@ -369,6 +393,12 @@ def run_fmp_earnings_shadow(
     yahoo_observations = repository.load_yahoo_observations(symbols=requested_symbols)
     report["overlap_with_yahoo"] = _overlap_count(fmp_observations, yahoo_observations)
     report["conflicts"] = build_yahoo_conflict_report(fmp_observations, yahoo_observations)
+    try:
+        statement_revenue_rows = repository.load_quarterly_revenue_statement_items(symbols=requested_symbols)
+    except Exception:  # Shadow quality must not block FMP raw/provider persistence.
+        report["revenue_sanity"] = _unavailable_revenue_sanity_report()
+    else:
+        report["revenue_sanity"] = build_revenue_sanity_report(fmp_observations, statement_revenue_rows)
     return report
 
 
@@ -450,11 +480,19 @@ def build_yahoo_conflict_report(
     conflicts = {
         "report_date_mismatch": [],
         "fiscal_period_mismatch": [],
+        "fmp_fiscal_period_unavailable": [],
         "eps_actual_mismatch": [],
         "eps_estimate_mismatch": [],
         "revenue_available_only_in_fmp": [],
     }
+    eps_buckets = {
+        "small_rounding_delta": [],
+        "small_consensus_delta": [],
+        "large_eps_conflict": [],
+    }
     for fmp in fmp_observations:
+        if _fiscal_period_unavailable(fmp):
+            conflicts["fmp_fiscal_period_unavailable"].append(_quality_example(fmp=fmp, yahoo=None))
         matches = _yahoo_matches(fmp, yahoo_observations)
         if not matches:
             continue
@@ -462,7 +500,7 @@ def build_yahoo_conflict_report(
         symbol = str(fmp["symbol"])
         if fmp.get("report_date") != yahoo.get("report_date"):
             conflicts["report_date_mismatch"].append(symbol)
-        if fmp.get("fiscal_period") != yahoo.get("fiscal_period"):
+        if not _fiscal_period_unavailable(fmp) and fmp.get("fiscal_period") != yahoo.get("fiscal_period"):
             conflicts["fiscal_period_mismatch"].append(symbol)
         if _different_numbers(fmp.get("eps_actual"), yahoo.get("eps_actual")):
             conflicts["eps_actual_mismatch"].append(symbol)
@@ -470,7 +508,184 @@ def build_yahoo_conflict_report(
             conflicts["eps_estimate_mismatch"].append(symbol)
         if _fmp_only_revenue(fmp, yahoo):
             conflicts["revenue_available_only_in_fmp"].append(symbol)
-    return {name: {"count": len(symbols), "symbols": sorted(set(symbols))} for name, symbols in conflicts.items()}
+        eps_bucket = _eps_conflict_bucket(fmp=fmp, yahoo=yahoo)
+        if eps_bucket is not None:
+            eps_buckets[eps_bucket].append(_quality_example(fmp=fmp, yahoo=yahoo))
+    report = {
+        name: _conflict_summary(values)
+        for name, values in conflicts.items()
+    }
+    report["eps_conflicts"] = {
+        "thresholds": {
+            "small_rounding_delta_max": 0.02,
+            "small_consensus_delta_max": 0.05,
+        },
+        **{
+            name: _examples_summary(values, sort_by_delta=name == "large_eps_conflict")
+            for name, values in eps_buckets.items()
+        },
+    }
+    return report
+
+
+def build_revenue_sanity_report(
+    fmp_observations: list[dict[str, Any]],
+    statement_revenue_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare FMP actual revenue only when report-date provenance is exact."""
+    exact_matches: list[dict[str, Any]] = []
+    mismatches: list[dict[str, Any]] = []
+    missing_comparators: list[dict[str, Any]] = []
+    scale_anomalies: list[dict[str, Any]] = []
+    rows_considered = 0
+    for fmp in fmp_observations:
+        fmp_revenue = _coerce_number(fmp.get("revenue_actual"))
+        if fmp_revenue is None:
+            continue
+        rows_considered += 1
+        comparators = _statement_revenue_matches(fmp=fmp, statement_rows=statement_revenue_rows)
+        if len(comparators) != 1:
+            missing_comparators.append(
+                {
+                    **_quality_example(fmp=fmp, yahoo=None),
+                    "reason": "ambiguous_statement_comparator" if comparators else "no_exact_statement_report_date_match",
+                }
+            )
+            continue
+        statement = comparators[0]
+        statement_revenue = _coerce_number(statement.get("value"))
+        if statement_revenue is None:
+            missing_comparators.append({**_quality_example(fmp=fmp, yahoo=None), "reason": "statement_revenue_value_missing"})
+            continue
+        example = {
+            **_quality_example(fmp=fmp, yahoo=None),
+            "statement_period_end": _coerce_date(statement.get("period_end")),
+            "statement_known_at": _coerce_date(statement.get("known_at")),
+            "statement_revenue_actual": statement_revenue,
+            "revenue_delta": fmp_revenue - statement_revenue,
+        }
+        if _same_number(fmp_revenue, statement_revenue):
+            exact_matches.append(example)
+            continue
+        mismatches.append(example)
+        scale_factor = _scale_anomaly_factor(fmp_revenue, statement_revenue)
+        if scale_factor is not None:
+            scale_anomalies.append({**example, "scale_factor": scale_factor})
+    return {
+        "status": "completed",
+        "mapping_policy": "same_symbol_and_statement_known_at_equals_fmp_report_date",
+        "fmp_revenue_actual_rows": rows_considered,
+        "exact_matches": _examples_summary(exact_matches),
+        "mismatches": _examples_summary(mismatches, sort_by_delta=True),
+        "missing_statement_comparators": _examples_summary(missing_comparators),
+        "scale_anomalies": _examples_summary(scale_anomalies, sort_by_delta=True),
+    }
+
+
+def _statement_revenue_matches(
+    *,
+    fmp: dict[str, Any],
+    statement_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    symbol = _symbol(fmp.get("symbol"))
+    report_date = _coerce_date(fmp.get("report_date"))
+    if report_date is None:
+        return []
+    return [
+        row
+        for row in statement_rows
+        if _symbol(row.get("symbol")) == symbol and _coerce_date(row.get("known_at")) == report_date
+    ]
+
+
+def _fiscal_period_unavailable(row: dict[str, Any]) -> bool:
+    return _text(row.get("fiscal_period")) in {None, "unknown"}
+
+
+def _eps_conflict_bucket(*, fmp: dict[str, Any], yahoo: dict[str, Any]) -> str | None:
+    actual_delta = _absolute_delta(fmp.get("eps_actual"), yahoo.get("eps_actual"))
+    estimate_delta = _absolute_delta(fmp.get("eps_estimate"), yahoo.get("eps_estimate"))
+    if actual_delta is None and estimate_delta is None:
+        return None
+    if (actual_delta is not None and actual_delta > 0.02) or (estimate_delta is not None and estimate_delta > 0.05):
+        return "large_eps_conflict"
+    if actual_delta is not None:
+        return "small_rounding_delta"
+    return "small_consensus_delta"
+
+
+def _quality_example(*, fmp: dict[str, Any], yahoo: dict[str, Any] | None) -> dict[str, Any]:
+    example = {
+        "symbol": _symbol(fmp.get("symbol")),
+        "report_date": _coerce_date(fmp.get("report_date")),
+        "fmp_fiscal_period": _text(fmp.get("fiscal_period")),
+        "fmp_eps_actual": _coerce_number(fmp.get("eps_actual")),
+        "fmp_eps_estimate": _coerce_number(fmp.get("eps_estimate")),
+        "fmp_revenue_actual": _coerce_number(fmp.get("revenue_actual")),
+    }
+    if yahoo is not None:
+        example.update(
+            {
+                "yahoo_fiscal_period": _text(yahoo.get("fiscal_period")),
+                "yahoo_eps_actual": _coerce_number(yahoo.get("eps_actual")),
+                "yahoo_eps_estimate": _coerce_number(yahoo.get("eps_estimate")),
+                "eps_actual_delta": _absolute_delta(fmp.get("eps_actual"), yahoo.get("eps_actual")),
+                "eps_estimate_delta": _absolute_delta(fmp.get("eps_estimate"), yahoo.get("eps_estimate")),
+            }
+        )
+    return example
+
+
+def _conflict_summary(values: list[Any]) -> dict[str, Any]:
+    if values and isinstance(values[0], dict):
+        return _examples_summary(values)
+    symbols = sorted(set(str(value) for value in values))
+    return {"count": len(values), "symbols": symbols}
+
+
+def _examples_summary(values: list[dict[str, Any]], *, sort_by_delta: bool = False) -> dict[str, Any]:
+    if sort_by_delta:
+        ordered = sorted(
+            values,
+            key=lambda row: max(
+                abs(_coerce_number(row.get("eps_actual_delta")) or 0.0),
+                abs(_coerce_number(row.get("eps_estimate_delta")) or 0.0),
+                abs(_coerce_number(row.get("revenue_delta")) or 0.0),
+            ),
+            reverse=True,
+        )
+    else:
+        ordered = sorted(values, key=lambda row: (str(row.get("symbol") or ""), str(row.get("report_date") or "")), reverse=True)
+    return {"count": len(values), "examples": ordered[:5]}
+
+
+def _absolute_delta(left: Any, right: Any) -> float | None:
+    left_number, right_number = _coerce_number(left), _coerce_number(right)
+    if left_number is None or right_number is None:
+        return None
+    return round(abs(left_number - right_number), 12)
+
+
+def _same_number(left: float, right: float) -> bool:
+    return abs(left - right) <= max(1e-6, abs(right) * 1e-9)
+
+
+def _scale_anomaly_factor(left: float, right: float) -> int | None:
+    if left == 0.0 or right == 0.0:
+        return None
+    ratio = abs(left / right)
+    for factor in (1_000, 1_000_000, 1_000_000_000):
+        if abs(ratio - factor) / factor <= 0.01 or abs(ratio - (1 / factor)) * factor <= 0.01:
+            return factor
+    return None
+
+
+def _unavailable_revenue_sanity_report() -> dict[str, Any]:
+    return {
+        "status": "unavailable",
+        "reason": "statement_comparator_unavailable",
+        "mapping_policy": "same_symbol_and_statement_known_at_equals_fmp_report_date",
+    }
 
 
 def _http_failure_result(
@@ -514,6 +729,7 @@ def _new_shadow_report(*, symbols: list[str]) -> dict[str, Any]:
         "coverage": {"revenue": 0, "eps": 0},
         "overlap_with_yahoo": 0,
         "conflicts": {},
+        "revenue_sanity": {"status": "not_run"},
     }
 
 
