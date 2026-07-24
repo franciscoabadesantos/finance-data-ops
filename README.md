@@ -68,6 +68,7 @@ Optional:
 - `DATA_OPS_SYMBOLS_OVERRIDE` for emergency/local source-refresh subsets
 - `DATA_OPS_SYMBOLS_OVERRIDE_US` / `DATA_OPS_SYMBOLS_OVERRIDE_EU` / `DATA_OPS_SYMBOLS_OVERRIDE_APAC` for region-specific emergency/local subsets
 - `FMP_API_KEY` plus `DATA_OPS_EARNINGS_PROVIDERS=yahoo_finance,fmp` only when manually enabling the Phase 2 FMP earnings shadow run
+- `DATA_OPS_CORPORATE_ACTION_PROVIDERS=yahoo_finance` for the manual corporate-actions shadow; add `fmp` only with `FMP_API_KEY`
 
 See [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example).
 
@@ -125,6 +126,38 @@ FMP_API_KEY=... DATA_OPS_EARNINGS_PROVIDERS=yahoo_finance,fmp \
 ```
 
 The JSON report includes cache/live-call counts, raw statuses, observation counts, EPS/revenue coverage, Yahoo overlap, visible conflicts, and shadow-only FMP revenue checks against the latest quarterly-statement observation for each of the eight most recent periods. It compares the two recent sequences by rank; statement `known_at` remains PIT provenance and is not used as an earnings-date join key. This is only a scale/compatibility sanity check, not PIT validation or an arbitration rule. Phase 3 is quality reporting only: canonical revenue fill and Yahoo/FMP arbitration remain future work. FMP is not part of any scheduled flow in this phase.
+
+## Corporate Actions Shadow Mode (Phase 5)
+
+`scripts/run_corporate_actions_shadow.py` is a manual-only, provider-owned
+shadow ingestion for dividends and splits. It writes only
+`source_cache.corporate_action_provider_raw` and
+`source_cache.corporate_action_provider_observations`; it does not reuse
+`source_cache.fundamentals`, write a canonical Feature Store table, adjust
+prices, schedule work, or call product services.
+
+The runner is disabled and network-free until at least one provider is
+explicitly allowlisted. `fmp` additionally requires `FMP_API_KEY`; FMP uses
+header authentication and keys are never retained in request parameters, raw
+payloads, or reports. `yahoo_finance` uses yfinance as a secondary validation
+source and needs no key.
+
+```bash
+python scripts/run_corporate_actions_shadow.py --symbols AAPL MSFT ASML 9684.T
+
+DATA_OPS_CORPORATE_ACTION_PROVIDERS=yahoo_finance \
+  python scripts/run_corporate_actions_shadow.py --symbols AAPL MSFT --dry-run
+
+FMP_API_KEY=... DATA_OPS_CORPORATE_ACTION_PROVIDERS=fmp,yahoo_finance \
+  python scripts/run_corporate_actions_shadow.py --symbols AAPL MSFT ASML 9684.T
+```
+
+Raw cache reuse is keyed by provider, symbol, action type, endpoint, and safe
+request hash. The JSON report exposes provider/action status, cache and live
+call counts, coverage, FMP/Yahoo ex-date overlap, and capped date/amount/factor
+conflict examples. Yahoo index dates are retained as `provider_index_date`
+semantics while normalized `ex_date` remains the provider action date; missing
+payment, record, declaration, and currency fields remain null and are flagged.
 
 Source-universe audit/reconciliation:
 
