@@ -330,24 +330,28 @@ def test_eps_quality_buckets_large_conflict_with_representative_example() -> Non
     assert large["examples"][0]["eps_actual_delta"] == 0.67
 
 
-def test_revenue_sanity_reports_exact_mismatch_missing_and_scale_anomaly() -> None:
+def test_revenue_sanity_uses_recent_sequence_not_statement_known_at() -> None:
     fmp_rows = [
         {"symbol": "AAPL", "report_date": date(2026, 1, 30), "revenue_actual": 100.0, "fiscal_period": "unknown"},
         {"symbol": "AAPL", "report_date": date(2026, 4, 30), "revenue_actual": 100.0, "fiscal_period": "unknown"},
         {"symbol": "AAPL", "report_date": date(2026, 7, 30), "revenue_actual": 100.0, "fiscal_period": "unknown"},
     ]
     statement_rows = [
-        {"symbol": "AAPL", "known_at": date(2026, 1, 30), "period_end": date(2025, 12, 31), "value": 100.0},
-        {"symbol": "AAPL", "known_at": date(2026, 4, 30), "period_end": date(2026, 3, 31), "value": 0.1},
+        {"symbol": "AAPL", "known_at": date(2026, 7, 23), "period_end": date(2026, 6, 30), "value": 99.0},
+        {"symbol": "AAPL", "known_at": date(2026, 7, 24), "period_end": date(2026, 6, 30), "value": 100.0},
+        {"symbol": "AAPL", "known_at": date(2026, 7, 23), "period_end": date(2026, 3, 31), "value": 0.1},
     ]
 
     report = build_revenue_sanity_report(fmp_rows, statement_rows)
 
+    assert report["mapping_policy"] == "recent_report_date_to_recent_statement_period_sequence"
+    assert report["purpose"] == "sanity_check_only_not_pit_validation_or_arbitration"
     assert report["exact_matches"]["count"] == 1
     assert report["mismatches"]["count"] == 1
     assert report["missing_statement_comparators"]["count"] == 1
     assert report["scale_anomalies"]["count"] == 1
     assert report["scale_anomalies"]["examples"][0]["scale_factor"] == 1_000
+    assert report["exact_matches"]["examples"][0]["statement_known_at"] == date(2026, 7, 24)
 
 
 def test_observation_ids_and_hashes_are_deterministic() -> None:

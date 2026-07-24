@@ -22,6 +22,7 @@ from finance_data_ops.publish.client import PostgresPublisher
 
 FMP_PROVIDER = "fmp"
 FMP_EARNINGS_ENDPOINT = "https://financialmodelingprep.com/stable/earnings"
+REVENUE_SANITY_RECENT_PERIOD_LIMIT = 8
 _CACHEABLE_RAW_STATUSES = {"success", "not_found"}
 _RAW_STATUSES = {"success", "not_found", "rate_limited", "error"}
 
@@ -531,50 +532,76 @@ def build_yahoo_conflict_report(
 def build_revenue_sanity_report(
     fmp_observations: list[dict[str, Any]],
     statement_revenue_rows: list[dict[str, Any]],
+    *,
+    recent_period_limit: int = REVENUE_SANITY_RECENT_PERIOD_LIMIT,
 ) -> dict[str, Any]:
-    """Compare FMP actual revenue only when report-date provenance is exact."""
+    """Compare recent revenue sequences without treating statement known_at as an earnings date."""
+    if recent_period_limit < 1:
+        raise ValueError("recent_period_limit must be positive.")
     exact_matches: list[dict[str, Any]] = []
     mismatches: list[dict[str, Any]] = []
     missing_comparators: list[dict[str, Any]] = []
     scale_anomalies: list[dict[str, Any]] = []
-    rows_considered = 0
-    for fmp in fmp_observations:
-        fmp_revenue = _coerce_number(fmp.get("revenue_actual"))
-        if fmp_revenue is None:
-            continue
-        rows_considered += 1
-        comparators = _statement_revenue_matches(fmp=fmp, statement_rows=statement_revenue_rows)
-        if len(comparators) != 1:
-            missing_comparators.append(
-                {
-                    **_quality_example(fmp=fmp, yahoo=None),
-                    "reason": "ambiguous_statement_comparator" if comparators else "no_exact_statement_report_date_match",
-                }
-            )
-            continue
-        statement = comparators[0]
-        statement_revenue = _coerce_number(statement.get("value"))
-        if statement_revenue is None:
-            missing_comparators.append({**_quality_example(fmp=fmp, yahoo=None), "reason": "statement_revenue_value_missing"})
-            continue
-        example = {
-            **_quality_example(fmp=fmp, yahoo=None),
-            "statement_period_end": _coerce_date(statement.get("period_end")),
-            "statement_known_at": _coerce_date(statement.get("known_at")),
-            "statement_revenue_actual": statement_revenue,
-            "revenue_delta": fmp_revenue - statement_revenue,
-        }
-        if _same_number(fmp_revenue, statement_revenue):
-            exact_matches.append(example)
-            continue
-        mismatches.append(example)
-        scale_factor = _scale_anomaly_factor(fmp_revenue, statement_revenue)
-        if scale_factor is not None:
-            scale_anomalies.append({**example, "scale_factor": scale_factor})
+    fmp_rows_by_symbol = _recent_fmp_revenue_rows_by_symbol(
+        fmp_observations,
+        recent_period_limit=recent_period_limit,
+    )
+    statement_rows_by_symbol = _recent_statement_revenue_rows_by_symbol(
+        statement_revenue_rows,
+        recent_period_limit=recent_period_limit,
+    )
+    sequence_rows_considered = 0
+    for symbol, fmp_rows in fmp_rows_by_symbol.items():
+        statement_rows = statement_rows_by_symbol.get(symbol, [])
+        for rank, fmp in enumerate(fmp_rows, start=1):
+            sequence_rows_considered += 1
+            fmp_revenue = _coerce_number(fmp.get("revenue_actual"))
+            if rank > len(statement_rows):
+                missing_comparators.append(
+                    {
+                        **_quality_example(fmp=fmp, yahoo=None),
+                        "sequence_rank": rank,
+                        "reason": "no_recent_statement_sequence_comparator",
+                    }
+                )
+                continue
+            statement = statement_rows[rank - 1]
+            statement_revenue = _coerce_number(statement.get("value"))
+            if statement_revenue is None:
+                missing_comparators.append(
+                    {
+                        **_quality_example(fmp=fmp, yahoo=None),
+                        "sequence_rank": rank,
+                        "statement_period_end": _coerce_date(statement.get("period_end")),
+                        "statement_known_at": _coerce_date(statement.get("known_at")),
+                        "reason": "statement_revenue_value_missing",
+                    }
+                )
+                continue
+            example = {
+                **_quality_example(fmp=fmp, yahoo=None),
+                "sequence_rank": rank,
+                "statement_period_end": _coerce_date(statement.get("period_end")),
+                "statement_known_at": _coerce_date(statement.get("known_at")),
+                "statement_revenue_actual": statement_revenue,
+                "revenue_delta": fmp_revenue - statement_revenue,
+            }
+            if _same_number(fmp_revenue, statement_revenue):
+                exact_matches.append(example)
+                continue
+            mismatches.append(example)
+            scale_factor = _scale_anomaly_factor(fmp_revenue, statement_revenue)
+            if scale_factor is not None:
+                scale_anomalies.append({**example, "scale_factor": scale_factor})
     return {
         "status": "completed",
-        "mapping_policy": "same_symbol_and_statement_known_at_equals_fmp_report_date",
-        "fmp_revenue_actual_rows": rows_considered,
+        "mapping_policy": "recent_report_date_to_recent_statement_period_sequence",
+        "recent_period_limit_per_symbol": recent_period_limit,
+        "purpose": "sanity_check_only_not_pit_validation_or_arbitration",
+        "fmp_revenue_actual_rows": sum(
+            _coerce_number(row.get("revenue_actual")) is not None for row in fmp_observations
+        ),
+        "sequence_rows_considered": sequence_rows_considered,
         "exact_matches": _examples_summary(exact_matches),
         "mismatches": _examples_summary(mismatches, sort_by_delta=True),
         "missing_statement_comparators": _examples_summary(missing_comparators),
@@ -582,20 +609,68 @@ def build_revenue_sanity_report(
     }
 
 
-def _statement_revenue_matches(
+def _recent_fmp_revenue_rows_by_symbol(
+    fmp_observations: list[dict[str, Any]],
     *,
-    fmp: dict[str, Any],
-    statement_rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    symbol = _symbol(fmp.get("symbol"))
-    report_date = _coerce_date(fmp.get("report_date"))
-    if report_date is None:
-        return []
-    return [
-        row
-        for row in statement_rows
-        if _symbol(row.get("symbol")) == symbol and _coerce_date(row.get("known_at")) == report_date
-    ]
+    recent_period_limit: int,
+) -> dict[str, list[dict[str, Any]]]:
+    rows_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for row in fmp_observations:
+        symbol = _symbol(row.get("symbol"))
+        if not symbol or _coerce_date(row.get("report_date")) is None:
+            continue
+        if _coerce_number(row.get("revenue_actual")) is None:
+            continue
+        rows_by_symbol.setdefault(symbol, []).append(row)
+    return {
+        symbol: sorted(
+            rows,
+            key=lambda row: (
+                _coerce_date(row.get("report_date")) or date.min,
+                _coerce_date(row.get("known_at")) or date.min,
+                str(row.get("provider_observation_id") or ""),
+            ),
+            reverse=True,
+        )[:recent_period_limit]
+        for symbol, rows in rows_by_symbol.items()
+    }
+
+
+def _recent_statement_revenue_rows_by_symbol(
+    statement_revenue_rows: list[dict[str, Any]],
+    *,
+    recent_period_limit: int,
+) -> dict[str, list[dict[str, Any]]]:
+    latest_rows: dict[tuple[str, date], dict[str, Any]] = {}
+    for row in statement_revenue_rows:
+        symbol = _symbol(row.get("symbol"))
+        period_end = _coerce_date(row.get("period_end"))
+        if not symbol or period_end is None:
+            continue
+        key = (symbol, period_end)
+        current = latest_rows.get(key)
+        if current is None or _statement_observation_sort_key(row) > _statement_observation_sort_key(current):
+            latest_rows[key] = row
+    rows_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for (symbol, _), row in latest_rows.items():
+        rows_by_symbol.setdefault(symbol, []).append(row)
+    return {
+        symbol: sorted(
+            rows,
+            key=lambda row: _coerce_date(row.get("period_end")) or date.min,
+            reverse=True,
+        )[:recent_period_limit]
+        for symbol, rows in rows_by_symbol.items()
+    }
+
+
+def _statement_observation_sort_key(row: dict[str, Any]) -> tuple[date, str, float]:
+    value = _coerce_number(row.get("value"))
+    return (
+        _coerce_date(row.get("known_at")) or date.min,
+        str(row.get("source") or ""),
+        float("-inf") if value is None else value,
+    )
 
 
 def _fiscal_period_unavailable(row: dict[str, Any]) -> bool:
@@ -684,7 +759,7 @@ def _unavailable_revenue_sanity_report() -> dict[str, Any]:
     return {
         "status": "unavailable",
         "reason": "statement_comparator_unavailable",
-        "mapping_policy": "same_symbol_and_statement_known_at_equals_fmp_report_date",
+        "mapping_policy": "recent_report_date_to_recent_statement_period_sequence",
     }
 
 
