@@ -142,6 +142,12 @@ header authentication and keys are never retained in request parameters, raw
 payloads, or reports. `yahoo_finance` uses yfinance as a secondary validation
 source and needs no key.
 
+The runner should receive its own `DATA_OPS_DATABASE_URL` using
+`finance_data_ops_worker`. Local smoke commands that deliberately fall back to
+the Feature Store `DATABASE_URL` are also supported by explicit source-cache
+DML grants for `finance_feature_store_worker`; `finance-feature-store db
+validate` checks both role contracts.
+
 ```bash
 python scripts/run_corporate_actions_shadow.py --symbols AAPL MSFT ASML 9684.T
 

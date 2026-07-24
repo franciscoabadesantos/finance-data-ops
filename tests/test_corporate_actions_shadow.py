@@ -281,6 +281,45 @@ def test_fmp_not_found_and_rate_limited_raw_statuses_are_preserved_without_obser
     assert repository.observation_rows == []
 
 
+def test_cached_fmp_http_402_avoids_repeated_calls_and_reports_cache_hits() -> None:
+    first_repository = _Repository()
+    first_client = _Client(
+        FMP_PROVIDER,
+        {DIVIDEND: {"error": "plan limited"}, SPLIT: {"error": "plan limited"}},
+        statuses={DIVIDEND: ("error", 402, "http_402"), SPLIT: ("error", 402, "http_402")},
+    )
+    env = {"FMP_API_KEY": "test-key", "DATA_OPS_CORPORATE_ACTION_PROVIDERS": "fmp"}
+
+    first = run_corporate_actions_shadow(
+        symbols=["ASML"],
+        repository=first_repository,
+        clients={FMP_PROVIDER: first_client},
+        env=env,
+        request_sleep_seconds=0,
+    )
+    cached_repository = _Repository(
+        cached_raw={(FMP_PROVIDER, row["action_type"]): row for row in first_repository.raw_rows}
+    )
+    second_client = _Client(FMP_PROVIDER, {DIVIDEND: [], SPLIT: []})
+
+    second = run_corporate_actions_shadow(
+        symbols=["ASML"],
+        repository=cached_repository,
+        clients={FMP_PROVIDER: second_client},
+        env=env,
+        request_sleep_seconds=0,
+    )
+
+    assert first["status_counts"]["error"] == 2
+    assert all(row["http_status"] == 402 and row["error_reason"] == "http_402" for row in first_repository.raw_rows)
+    assert all("test-key" not in str(row) for row in first_repository.raw_rows)
+    assert second["raw_cache_hits"] == 2
+    assert second["live_calls"] == 0
+    assert second_client.calls == []
+    assert second["symbol_statuses"]["ASML"][FMP_PROVIDER][DIVIDEND]["cache_hit"] is True
+    assert second["symbol_statuses"]["ASML"][FMP_PROVIDER][SPLIT]["cache_hit"] is True
+
+
 def test_overlap_and_conflicts_are_reported_by_action_type() -> None:
     repository = _Repository()
     fmp = _Client(

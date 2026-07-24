@@ -30,7 +30,12 @@ FMP_DIVIDENDS_ENDPOINT = "https://financialmodelingprep.com/stable/dividends"
 FMP_SPLITS_ENDPOINT = "https://financialmodelingprep.com/stable/splits"
 YAHOO_DIVIDENDS_ENDPOINT = "yfinance:Ticker.dividends"
 YAHOO_SPLITS_ENDPOINT = "yfinance:Ticker.splits"
-_CACHEABLE_RAW_STATUSES = {"success", "not_found"}
+# A plan-limited FMP response is deterministic for the active subscription, and
+# retrying it per symbol/action only burns quota. Generic provider/network
+# errors remain non-cacheable so transient failures can recover.
+_CACHEABLE_RAW_STATUSES = {"success", "not_found", "rate_limited"}
+_CACHEABLE_ERROR_HTTP_STATUSES = {402}
+_CACHEABLE_ERROR_REASONS = {"http_402"}
 _RAW_STATUSES = {"success", "not_found", "rate_limited", "error"}
 _MAX_EXAMPLES = 25
 
@@ -332,7 +337,14 @@ class PostgresCorporateActionsShadowRepository:
                       AND provider_symbol = %s
                       AND action_type = %s
                       AND request_hash = %s
-                      AND status = ANY(%s)
+                      AND (
+                          status = ANY(%s)
+                          OR (
+                              status = 'error'
+                              AND http_status = ANY(%s)
+                              AND error_reason = ANY(%s)
+                          )
+                      )
                     ORDER BY known_at DESC, ingested_at DESC, raw_id DESC
                     LIMIT 1
                     """,
@@ -343,6 +355,8 @@ class PostgresCorporateActionsShadowRepository:
                         action_type,
                         request_hash,
                         sorted(_CACHEABLE_RAW_STATUSES),
+                        sorted(_CACHEABLE_ERROR_HTTP_STATUSES),
+                        sorted(_CACHEABLE_ERROR_REASONS),
                     ),
                 )
                 row = cur.fetchone()
