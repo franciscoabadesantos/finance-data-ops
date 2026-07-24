@@ -203,7 +203,7 @@ class PostgresFmpEarningsShadowRepository:
     """Postgres implementation for the Phase 0/1 multi-source tables."""
 
     def __init__(self, *, database_dsn: str) -> None:
-        self._database_dsn = str(database_dsn).strip()
+        self._database_dsn = _to_psycopg_dsn(database_dsn)
         if not self._database_dsn:
             raise ValueError("DATA_OPS_DATABASE_URL is required for FMP shadow ingestion.")
         self._publisher = PostgresPublisher(
@@ -731,4 +731,22 @@ def _connect(database_dsn: str):
         import psycopg
     except ImportError as exc:  # pragma: no cover - deployment dependency
         raise RuntimeError("psycopg[binary] is required for FMP shadow ingestion.") from exc
-    return psycopg.connect(database_dsn, autocommit=True, application_name="finance-data-ops-fmp-earnings-shadow")
+    try:
+        return psycopg.connect(
+            _to_psycopg_dsn(database_dsn),
+            autocommit=True,
+            application_name="finance-data-ops-fmp-earnings-shadow",
+        )
+    except psycopg.Error:
+        # Do not propagate driver conninfo errors because they can contain the
+        # full DSN, including credentials.
+        raise RuntimeError("Unable to connect to Postgres for FMP earnings shadow ingestion.") from None
+
+
+def _to_psycopg_dsn(database_dsn: str) -> str:
+    """Translate SQLAlchemy's psycopg URL dialect to psycopg conninfo syntax."""
+    dsn = str(database_dsn or "").strip()
+    prefix = "postgresql+psycopg://"
+    if dsn.startswith(prefix):
+        return "postgresql://" + dsn.removeprefix(prefix)
+    return dsn

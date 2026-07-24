@@ -8,6 +8,8 @@ from finance_data_ops.shadow.fmp_earnings import (
     FMP_EARNINGS_ENDPOINT,
     FinancialModelingPrepEarningsClient,
     FmpFetchResult,
+    PostgresFmpEarningsShadowRepository,
+    _to_psycopg_dsn,
     normalize_fmp_provider_observations,
     run_fmp_earnings_shadow,
 )
@@ -76,6 +78,22 @@ def _fmp_payload(**overrides: Any) -> list[dict[str, Any]]:
 
 def _enabled_env() -> dict[str, str]:
     return {"FMP_API_KEY": "test-key", "DATA_OPS_EARNINGS_PROVIDERS": "yahoo_finance,fmp"}
+
+
+def test_sqlalchemy_psycopg_dsn_is_normalized_for_repository_reads_and_writes() -> None:
+    sqlalchemy_dsn = "postgresql+psycopg://worker:password@example.invalid:5432/finance"
+
+    repository = PostgresFmpEarningsShadowRepository(database_dsn=sqlalchemy_dsn)
+
+    assert _to_psycopg_dsn(sqlalchemy_dsn) == "postgresql://worker:password@example.invalid:5432/finance"
+    assert repository._database_dsn == "postgresql://worker:password@example.invalid:5432/finance"
+    assert repository._publisher.database_dsn == "postgresql://worker:password@example.invalid:5432/finance"
+
+
+def test_psycopg_dsn_is_left_unchanged() -> None:
+    dsn = "postgresql://worker:password@example.invalid:5432/finance"
+
+    assert _to_psycopg_dsn(dsn) == dsn
 
 
 def test_fmp_without_key_is_cleanly_skipped_without_repository_or_http() -> None:
