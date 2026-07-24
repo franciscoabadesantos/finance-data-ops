@@ -206,6 +206,33 @@ request hash. Reports expose enabled/skipped providers, per-symbol status,
 cache/live-call counts, candidate coverage, and capped safe examples without
 including credentials.
 
+### Guidance Shadow
+
+`scripts/run_guidance_shadow.py` is manual-only, raw-first guidance evidence
+ingestion. It writes only `source_cache.guidance_provider_raw` and
+`source_cache.guidance_provider_observations`; it does not create canonical
+guidance, build records, schedules, product calls, or provider-derived facts.
+
+`sec_edgar_guidance_candidate` reads existing SEC filing observations only. It
+does not make SEC requests and emits low/medium-confidence evidence candidates
+from selected 8-K and 6-K metadata. It does not turn analyst estimates or a
+generic outlook phrase into normalised company guidance. The optional
+`ir_public_press_release` provider fetches one explicitly configured public
+page per symbol. It requires
+`DATA_OPS_GUIDANCE_IR_PUBLIC_PAGE_USER_AGENT`, exact host matching, and an
+enabled entry in the versioned `data/guidance_sources.json`. The committed
+source list is empty, so public-page fetching is disabled by default.
+
+```bash
+DATA_OPS_GUIDANCE_PROVIDERS=sec_edgar_guidance_candidate,ir_public_press_release \
+DATA_OPS_GUIDANCE_IR_PUBLIC_PAGE_USER_AGENT='Example Company contact@example.com' \
+python scripts/run_guidance_shadow.py --symbols AAPL MSFT ASML 9684.T
+```
+
+Reports contain capped evidence snippets only. Raw responses are cache-first;
+successful, not-found, and rate-limited IR responses are reusable, while
+generic provider errors are retried on a later manual run.
+
 Raw cache reuse is keyed by provider, symbol, action type, endpoint, and safe
 request hash. The JSON report exposes provider/action status, cache and live
 call counts, coverage, FMP/Yahoo ex-date overlap, and capped date/amount/factor
