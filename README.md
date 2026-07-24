@@ -67,6 +67,7 @@ Optional:
 - `DATA_OPS_ALERT_WEBHOOK_URL` (critical failure webhook)
 - `DATA_OPS_SYMBOLS_OVERRIDE` for emergency/local source-refresh subsets
 - `DATA_OPS_SYMBOLS_OVERRIDE_US` / `DATA_OPS_SYMBOLS_OVERRIDE_EU` / `DATA_OPS_SYMBOLS_OVERRIDE_APAC` for region-specific emergency/local subsets
+- `FMP_API_KEY` plus `DATA_OPS_EARNINGS_PROVIDERS=yahoo_finance,fmp` only when manually enabling the Phase 2 FMP earnings shadow run
 
 See [`.env.example`](/home/franciscosantos/finance-data-ops/.env.example).
 
@@ -98,6 +99,32 @@ Earnings:
 ```bash
 python scripts/run_earnings_daily.py --region all --no-publish
 ```
+
+## FMP Earnings Shadow Mode
+
+FMP is prepared as a manual-only shadow provider. The HTTP call, raw-response cache, and FMP-specific normalized observations live in Data Ops because Data Ops owns external provider I/O. It writes only `source_cache.earnings_provider_raw` and `source_cache.earnings_event_provider_observations`; it never writes `source_cache.earnings` or `feature_store.earnings_event_observations`.
+
+The command is disabled by default. With no key it is a clean, network-free smoke check:
+
+```bash
+python scripts/run_fmp_earnings_shadow.py --symbols AAPL
+```
+
+It returns `{"status": "skipped", "reason": "fmp_api_key_missing"}` until both `FMP_API_KEY` and `DATA_OPS_EARNINGS_PROVIDERS=yahoo_finance,fmp` are configured. A dry run is also network-free and writes nothing:
+
+```bash
+FMP_API_KEY=... DATA_OPS_EARNINGS_PROVIDERS=yahoo_finance,fmp \
+  python scripts/run_fmp_earnings_shadow.py --symbols AAPL --dry-run
+```
+
+After a key is deliberately configured and rate limits are reviewed, the future manual live shadow command is:
+
+```bash
+FMP_API_KEY=... DATA_OPS_EARNINGS_PROVIDERS=yahoo_finance,fmp \
+  python scripts/run_fmp_earnings_shadow.py --symbols AAPL
+```
+
+The JSON report includes cache/live-call counts, raw statuses, observation counts, EPS/revenue coverage, Yahoo overlap, and visible conflicts. Canonical revenue fill and Yahoo/FMP arbitration remain Phase 3. FMP is not part of any scheduled flow in this phase.
 
 Source-universe audit/reconciliation:
 
