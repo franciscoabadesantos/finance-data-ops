@@ -175,6 +175,35 @@ SEC_EDGAR_USER_AGENT='Example Company contact@example.com' \
 python scripts/run_filings_shadow.py --symbols AAPL MSFT ASML 9684.T
 ```
 
+### Investor Events Shadow
+
+`scripts/run_investor_events_shadow.py` is a manual-only shadow ingestion for
+investor-event candidates. It writes only
+`source_cache.investor_event_provider_raw` and
+`source_cache.investor_event_provider_observations`; it does not create a
+canonical surface, build records, product calls, schedules, or fetch event
+documents.
+
+`sec_edgar` derives low/medium-confidence candidates only from already observed
+SEC filing observations, so it does not make new SEC requests in this phase.
+`ir_public_page` fetches exactly one configured public IR page per symbol and
+requires `DATA_OPS_IR_PUBLIC_PAGE_USER_AGENT`. The source is fail-closed: each
+symbol must be enabled in versioned `data/investor_event_sources.json`, and its
+configured `allowed_host` must exactly match the source URL host. The committed
+config is intentionally empty, so public-page fetching remains disabled until
+an explicit source is reviewed and added.
+
+```bash
+DATA_OPS_INVESTOR_EVENT_PROVIDERS=sec_edgar,ir_public_page \
+DATA_OPS_IR_PUBLIC_PAGE_USER_AGENT='Example Company contact@example.com' \
+python scripts/run_investor_events_shadow.py --symbols AAPL MSFT ASML 9684.T
+```
+
+Raw cache reuse is keyed by provider, symbol, configured endpoint, and safe
+request hash. Reports expose enabled/skipped providers, per-symbol status,
+cache/live-call counts, candidate coverage, and capped safe examples without
+including credentials.
+
 Raw cache reuse is keyed by provider, symbol, action type, endpoint, and safe
 request hash. The JSON report exposes provider/action status, cache and live
 call counts, coverage, FMP/Yahoo ex-date overlap, and capped date/amount/factor
