@@ -26,7 +26,7 @@ definitions:
 deployments:
   - name: event-observations-daily
     tags: [dataops, events, shadow, experimental, self-host]
-    description: Opt-in raw/provider-observation ingestion for experimental event domains; providers remain fail-closed.
+    description: Conservative scheduled raw/provider-observation ingestion for experimental event domains; providers remain fail-closed.
     entrypoint: flows/event_observations.py:dataops_event_observations_daily_flow
     parameters:
       symbols: null
@@ -39,7 +39,21 @@ deployments:
       run_fund_rebalances: false
       dry_run: false
       refresh: false
-    schedules: []
+    schedules:
+      - cron: "40 0 * * 2-6"
+        timezone: "UTC"
+        active: true
+        parameters:
+          symbols: ["AAPL", "MSFT", "ASML", "9684.T", "SPY", "QQQ", "VTI", "VXUS"]
+          run_corporate_actions: true
+          run_filings: true
+          run_investor_events: true
+          run_guidance: true
+          run_equity_capital_events: true
+          run_fund_distributions: true
+          run_fund_rebalances: false
+          dry_run: false
+          refresh: false
     work_pool: *self_host_pool
 
   - name: dataops-daily

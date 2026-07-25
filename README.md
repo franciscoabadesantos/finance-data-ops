@@ -484,9 +484,12 @@ Fresh Supabase projects should use the definitive runtime baseline:
 
 ## Event Observation Operations
 
-The `event-observations-daily` Prefect deployment is manual-only. Every domain
-flag defaults to `false`; a selected shadow runner remains fail-closed on its
-own provider allowlist, API key, user-agent, and source configuration.
+The `event-observations-daily` Prefect deployment has a conservative active
+schedule for a fixed operational subset. Providers remain fail-closed on their
+own allowlist, API key, user-agent, and source configuration, so a missing
+provider configuration produces its domain's documented skipped result rather
+than enabling a provider implicitly. Manual runs can still override symbols,
+domains, `dry_run`, and `refresh`.
 
 ```bash
 prefect deploy --name event-observations-daily
