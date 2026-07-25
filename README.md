@@ -233,6 +233,25 @@ Reports contain capped evidence snippets only. Raw responses are cache-first;
 successful, not-found, and rate-limited IR responses are reusable, while
 generic provider errors are retried on a later manual run.
 
+### Equity Capital Events Shadow
+
+`scripts/run_equity_capital_events_shadow.py` is a manual SEC-only shadow for
+buyback and equity-capital document candidates. It reads existing
+`source_cache.filing_provider_observations` only, writes normalized candidates
+to `source_cache.equity_capital_event_provider_observations`, and makes no SEC
+requests. Candidate amounts, share counts, currency, and execution state stay
+null unless a later explicit parser can establish them deterministically.
+
+```bash
+DATA_OPS_EQUITY_CAPITAL_EVENT_PROVIDERS=sec_edgar_equity_capital_candidate \
+python scripts/run_equity_capital_events_shadow.py --symbols AAPL MSFT ASML 9684.T
+```
+
+Phase 1 supports document evidence for `buyback_authorization`,
+`buyback_actual`, `atm_program`, `secondary_offering`, and
+`shelf_registration`. It deliberately ignores Form 4 and Schedule 13D, does
+not emit `issuance_actual`, and creates neither canonical data nor schedules.
+
 Raw cache reuse is keyed by provider, symbol, action type, endpoint, and safe
 request hash. The JSON report exposes provider/action status, cache and live
 call counts, coverage, FMP/Yahoo ex-date overlap, and capped date/amount/factor
