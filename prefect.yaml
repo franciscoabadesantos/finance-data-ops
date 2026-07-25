@@ -24,6 +24,24 @@ definitions:
         DATA_OPS_DAILY_INFERENCE_CONFIG_REF: "{{ prefect.blocks.secret.data-ops-daily-inference-config-ref }}"
 
 deployments:
+  - name: event-observations-daily
+    tags: [dataops, events, shadow, experimental, self-host]
+    description: Opt-in raw/provider-observation ingestion for experimental event domains; providers remain fail-closed.
+    entrypoint: flows/event_observations.py:dataops_event_observations_daily_flow
+    parameters:
+      symbols: null
+      run_corporate_actions: false
+      run_filings: false
+      run_investor_events: false
+      run_guidance: false
+      run_equity_capital_events: false
+      run_fund_distributions: false
+      run_fund_rebalances: false
+      dry_run: false
+      refresh: false
+    schedules: []
+    work_pool: *self_host_pool
+
   - name: dataops-daily
     tags: [dataops, daily, source-handoff, self-host]
     description: Aggregate source-domain refresh; triggers feature-store daily build after source watermarks are ready.

@@ -468,6 +468,24 @@ Fresh Supabase projects should use the definitive runtime baseline:
 - Schema: [`sql/000_runtime_schema.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_schema.sql)
 - Seed: [`sql/000_runtime_seed.sql`](/home/franciscosantos/finance-data-ops/sql/000_runtime_seed.sql)
 
+## Event Observation Operations
+
+The `event-observations-daily` Prefect deployment is manual-only. Every domain
+flag defaults to `false`; a selected shadow runner remains fail-closed on its
+own provider allowlist, API key, user-agent, and source configuration.
+
+```bash
+prefect deploy --name event-observations-daily
+prefect deployment run 'event-observations-daily/event-observations-daily' \
+  --param 'symbols=["AAPL","MSFT"]' \
+  --param run_filings=true \
+  --param run_investor_events=true
+```
+
+Use `dry_run=true` to make every selected runner plan-only. The flow records
+each runner JSON summary; a real runner exception is included in that summary
+and fails the Prefect run after other selected domains have been attempted.
+
 ## Additional docs
 
 - Architecture: [`docs/architecture.md`](/home/franciscosantos/finance-data-ops/docs/architecture.md)
