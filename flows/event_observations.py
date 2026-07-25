@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -29,6 +30,13 @@ class EventObservationsFlowError(RuntimeError):
         super().__init__(json.dumps(report, default=str, sort_keys=True))
 
 
+def _get_logger() -> logging.Logger:
+    try:
+        return get_run_logger()
+    except Exception:
+        return logging.getLogger(__name__)
+
+
 def _symbols(symbols: list[str] | None) -> list[str]:
     return list(dict.fromkeys(str(value).strip().upper() for value in symbols or [] if str(value).strip()))
 
@@ -52,7 +60,7 @@ def dataops_event_observations_daily_flow(
     """Run selected existing shadow runners; providers remain independently fail-closed."""
     requested, settings = _symbols(symbols), load_settings()
     report: dict[str, Any] = {"status": "completed", "mode": "shadow", "symbols": requested, "dry_run": dry_run, "refresh": refresh, "domains": {}, "failures": []}
-    logger = get_run_logger()
+    logger = _get_logger()
 
     def needs_symbols(name: str, invoke: Callable[[], dict[str, Any]]) -> None:
         if not requested:
