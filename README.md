@@ -247,6 +247,34 @@ DATA_OPS_EQUITY_CAPITAL_EVENT_PROVIDERS=sec_edgar_equity_capital_candidate \
 python scripts/run_equity_capital_events_shadow.py --symbols AAPL MSFT ASML 9684.T
 ```
 
+### Fund distributions and rebalances shadow
+
+`scripts/run_fund_distributions_shadow.py` is a manual, raw-first Tiingo
+distribution shadow for ETFs and funds. It writes only
+`source_cache.fund_distribution_provider_raw` and
+`source_cache.fund_distribution_provider_observations`. The Tiingo key is used
+only for the live request and is never persisted in request metadata or reports.
+The provider is disabled unless explicitly allowlisted.
+
+```bash
+DATA_OPS_FUND_DISTRIBUTION_PROVIDERS=tiingo_fund_distributions \
+TIINGO_API_KEY='...' \
+python scripts/run_fund_distributions_shadow.py --symbols SPY QQQ VTI VXUS
+```
+
+`scripts/run_fund_rebalances_shadow.py` is separate and fail-closed. It reads
+the versioned `data/fund_rebalance_sources.json`; the committed list is empty.
+It fetches only allowlisted exact hosts with a declared user agent and produces
+observations only from explicit announcement/effective dates and add/remove
+constituents. Holdings snapshots are raw-only and are never differenced to infer
+rebalance events, purchases, sales, weights, or shares.
+
+```bash
+DATA_OPS_FUND_REBALANCE_PROVIDERS=nasdaq_index_public \
+DATA_OPS_FUND_REBALANCE_USER_AGENT='Company contact@example.com' \
+python scripts/run_fund_rebalances_shadow.py
+```
+
 Phase 1 supports document evidence for `buyback_authorization`,
 `buyback_actual`, `atm_program`, `secondary_offering`, and
 `shelf_registration`. It deliberately ignores Form 4 and Schedule 13D, does
