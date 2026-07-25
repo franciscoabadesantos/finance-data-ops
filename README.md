@@ -262,6 +262,20 @@ TIINGO_API_KEY='...' \
 python scripts/run_fund_distributions_shadow.py --symbols SPY QQQ VTI VXUS
 ```
 
+The Corporate Actions Distributions endpoint remains the preferred source. Some
+Tiingo plans return `403` for it. To opt into the lower-confidence EOD
+`divCash` fallback only in that case, set:
+
+```bash
+DATA_OPS_FUND_DISTRIBUTION_TIINGO_EOD_FALLBACK=true \
+DATA_OPS_FUND_DISTRIBUTION_EOD_LOOKBACK_DAYS=730 \
+python scripts/run_fund_distributions_shadow.py --symbols SPY QQQ VTI VXUS
+```
+
+EOD fallback observations contain only `ex_date` and `distribution_amount`.
+They do not infer currency, distribution type, frequency, or any declaration,
+record, or payable date, and are marked low confidence in shadow output.
+
 `scripts/run_fund_rebalances_shadow.py` is separate and fail-closed. It reads
 the versioned `data/fund_rebalance_sources.json`; the committed list is empty.
 It fetches only allowlisted exact hosts with a declared user agent and produces
