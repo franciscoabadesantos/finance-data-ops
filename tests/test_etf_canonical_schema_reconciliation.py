@@ -122,6 +122,11 @@ def test_apply_replaces_views_creates_writable_tables_and_copies_rows() -> None:
     assert "drop view source_cache.etf_holdings" in sql
     assert "drop view source_cache.etf_themes" in sql
     assert "create table if not exists source_cache.etf_holdings" in sql
+    assert "add column if not exists holding_listing_key text" in sql
+    assert "alter column holding_listing_key set not null" in sql
+    assert "primary key (etf_ticker, holding_listing_key, as_of)" in sql
+    assert "on conflict (etf_ticker, holding_listing_key, as_of)" in sql
+    assert "create index if not exists idx_etf_holdings_symbol_market" in sql
     assert "create table if not exists source_cache.etf_themes" in sql
     assert "create table if not exists source_cache.etf_theme_readiness" in sql
     assert "insert into source_cache.etf_holdings" in sql
@@ -136,6 +141,27 @@ def test_apply_replaces_views_creates_writable_tables_and_copies_rows() -> None:
     assert sql.index('create view "feature_store"."ticker_readiness_etf_constituents" as') < sql.index(
         'create view "feature_store"."ticker_readiness" as'
     )
+
+
+def test_apply_on_canonical_tables_is_schema_only_and_does_not_refresh_data() -> None:
+    conn = RecordingConnection()
+
+    reconcile.apply_plan(
+        conn,
+        states=_canonical_live_states(),
+        dependencies=_known_dependency_states(),
+        backend_read_roles=("finance_backend_read",),
+    )
+
+    sql = conn.normalized_sql
+    assert "create table if not exists source_cache.etf_holdings" in sql
+    assert "add column if not exists holding_listing_key text" in sql
+    assert "drop view if exists" not in sql
+    assert "drop view source_cache" not in sql
+    assert "from public.etf_holdings" not in sql
+    assert "from public.etf_themes" not in sql
+    assert "truncate table source_cache.etf_theme_readiness" not in sql
+    assert 'create view "feature_store"."ticker_readiness' not in sql
 
 
 def test_live_like_ticker_readiness_contract_is_preserved_after_apply() -> None:
@@ -319,6 +345,8 @@ def test_runtime_schema_contains_final_etf_contract_and_conditional_grants() -> 
     schema = Path("sql/000_runtime_schema.sql").read_text()
 
     assert "create table if not exists source_cache.etf_holdings" in schema
+    assert "holding_listing_key text not null" in schema
+    assert "primary key (etf_ticker, holding_listing_key, as_of)" in schema
     assert "create table if not exists source_cache.etf_themes" in schema
     assert "create table if not exists source_cache.etf_theme_readiness" in schema
     assert "create table if not exists public.etf_holdings" not in schema
@@ -399,6 +427,16 @@ def _old_live_states() -> list[reconcile.ObjectState]:
         reconcile.ObjectState("source_cache", "etf_holdings", "v", 506),
         reconcile.ObjectState("source_cache", "etf_themes", "v", 32),
         reconcile.ObjectState("source_cache", "etf_theme_readiness", None, None),
+        reconcile.ObjectState("public", "etf_holdings", "r", 506),
+        reconcile.ObjectState("public", "etf_themes", "r", 32),
+    ]
+
+
+def _canonical_live_states() -> list[reconcile.ObjectState]:
+    return [
+        reconcile.ObjectState("source_cache", "etf_holdings", "r", 506),
+        reconcile.ObjectState("source_cache", "etf_themes", "r", 32),
+        reconcile.ObjectState("source_cache", "etf_theme_readiness", "r", 32),
         reconcile.ObjectState("public", "etf_holdings", "r", 506),
         reconcile.ObjectState("public", "etf_themes", "r", 32),
     ]

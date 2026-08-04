@@ -442,6 +442,12 @@ def _symbol_row(
     return {
         "symbol": symbol,
         "provider_symbol": candidate.provider_symbol or symbol,
+        "exchange": candidate.exchange or "",
+        "exchange_mic": candidate.exchange_mic or "",
+        "currency": candidate.currency or "",
+        "country": candidate.country or "",
+        "has_prices": bool(candidate.has_prices),
+        "has_technicals": bool(candidate.has_technicals),
         "listing_country": candidate.country or "",
         "derived_listing_country": prefix_policy["derived_listing_country"],
         "listing_currency": candidate.currency or "",

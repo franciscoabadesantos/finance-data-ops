@@ -78,6 +78,8 @@ def _is_missing_scalar(value: Any) -> bool:
 
 
 class PostgresPublisher:
+    supports_atomic_identity_snapshot = True
+
     def __init__(
         self,
         *,
@@ -98,37 +100,90 @@ class PostgresPublisher:
     ) -> dict[str, Any]:
         if not rows:
             return {"table": table, "status": "skipped", "rows": 0}
-        normalized_rows = to_json_safe(rows)
-        schema_name, table_name = _parse_table_name(table)
-        conflict_columns = _parse_identifier_list(on_conflict)
-        if not conflict_columns:
-            raise ValueError(f"on_conflict is required for Postgres upsert into {table}.")
-
-        columns = _ordered_columns(normalized_rows)
-        values = [
-            [
-                _adapt_postgres_value(
-                    row.get(column),
-                    schema_name=schema_name,
-                    table_name=table_name,
-                    column_name=column,
-                )
-                for column in columns
-            ]
-            for row in normalized_rows
-        ]
-        update_columns = [column for column in columns if column not in set(conflict_columns)]
-        query = _build_upsert_sql(
-            schema_name=schema_name,
-            table_name=table_name,
-            columns=columns,
-            conflict_columns=conflict_columns,
-            update_columns=update_columns,
-        )
         with _connect(self.database_dsn, self.application_name) as conn:
-            with conn.cursor() as cur:
-                cur.executemany(query, values)
-        return {"table": table, "status": "ok", "rows": len(normalized_rows), "status_code": 200}
+            return _upsert_on_connection(conn, table=table, rows=rows, on_conflict=on_conflict)
+
+    def publish_entity_identity_snapshot(self, *, plan: dict[str, Any]) -> dict[str, Any]:
+        """Publish one immutable identity batch and advance its pointer atomically."""
+
+        batch_rows = list(plan.get("feature_store.entity_identity_publication_batch") or [])
+        pointer_rows = list(plan.get("feature_store.entity_identity_publication_current") or [])
+        if len(batch_rows) != 1 or len(pointer_rows) != 1:
+            raise ValueError("Entity identity snapshot requires exactly one batch row and one current pointer row.")
+        batch = dict(batch_rows[0])
+        scope_key = str(batch.get("scope_key") or "default")
+        planned_batch = {
+            **batch,
+            "mode": "apply_entities",
+            "status": "planned",
+            "is_current": False,
+            "actual_counts": {},
+        }
+        published_batch = {
+            **batch,
+            "mode": "apply_entities",
+            "status": "published_side_by_side",
+            "is_current": True,
+            "actual_counts": dict(plan.get("planned_counts") or {}),
+        }
+
+        with _connect(self.database_dsn, self.application_name, autocommit=False) as conn:
+            planned_result = _upsert_on_connection(
+                conn,
+                table="feature_store.entity_identity_publication_batch",
+                rows=[planned_batch],
+                on_conflict="batch_id",
+            )
+            master_result = _upsert_on_connection(
+                conn,
+                table="feature_store.entity_master",
+                rows=list(plan.get("feature_store.entity_master") or []),
+                on_conflict="publication_batch_id,entity_id",
+            )
+            listing_result = _upsert_on_connection(
+                conn,
+                table="feature_store.entity_listing",
+                rows=list(plan.get("feature_store.entity_listing") or []),
+                on_conflict="publication_batch_id,symbol",
+            )
+            review_rows = list(plan.get("feature_store.entity_identity_review") or [])
+            review_result = _upsert_on_connection(
+                conn,
+                table="feature_store.entity_identity_review",
+                rows=review_rows,
+                on_conflict="review_key",
+            )
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE feature_store.entity_identity_publication_batch
+                    SET is_current = FALSE, updated_at = NOW()
+                    WHERE scope_key = %s AND is_current IS TRUE
+                    """,
+                    (scope_key,),
+                )
+            published_result = _upsert_on_connection(
+                conn,
+                table="feature_store.entity_identity_publication_batch",
+                rows=[published_batch],
+                on_conflict="batch_id",
+            )
+            pointer_result = _upsert_on_connection(
+                conn,
+                table="feature_store.entity_identity_publication_current",
+                rows=pointer_rows,
+                on_conflict="scope_key",
+            )
+
+        return {
+            "feature_store.entity_identity_publication_batch_planned": planned_result,
+            "feature_store.entity_master": master_result,
+            "feature_store.entity_listing": listing_result,
+            "feature_store.entity_identity_review": review_result,
+            "feature_store.entity_identity_publication_batch": published_result,
+            "feature_store.entity_identity_publication_current": pointer_result,
+            "publication_atomic": True,
+        }
 
     def insert(self, table: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         if not rows:
@@ -165,12 +220,52 @@ class PostgresPublisher:
         return {"status": "ok", "name": name, "status_code": 200}
 
 
-def _connect(database_dsn: str, application_name: str):
+def _connect(database_dsn: str, application_name: str, *, autocommit: bool = True):
     try:
         import psycopg
     except ImportError as exc:  # pragma: no cover - exercised in deployment env
         raise RuntimeError("psycopg[binary] is required for Postgres publishing.") from exc
-    return psycopg.connect(database_dsn, autocommit=True, application_name=application_name)
+    return psycopg.connect(database_dsn, autocommit=autocommit, application_name=application_name)
+
+
+def _upsert_on_connection(
+    conn: Any,
+    *,
+    table: str,
+    rows: list[dict[str, Any]],
+    on_conflict: str | None,
+) -> dict[str, Any]:
+    if not rows:
+        return {"table": table, "status": "skipped", "rows": 0}
+    normalized_rows = to_json_safe(rows)
+    schema_name, table_name = _parse_table_name(table)
+    conflict_columns = _parse_identifier_list(on_conflict)
+    if not conflict_columns:
+        raise ValueError(f"on_conflict is required for Postgres upsert into {table}.")
+    columns = _ordered_columns(normalized_rows)
+    values = [
+        [
+            _adapt_postgres_value(
+                row.get(column),
+                schema_name=schema_name,
+                table_name=table_name,
+                column_name=column,
+            )
+            for column in columns
+        ]
+        for row in normalized_rows
+    ]
+    update_columns = [column for column in columns if column not in set(conflict_columns)]
+    query = _build_upsert_sql(
+        schema_name=schema_name,
+        table_name=table_name,
+        columns=columns,
+        conflict_columns=conflict_columns,
+        update_columns=update_columns,
+    )
+    with conn.cursor() as cursor:
+        cursor.executemany(query, values)
+    return {"table": table, "status": "ok", "rows": len(normalized_rows), "status_code": 200}
 
 
 def _adapt_postgres_value(

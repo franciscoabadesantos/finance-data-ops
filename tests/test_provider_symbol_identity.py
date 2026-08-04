@@ -20,6 +20,8 @@ def test_vestas_source_symbol_resolves_to_copenhagen_provider_symbol() -> None:
     assert identity["provider"] == "yahoo"
     assert identity["provider_symbol"] == "VWS.CO"
     assert identity["onboard_symbol"] == "VWS.CO"
+    assert identity["canonical_listing_key"] == "VWS.CO"
+    assert identity["canonical_entity_id"] == ""
     assert identity["onboard_region"] == "eu"
     assert identity["is_onboardable"] is True
     assert identity["resolution_source"] == "known_mapping"

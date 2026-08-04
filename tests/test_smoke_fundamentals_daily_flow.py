@@ -178,7 +178,7 @@ def test_smoke_fundamentals_refresh_publish_status(tmp_path) -> None:
     assert next(call for call in publisher.upserts if call["table"] == "ticker_profile")["on_conflict"] == "ticker"
     assert (
         next(call for call in publisher.upserts if call["table"] == "source_cache.etf_holdings")["on_conflict"]
-        == "etf_ticker,holding_symbol,as_of"
+        == "etf_ticker,holding_listing_key,as_of"
     )
     assert (
         next(call for call in publisher.upserts if call["table"] == "etf_sector_weights")["on_conflict"]

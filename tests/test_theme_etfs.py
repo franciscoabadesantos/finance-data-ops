@@ -633,6 +633,38 @@ def test_theme_etf_refresh_replaces_older_cached_snapshot(tmp_path) -> None:
     assert identity_by_symbol["RKLB"]["is_onboardable"] is True
 
 
+def test_theme_etf_cache_preserves_same_symbol_on_distinct_markets(tmp_path) -> None:
+    holdings = pd.DataFrame(
+        [
+            {
+                "etf_ticker": "GLOBAL",
+                "holding_symbol": "ABC",
+                "holding_name": "ABC Australia",
+                "holding_country": "AU",
+                "weight": 0.08,
+                "as_of": "2026-07-31",
+            },
+            {
+                "etf_ticker": "GLOBAL",
+                "holding_symbol": "ABC",
+                "holding_name": "ABC United Kingdom",
+                "holding_country": "GB",
+                "weight": 0.06,
+                "as_of": "2026-07-31",
+            },
+        ]
+    )
+
+    write_theme_etf_outputs(holdings=holdings, themes=pd.DataFrame(), cache_root=str(tmp_path))
+
+    cached = read_parquet_table("etf_holdings", cache_root=tmp_path, required=True)
+    assert len(cached.index) == 2
+    assert set(cached["holding_listing_key"]) == {
+        "country:AU:symbol:ABC",
+        "country:GB:symbol:ABC",
+    }
+
+
 def test_theme_etf_write_deactivates_stale_theme_and_removes_old_holdings(tmp_path) -> None:
     old_holdings = pd.DataFrame(
         [

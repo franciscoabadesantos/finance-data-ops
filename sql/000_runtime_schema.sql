@@ -167,29 +167,43 @@ create table if not exists feature_store.entity_attributes_static (
   name text,
   country text,
   home_country text,
+  home_region text,
   region text,
   exchange text,
   exchange_mic text,
   currency text,
   sector text,
+  industry text,
+  description text,
+  created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
+alter table feature_store.entity_attributes_static
+  add column if not exists home_country text,
+  add column if not exists home_region text,
+  add column if not exists exchange_mic text,
+  add column if not exists industry text,
+  add column if not exists description text,
+  add column if not exists created_at timestamptz not null default now();
+
 create table if not exists feature_store.entity_master (
-  entity_id text primary key,
+  entity_id text not null,
   legal_name text,
   display_name text,
   home_country text,
+  home_region text,
   lei text,
   entity_source text not null,
   resolution_confidence double precision not null default 0,
   resolution_status text not null,
   primary_listing_symbol text,
   primary_listing_reason text,
-  publication_batch_id text,
+  publication_batch_id text not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb,
+  primary key (publication_batch_id, entity_id),
   check (resolution_status in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review'))
 );
 
@@ -200,8 +214,8 @@ create index if not exists idx_entity_master_publication_batch_id
   on feature_store.entity_master (publication_batch_id);
 
 create table if not exists feature_store.entity_listing (
-  symbol text primary key,
-  entity_id text not null references feature_store.entity_master(entity_id),
+  symbol text not null,
+  entity_id text not null,
   provider_symbol text,
   exchange text,
   exchange_mic text,
@@ -223,10 +237,11 @@ create table if not exists feature_store.entity_listing (
   review_state text,
   evidence_payload jsonb not null default '{}'::jsonb,
   source_freshness jsonb not null default '{}'::jsonb,
-  publication_batch_id text,
+  publication_batch_id text not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb,
+  primary key (publication_batch_id, symbol),
   check (resolution_status in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review')),
   check (review_state is null or review_state in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review')),
   check (attach_confidence is null or attach_confidence in ('high', 'medium', 'low', 'provisional'))
@@ -323,6 +338,118 @@ create table if not exists feature_store.entity_identity_publication_current (
   batch_id text not null references feature_store.entity_identity_publication_batch(batch_id),
   updated_at timestamptz not null default now()
 );
+
+-- Upgrade the earlier mutable identity tables to immutable batch snapshots.
+-- Existing unversioned rows are retained under one superseded legacy batch.
+insert into feature_store.entity_identity_publication_batch (
+  batch_id, scope_key, source, mode, status, is_current, summary
+)
+select
+  'legacy:pre-versioned', 'legacy', 'schema_migration', 'apply_entities',
+  'superseded', false, '{"reason":"pre_versioned_identity_rows"}'::jsonb
+where exists (
+  select 1 from feature_store.entity_master where publication_batch_id is null
+  union all
+  select 1 from feature_store.entity_listing where publication_batch_id is null
+)
+on conflict (batch_id) do nothing;
+
+update feature_store.entity_master
+set publication_batch_id = 'legacy:pre-versioned'
+where publication_batch_id is null;
+
+update feature_store.entity_listing
+set publication_batch_id = 'legacy:pre-versioned'
+where publication_batch_id is null;
+
+alter table feature_store.entity_master
+  add column if not exists home_region text;
+
+do $$
+declare
+  constraint_row record;
+begin
+  for constraint_row in
+    select conname
+    from pg_constraint
+    where conrelid = 'feature_store.entity_listing'::regclass
+      and contype = 'f'
+      and confrelid = 'feature_store.entity_master'::regclass
+  loop
+    execute format('alter table feature_store.entity_listing drop constraint %I', constraint_row.conname);
+  end loop;
+
+  select conname into constraint_row
+  from pg_constraint
+  where conrelid = 'feature_store.entity_listing'::regclass and contype = 'p';
+  if found and pg_get_constraintdef((
+    select oid from pg_constraint
+    where conrelid = 'feature_store.entity_listing'::regclass and contype = 'p'
+  )) not like '%publication_batch_id%' then
+    execute format('alter table feature_store.entity_listing drop constraint %I', constraint_row.conname);
+  end if;
+
+  select conname into constraint_row
+  from pg_constraint
+  where conrelid = 'feature_store.entity_master'::regclass and contype = 'p';
+  if found and pg_get_constraintdef((
+    select oid from pg_constraint
+    where conrelid = 'feature_store.entity_master'::regclass and contype = 'p'
+  )) not like '%publication_batch_id%' then
+    execute format('alter table feature_store.entity_master drop constraint %I', constraint_row.conname);
+  end if;
+end $$;
+
+alter table feature_store.entity_master
+  alter column publication_batch_id set not null;
+alter table feature_store.entity_listing
+  alter column publication_batch_id set not null;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'feature_store.entity_master'::regclass and contype = 'p'
+  ) then
+    alter table feature_store.entity_master
+      add constraint entity_master_pkey primary key (publication_batch_id, entity_id);
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'feature_store.entity_listing'::regclass and contype = 'p'
+  ) then
+    alter table feature_store.entity_listing
+      add constraint entity_listing_pkey primary key (publication_batch_id, symbol);
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'feature_store.entity_listing'::regclass
+      and conname = 'entity_listing_entity_batch_fkey'
+  ) then
+    alter table feature_store.entity_listing
+      add constraint entity_listing_entity_batch_fkey
+      foreign key (publication_batch_id, entity_id)
+      references feature_store.entity_master(publication_batch_id, entity_id);
+  end if;
+end $$;
+
+update feature_store.entity_identity_publication_batch as batch
+set is_current = exists (
+  select 1
+  from feature_store.entity_identity_publication_current as current_pointer
+  where current_pointer.scope_key = batch.scope_key
+    and current_pointer.batch_id = batch.batch_id
+);
+
+create unique index if not exists ux_entity_identity_one_current_per_scope
+  on feature_store.entity_identity_publication_batch (scope_key)
+  where is_current = true;
+
+create index if not exists idx_entity_master_batch_status
+  on feature_store.entity_master (publication_batch_id, resolution_status, entity_id);
+
+create index if not exists idx_entity_listing_batch_entity
+  on feature_store.entity_listing (publication_batch_id, entity_id, resolution_status);
 
 create table if not exists feature_store.entity_identity_review_audit (
   audit_id bigserial primary key,
@@ -426,6 +553,16 @@ begin
       );
     end if;
   end loop;
+
+  if exists (select 1 from pg_roles where rolname = 'finance_feature_store_worker') then
+    grant usage on schema feature_store to finance_feature_store_worker;
+    grant select on
+      feature_store.entity_master,
+      feature_store.entity_listing,
+      feature_store.entity_identity_publication_batch,
+      feature_store.entity_identity_publication_current
+    to finance_feature_store_worker;
+  end if;
 end $$;
 
 create table if not exists public.data_source_runs (
@@ -509,16 +646,77 @@ create table if not exists source_cache.etf_holdings (
   holding_symbol text not null,
   holding_name text,
   holding_country text,
+  holding_listing_key text not null,
+  holding_exchange text,
+  holding_exchange_mic text,
+  holding_isin text,
+  holding_figi text,
+  provider_symbol text,
   weight double precision,
   as_of date not null,
   source text,
   fetched_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  primary key (etf_ticker, holding_symbol, as_of)
+  primary key (etf_ticker, holding_listing_key, as_of)
 );
+
+-- Migrate the earlier symbol-only key without losing current rows. Raw symbols
+-- are not globally unique; country/MIC/provider identity prevents cross-market
+-- holdings from overwriting one another before entity resolution runs.
+alter table source_cache.etf_holdings
+  add column if not exists holding_listing_key text,
+  add column if not exists holding_exchange text,
+  add column if not exists holding_exchange_mic text,
+  add column if not exists holding_isin text,
+  add column if not exists holding_figi text,
+  add column if not exists provider_symbol text;
+
+update source_cache.etf_holdings
+set holding_listing_key = coalesce(
+  case when nullif(btrim(holding_figi), '') is not null
+    then 'figi:' || upper(btrim(holding_figi)) end,
+  case when nullif(btrim(holding_isin), '') is not null and nullif(btrim(holding_exchange_mic), '') is not null
+    then 'isin:' || upper(btrim(holding_isin)) || ':mic:' || upper(btrim(holding_exchange_mic)) end,
+  case when nullif(btrim(holding_isin), '') is not null
+    then 'isin:' || upper(btrim(holding_isin)) end,
+  case when nullif(btrim(provider_symbol), '') is not null
+    then 'provider:' || upper(btrim(provider_symbol)) end,
+  case when nullif(btrim(holding_exchange_mic), '') is not null
+    then 'mic:' || upper(btrim(holding_exchange_mic)) || ':symbol:' || upper(btrim(holding_symbol)) end,
+  case when nullif(btrim(holding_country), '') is not null
+    then 'country:' || upper(btrim(holding_country)) || ':symbol:' || upper(btrim(holding_symbol)) end,
+  'symbol:' || upper(btrim(holding_symbol))
+)
+where holding_listing_key is null or btrim(holding_listing_key) = '';
+
+alter table source_cache.etf_holdings
+  alter column holding_listing_key set not null;
+
+do $$
+declare
+  primary_name text;
+  primary_definition text;
+begin
+  select constraint_record.conname, pg_get_constraintdef(constraint_record.oid)
+    into primary_name, primary_definition
+  from pg_constraint as constraint_record
+  where constraint_record.conrelid = 'source_cache.etf_holdings'::regclass
+    and constraint_record.contype = 'p';
+
+  if primary_definition is null or primary_definition not like '%holding_listing_key%' then
+    if primary_name is not null then
+      execute format('alter table source_cache.etf_holdings drop constraint %I', primary_name);
+    end if;
+    alter table source_cache.etf_holdings
+      add constraint etf_holdings_pkey primary key (etf_ticker, holding_listing_key, as_of);
+  end if;
+end $$;
 
 create index if not exists idx_etf_holdings_ticker_weight
   on source_cache.etf_holdings (etf_ticker, as_of desc, weight desc);
+
+create index if not exists idx_etf_holdings_symbol_market
+  on source_cache.etf_holdings (holding_symbol, holding_country, holding_exchange_mic);
 
 -- Operational identity read model for provider/onboarding workflows. Relationship-map
 -- holdings and theme catalog consumers must use source_cache.etf_holdings,
@@ -535,6 +733,7 @@ create table if not exists public.etf_holding_onboarding_identity (
   source_figi text,
   source_cusip text,
   canonical_entity_id text,
+  canonical_listing_key text,
   normalized_entity_symbol text,
   provider text not null default 'yahoo',
   provider_symbol text,
@@ -547,6 +746,9 @@ create table if not exists public.etf_holding_onboarding_identity (
   resolution_confidence double precision not null default 0,
   primary key (etf_ticker, source_symbol, source_country)
 );
+
+alter table public.etf_holding_onboarding_identity
+  add column if not exists canonical_listing_key text;
 
 create index if not exists idx_etf_holding_onboarding_identity_onboardable
   on public.etf_holding_onboarding_identity (is_onboardable, onboard_symbol)
@@ -615,6 +817,16 @@ begin
       to finance_data_ops_worker;
   end if;
 
+  if exists (select 1 from pg_roles where rolname = 'finance_feature_store_worker') then
+    grant usage on schema source_cache, public to finance_feature_store_worker;
+    grant select on
+      source_cache.etf_holdings,
+      source_cache.etf_themes,
+      source_cache.etf_theme_readiness,
+      public.etf_holding_onboarding_identity
+    to finance_feature_store_worker;
+  end if;
+
   foreach read_role in array array['finance_backend_read', 'finance_backend', 'backend_read'] loop
     if exists (select 1 from pg_roles where rolname = read_role) then
       execute format('grant usage on schema source_cache to %I', read_role);
@@ -681,6 +893,13 @@ create table if not exists public.exchange_trading_calendar (
 
 create index if not exists idx_exchange_trading_calendar_mic_date
   on public.exchange_trading_calendar (exchange_mic, session_date);
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'finance_feature_store_worker') then
+    grant select on public.exchange_trading_calendar to finance_feature_store_worker;
+  end if;
+end $$;
 
 create table if not exists public.macro_series_catalog (
   series_key text primary key,

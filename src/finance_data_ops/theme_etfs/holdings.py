@@ -10,6 +10,8 @@ import re
 from typing import Any
 
 import pandas as pd
+
+from finance_data_ops.identity.listing_keys import build_holding_listing_key
 import requests
 
 from finance_data_ops.geography import country_from_source_or_symbol, normalize_country
@@ -259,12 +261,18 @@ def write_theme_etf_outputs(
                 ].copy()
                 holdings_to_write = pd.concat([existing, holdings_to_write], ignore_index=True)
                 mode = "replace"
+        # A replace can merge pre-contract cache rows. Recompute after the merge so
+        # every retained row participates in listing-aware deduplication.
+        holdings_to_write["holding_listing_key"] = holdings_to_write.apply(
+            build_holding_listing_key,
+            axis=1,
+        )
         path = write_parquet_table(
             "etf_holdings",
             holdings_to_write,
             cache_root=cache_root,
             mode=mode,
-            dedupe_subset=["etf_ticker", "holding_symbol", "as_of"],
+            dedupe_subset=["etf_ticker", "holding_listing_key", "as_of"],
         )
         paths["etf_holdings"] = str(path)
         paths["etf_holdings_rows"] = int(len(holdings.index))

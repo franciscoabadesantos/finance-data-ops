@@ -2496,8 +2496,8 @@ def test_controlled_entity_publish_cache_first_then_side_by_side_tables() -> Non
         "feature_store.entity_identity_publication_current",
     ]
     assert publisher.upserts[5]["on_conflict"] == "batch_id"
-    assert publisher.upserts[6]["on_conflict"] == "entity_id"
-    assert publisher.upserts[7]["on_conflict"] == "symbol"
+    assert publisher.upserts[6]["on_conflict"] == "publication_batch_id,entity_id"
+    assert publisher.upserts[7]["on_conflict"] == "publication_batch_id,symbol"
     assert publisher.upserts[8]["on_conflict"] == "batch_id"
     assert publisher.upserts[9]["on_conflict"] == "scope_key"
     assert publisher.inserts == []
@@ -2507,6 +2507,10 @@ def test_controlled_entity_publish_cache_first_then_side_by_side_tables() -> Non
     assert publisher.upserts[8]["rows"][0]["actual_counts"]["feature_store.entity_listing"] == 2
     assert publisher.upserts[6]["rows"][0]["publication_batch_id"] == "test-batch-1"
     assert all(row["publication_batch_id"] == "test-batch-1" for row in publisher.upserts[7]["rows"])
+    assert sum(bool(row["is_primary_listing"]) for row in publisher.upserts[7]["rows"]) == 1
+    primary = next(row for row in publisher.upserts[7]["rows"] if row["is_primary_listing"])
+    master = publisher.upserts[6]["rows"][0]
+    assert master["primary_listing_symbol"] == primary["symbol"]
 
 
 def test_controlled_entity_publish_rerun_uses_idempotent_upserts() -> None:

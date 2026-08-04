@@ -11,6 +11,7 @@ from finance_data_ops.identity.chain import EntityChainMeasurement
 from finance_data_ops.identity.home_country_backfill import build_gleif_home_country_index
 from finance_data_ops.identity.models import EntityListingRecord, EntityRecord, IdentityAuditRecord, IdentityBuildResult
 from finance_data_ops.identity.raw_cache import cache_publishable_rows
+from finance_data_ops.geography import region_for_country
 from finance_data_ops.publish.client import Publisher
 
 
@@ -119,6 +120,7 @@ def build_side_by_side_entity_publication_plan_for_batch(
                     "legal_name": legal_name or None,
                     "display_name": legal_name or row.get("openfigi_name") or row.get("internal_candidate_name") or None,
                     "home_country": home_country or None,
+                    "home_region": region_for_country(home_country) if home_country else None,
                     "lei": entity_lei,
                     "entity_source": "entity_identity_measurement",
                     "resolution_confidence": _confidence_score(str(confidence)),
@@ -176,6 +178,7 @@ def build_side_by_side_entity_publication_plan_for_batch(
                 "legal_name": legal_name or None,
                 "display_name": legal_name or row.get("openfigi_name") or row.get("internal_candidate_name") or None,
                 "home_country": home_country or None,
+                "home_region": region_for_country(home_country) if home_country else None,
                 "lei": candidate_lei or None,
                 "entity_source": "entity_identity_measurement",
                 "resolution_confidence": _confidence_score("provisional"),
@@ -224,6 +227,8 @@ def build_side_by_side_entity_publication_plan_for_batch(
                     "review_key": _review_key(batch_id=batch_id, symbol=audit_row.get("symbol"), reason=audit_row.get("review_reason")),
                 }
             )
+
+    _apply_publication_primary_listings(master_by_id=master_by_id, listing_rows=listing_rows)
 
     planned_counts = _planned_counts(
         master_rows=list(master_by_id.values()),
@@ -296,6 +301,14 @@ def publish_entity_identity_side_by_side(
         "publication_gate": gate,
         "verification_summary": plan["verification_summary"],
     }
+    if hasattr(publisher, "publish_entity_identity_snapshot"):
+        atomic_outputs = publisher.publish_entity_identity_snapshot(plan=plan)
+        outputs.update(atomic_outputs)
+        return outputs
+
+    # Non-Postgres test publishers preserve the same operation order. Runtime
+    # publication always uses PostgresPublisher.publish_entity_identity_snapshot
+    # so rows and the current pointer commit atomically.
     outputs["feature_store.entity_identity_publication_batch_planned"] = publisher.upsert(
         "feature_store.entity_identity_publication_batch",
         [
@@ -312,12 +325,12 @@ def publish_entity_identity_side_by_side(
     outputs["feature_store.entity_master"] = publisher.upsert(
         "feature_store.entity_master",
         plan["feature_store.entity_master"],
-        on_conflict="entity_id",
+        on_conflict="publication_batch_id,entity_id",
     )
     outputs["feature_store.entity_listing"] = publisher.upsert(
         "feature_store.entity_listing",
         plan["feature_store.entity_listing"],
-        on_conflict="symbol",
+        on_conflict="publication_batch_id,symbol",
     )
     if plan["feature_store.entity_identity_review"]:
         outputs["feature_store.entity_identity_review"] = publisher.upsert(
@@ -741,8 +754,8 @@ def _publication_listing_row(
         "provider_symbol": row.get("provider_symbol") or None,
         "exchange": row.get("exchange") or None,
         "exchange_mic": row.get("exchange_mic") or None,
-        "country": row.get("country") or row.get("derived_listing_country") or None,
-        "currency": row.get("currency") or None,
+        "country": row.get("country") or row.get("listing_country") or row.get("derived_listing_country") or None,
+        "currency": row.get("currency") or row.get("listing_currency") or None,
         "figi": row.get("figi") or None,
         "composite_figi": row.get("compositeFIGI") or row.get("composite_figi") or None,
         "share_class_figi": row.get("shareClassFIGI") or row.get("share_class_figi") or None,
@@ -758,6 +771,8 @@ def _publication_listing_row(
         "attach_confidence": confidence,
         "review_state": status,
         "evidence_payload": {
+            "has_prices": bool(row.get("has_prices")),
+            "has_technicals": bool(row.get("has_technicals")),
             "entity_attach_reason": row.get("entity_attach_reason") or "",
             "entity_attach_reasons": list(row.get("entity_attach_reasons") or []),
             "matched_compatible_isins": list(row.get("matched_compatible_isins") or []),
@@ -782,6 +797,58 @@ def _publication_listing_row(
             "publication_batch_id": publication_batch_id,
         },
     }
+
+
+def _apply_publication_primary_listings(
+    *,
+    master_by_id: dict[str, dict[str, Any]],
+    listing_rows: list[dict[str, Any]],
+) -> None:
+    listings_by_entity: dict[str, list[dict[str, Any]]] = {}
+    for listing in listing_rows:
+        listings_by_entity.setdefault(str(listing.get("entity_id") or ""), []).append(listing)
+
+    for entity_id, listings in listings_by_entity.items():
+        master = master_by_id.get(entity_id)
+        if master is None or not listings:
+            continue
+        complete = [
+            listing
+            for listing in listings
+            if bool((listing.get("evidence_payload") or {}).get("has_prices"))
+            and bool((listing.get("evidence_payload") or {}).get("has_technicals"))
+        ]
+        candidates = complete or listings
+        home_country = str(master.get("home_country") or "").strip().upper()
+        home_candidates = [
+            listing
+            for listing in candidates
+            if home_country and str(listing.get("country") or "").strip().upper() == home_country
+        ]
+        ranked = home_candidates or candidates
+        chosen = sorted(
+            ranked,
+            key=lambda listing: (
+                1 if "ADR" in str(listing.get("listing_type") or "").upper() else 0,
+                0 if listing.get("exchange_mic") else 1,
+                0 if listing.get("currency") else 1,
+                str(listing.get("symbol") or ""),
+            ),
+        )[0]
+        if len(candidates) == 1:
+            reason = "only_complete_listing" if complete else "only_available_listing"
+        elif home_candidates:
+            reason = "complete_home_listing" if complete else "home_listing"
+        else:
+            reason = "deterministic_complete_listing" if complete else "deterministic_available_listing"
+
+        chosen_symbol = str(chosen.get("symbol") or "")
+        master["primary_listing_symbol"] = chosen_symbol
+        master["primary_listing_reason"] = reason
+        for listing in listings:
+            selected = str(listing.get("symbol") or "") == chosen_symbol
+            listing["is_primary_listing"] = selected
+            listing["primary_listing_reason"] = reason if selected else None
 
 
 def _identity_review_row(

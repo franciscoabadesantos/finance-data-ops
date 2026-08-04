@@ -19,6 +19,7 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from finance_data_ops.geography import country_from_source_or_symbol, infer_country_from_symbol, normalize_country
+from finance_data_ops.identity.listing_keys import build_holding_listing_key
 from finance_data_ops.publish.client import PostgresPublisher
 from finance_data_ops.publish.fundamentals import ETF_HOLDINGS_TABLE, build_etf_holdings_payload
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_backfill_payload
@@ -53,12 +54,17 @@ def main() -> None:
     )
 
     if args.write_cache:
+        normalized_holdings = normalized_holdings.copy()
+        normalized_holdings["holding_listing_key"] = normalized_holdings.apply(
+            build_holding_listing_key,
+            axis=1,
+        )
         write_parquet_table(
             "etf_holdings",
             normalized_holdings,
             cache_root=settings.cache_root,
             mode="replace",
-            dedupe_subset=["etf_ticker", "holding_symbol", "as_of"],
+            dedupe_subset=["etf_ticker", "holding_listing_key", "as_of"],
         )
         write_parquet_table(
             "entity_attributes_static",
@@ -77,7 +83,7 @@ def main() -> None:
         holdings_result = publisher.upsert(
             ETF_HOLDINGS_TABLE,
             build_etf_holdings_payload(normalized_holdings),
-            on_conflict="etf_ticker,holding_symbol,as_of",
+            on_conflict="etf_ticker,holding_listing_key,as_of",
         )
         entity_result = publisher.upsert(
             "feature_store.entity_attributes_static",

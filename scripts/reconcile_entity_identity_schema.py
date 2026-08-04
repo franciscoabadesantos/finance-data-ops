@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Reconcile Entity Layer side-by-side publication schema.
 
-Dry-run is the default. `--apply` runs additive DDL only: schemas/tables,
-missing columns, indexes, and conditional grants. It never publishes cache or
-entity data.
+Dry-run is the default. `--apply` runs idempotent schema reconciliation:
+schemas/tables, missing columns, indexes, conditional grants, and the bounded
+legacy-key migration required for immutable identity batches. It never drops
+tables, uses CASCADE, or publishes cache/entity data.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ if str(SRC_PATH) not in sys.path:
 from finance_data_ops.settings import load_settings
 
 WORKER_ROLE = "finance_data_ops_worker"
+FEATURE_STORE_WORKER_ROLE = "finance_feature_store_worker"
 DEFAULT_BACKEND_READ_ROLES = ("finance_backend_read", "finance_backend", "backend_read")
 
 
@@ -153,27 +155,29 @@ create table if not exists source_cache.gleif_lei_isin_raw (
 """,
     "feature_store.entity_master": """
 create table if not exists feature_store.entity_master (
-  entity_id text primary key,
+  entity_id text not null,
   legal_name text,
   display_name text,
   home_country text,
+  home_region text,
   lei text,
   entity_source text not null,
   resolution_confidence double precision not null default 0,
   resolution_status text not null,
   primary_listing_symbol text,
   primary_listing_reason text,
-  publication_batch_id text,
+  publication_batch_id text not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb,
+  primary key (publication_batch_id, entity_id),
   check (resolution_status in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review'))
 )
 """,
     "feature_store.entity_listing": """
 create table if not exists feature_store.entity_listing (
-  symbol text primary key,
-  entity_id text not null references feature_store.entity_master(entity_id),
+  symbol text not null,
+  entity_id text not null,
   provider_symbol text,
   exchange text,
   exchange_mic text,
@@ -195,10 +199,11 @@ create table if not exists feature_store.entity_listing (
   review_state text,
   evidence_payload jsonb not null default '{}'::jsonb,
   source_freshness jsonb not null default '{}'::jsonb,
-  publication_batch_id text,
+  publication_batch_id text not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb,
+  primary key (publication_batch_id, symbol),
   check (resolution_status in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review')),
   check (review_state is null or review_state in ('resolved', 'provisional', 'needs_manual_review', 'conflict', 'rejected', 'superseded', 'ambiguous', 'unresolved', 'manual_review')),
   check (attach_confidence is null or attach_confidence in ('high', 'medium', 'low', 'provisional'))
@@ -294,10 +299,12 @@ REQUIRED_COLUMNS = (
     ),
     ColumnRequirement("source_cache", "gleif_entity_raw", "response_payload", "jsonb"),
     ColumnRequirement("source_cache", "gleif_entity_raw", "error_message", "text"),
-    ColumnRequirement("feature_store", "entity_master", "publication_batch_id", "text"),
+    ColumnRequirement("feature_store", "entity_master", "home_region", "text"),
+    ColumnRequirement("feature_store", "entity_master", "publication_batch_id", "text", is_nullable="NO"),
     ColumnRequirement("feature_store", "entity_listing", "attach_method", "text"),
     ColumnRequirement("feature_store", "entity_listing", "attach_confidence", "text"),
     ColumnRequirement("feature_store", "entity_listing", "review_state", "text"),
+    ColumnRequirement("feature_store", "entity_listing", "publication_batch_id", "text", is_nullable="NO"),
     ColumnRequirement(
         "feature_store",
         "entity_listing",
@@ -314,7 +321,6 @@ REQUIRED_COLUMNS = (
         is_nullable="NO",
         column_default_contains="'{}'::jsonb",
     ),
-    ColumnRequirement("feature_store", "entity_listing", "publication_batch_id", "text"),
 )
 
 LIFECYCLE_STATES = (
@@ -409,6 +415,9 @@ ADD_COLUMN_SQL = {
     "feature_store.entity_master.publication_batch_id": (
         "alter table feature_store.entity_master add column if not exists publication_batch_id text"
     ),
+    "feature_store.entity_master.home_region": (
+        "alter table feature_store.entity_master add column if not exists home_region text"
+    ),
     "feature_store.entity_listing.attach_method": (
         "alter table feature_store.entity_listing add column if not exists attach_method text"
     ),
@@ -428,6 +437,116 @@ ADD_COLUMN_SQL = {
         "alter table feature_store.entity_listing add column if not exists publication_batch_id text"
     ),
 }
+
+BATCH_VERSION_MIGRATION_SQL = """
+insert into feature_store.entity_identity_publication_batch (
+  batch_id, scope_key, source, mode, status, is_current, summary
+)
+select
+  'legacy:pre-versioned', 'legacy', 'schema_migration', 'apply_entities',
+  'superseded', false, '{"reason":"pre_versioned_identity_rows"}'::jsonb
+where exists (
+  select 1 from feature_store.entity_master where publication_batch_id is null
+  union all
+  select 1 from feature_store.entity_listing where publication_batch_id is null
+)
+on conflict (batch_id) do nothing;
+
+update feature_store.entity_master
+set publication_batch_id = 'legacy:pre-versioned'
+where publication_batch_id is null;
+
+update feature_store.entity_listing
+set publication_batch_id = 'legacy:pre-versioned'
+where publication_batch_id is null;
+
+update feature_store.entity_identity_publication_batch as batch
+set is_current = exists (
+  select 1
+  from feature_store.entity_identity_publication_current as current_pointer
+  where current_pointer.scope_key = batch.scope_key
+    and current_pointer.batch_id = batch.batch_id
+);
+
+do $$
+declare
+  constraint_name text;
+  constraint_definition text;
+begin
+  for constraint_name in
+    select conname
+    from pg_constraint
+    where conrelid = 'feature_store.entity_listing'::regclass
+      and contype = 'f'
+      and confrelid = 'feature_store.entity_master'::regclass
+  loop
+    execute format('alter table feature_store.entity_listing drop constraint %I', constraint_name);
+  end loop;
+
+  select conname, pg_get_constraintdef(oid)
+    into constraint_name, constraint_definition
+  from pg_constraint
+  where conrelid = 'feature_store.entity_listing'::regclass and contype = 'p';
+  if constraint_name is not null and constraint_definition not like '%publication_batch_id%' then
+    execute format('alter table feature_store.entity_listing drop constraint %I', constraint_name);
+  end if;
+
+  constraint_name := null;
+  constraint_definition := null;
+  select conname, pg_get_constraintdef(oid)
+    into constraint_name, constraint_definition
+  from pg_constraint
+  where conrelid = 'feature_store.entity_master'::regclass and contype = 'p';
+  if constraint_name is not null and constraint_definition not like '%publication_batch_id%' then
+    execute format('alter table feature_store.entity_master drop constraint %I', constraint_name);
+  end if;
+end $$;
+
+alter table feature_store.entity_master
+  alter column publication_batch_id set not null;
+alter table feature_store.entity_listing
+  alter column publication_batch_id set not null;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'feature_store.entity_master'::regclass and contype = 'p'
+  ) then
+    alter table feature_store.entity_master
+      add constraint entity_master_pkey primary key (publication_batch_id, entity_id);
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'feature_store.entity_listing'::regclass and contype = 'p'
+  ) then
+    alter table feature_store.entity_listing
+      add constraint entity_listing_pkey primary key (publication_batch_id, symbol);
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'feature_store.entity_listing'::regclass
+      and conname = 'entity_listing_entity_batch_fkey'
+  ) then
+    alter table feature_store.entity_listing
+      add constraint entity_listing_entity_batch_fkey
+      foreign key (publication_batch_id, entity_id)
+      references feature_store.entity_master(publication_batch_id, entity_id);
+  end if;
+end $$
+"""
+
+REQUIRED_BATCH_PRIMARY_KEYS = {
+    "feature_store.entity_master": ("publication_batch_id", "entity_id"),
+    "feature_store.entity_listing": ("publication_batch_id", "symbol"),
+}
+
+REQUIRED_BATCH_FOREIGN_KEY = (
+    "feature_store.entity_listing",
+    ("publication_batch_id", "entity_id"),
+    "feature_store.entity_master",
+    ("publication_batch_id", "entity_id"),
+)
 
 INDEX_SQL: dict[str, str] = {
     "idx_gleif_entity_raw_normalized_query_name": (
@@ -452,6 +571,18 @@ INDEX_SQL: dict[str, str] = {
     "idx_entity_identity_review_publication_batch_id": "create index if not exists idx_entity_identity_review_publication_batch_id on feature_store.entity_identity_review (publication_batch_id)",
     "idx_entity_identity_review_audit_review_id": "create index if not exists idx_entity_identity_review_audit_review_id on feature_store.entity_identity_review_audit (review_id)",
     "idx_entity_identity_publication_batch_scope_current": "create index if not exists idx_entity_identity_publication_batch_scope_current on feature_store.entity_identity_publication_batch (scope_key, is_current)",
+    "ux_entity_identity_one_current_per_scope": (
+        "create unique index if not exists ux_entity_identity_one_current_per_scope "
+        "on feature_store.entity_identity_publication_batch (scope_key) where is_current = true"
+    ),
+    "idx_entity_master_batch_status": (
+        "create index if not exists idx_entity_master_batch_status "
+        "on feature_store.entity_master (publication_batch_id, resolution_status, entity_id)"
+    ),
+    "idx_entity_listing_batch_entity": (
+        "create index if not exists idx_entity_listing_batch_entity "
+        "on feature_store.entity_listing (publication_batch_id, entity_id, resolution_status)"
+    ),
 }
 
 GRANT_SQL_TEMPLATE = """
@@ -483,6 +614,16 @@ begin
                   feature_store.entity_identity_review_review_id_seq,
                   feature_store.entity_identity_review_audit_audit_id_seq
       to finance_data_ops_worker;
+  end if;
+
+  if exists (select 1 from pg_roles where rolname = 'finance_feature_store_worker') then
+    grant usage on schema feature_store to finance_feature_store_worker;
+    grant select on
+      feature_store.entity_master,
+      feature_store.entity_listing,
+      feature_store.entity_identity_publication_batch,
+      feature_store.entity_identity_publication_current
+    to finance_feature_store_worker;
   end if;
 
   foreach read_role in array {read_roles} loop
@@ -606,6 +747,32 @@ def build_reconciliation_plan(
             actions.append({"action": "add_missing_column", "object": key})
             sql.append(ADD_COLUMN_SQL[key])
 
+    identity_tables_will_exist = all(
+        table in state.tables or table in REQUIRED_TABLES
+        for table in REQUIRED_BATCH_PRIMARY_KEYS
+    )
+    missing_batch_primary_keys = [
+        table for table, columns in REQUIRED_BATCH_PRIMARY_KEYS.items()
+        if table in state.tables and not _primary_key_matches(state, table=table, columns=columns)
+    ]
+    missing_identity_tables = [table for table in REQUIRED_BATCH_PRIMARY_KEYS if table not in state.tables]
+    missing_batch_foreign_key = (
+        "feature_store.entity_listing" in state.tables
+        and not _identity_batch_foreign_key_matches(state)
+    )
+    if identity_tables_will_exist and (
+        missing_identity_tables or missing_batch_primary_keys or missing_batch_foreign_key
+    ):
+        actions.append(
+            {
+                "action": "migrate_identity_tables_to_batch_snapshots",
+                "objects": sorted(set(missing_identity_tables + missing_batch_primary_keys)),
+                "foreign_key_required": bool(missing_batch_foreign_key or missing_identity_tables),
+                "legacy_batch_id": "legacy:pre-versioned",
+            }
+        )
+        sql.append(BATCH_VERSION_MIGRATION_SQL)
+
     if (
         "source_cache.gleif_entity_raw" in state.tables
         and "source_cache.gleif_entity_raw.lei" in state.columns
@@ -700,6 +867,14 @@ def verify_schema(state: SchemaState) -> dict[str, Any]:
                 }
             )
     missing_indexes = [index_name for index_name in INDEX_SQL if index_name not in state.indexes]
+    missing_batch_primary_keys = [
+        table for table, columns in REQUIRED_BATCH_PRIMARY_KEYS.items()
+        if table in state.tables and not _primary_key_matches(state, table=table, columns=columns)
+    ]
+    missing_batch_foreign_key = (
+        all(table in state.tables for table in REQUIRED_BATCH_PRIMARY_KEYS)
+        and not _identity_batch_foreign_key_matches(state)
+    )
     missing_grants = _missing_grants(state)
     missing_check_constraints = []
     mismatched_check_constraints = []
@@ -724,6 +899,8 @@ def verify_schema(state: SchemaState) -> dict[str, Any]:
             or missing_columns
             or mismatched_columns
             or missing_indexes
+            or missing_batch_primary_keys
+            or missing_batch_foreign_key
             or missing_grants
             or missing_check_constraints
             or mismatched_check_constraints
@@ -732,6 +909,8 @@ def verify_schema(state: SchemaState) -> dict[str, Any]:
         "missing_columns": missing_columns,
         "mismatched_columns": mismatched_columns,
         "missing_indexes": missing_indexes,
+        "missing_batch_primary_keys": missing_batch_primary_keys,
+        "missing_batch_foreign_key": missing_batch_foreign_key,
         "missing_grants": missing_grants,
         "missing_check_constraints": missing_check_constraints,
         "mismatched_check_constraints": mismatched_check_constraints,
@@ -744,6 +923,8 @@ def verification_summary(verification: dict[str, Any]) -> dict[str, Any]:
         "missing_columns": list(verification.get("missing_columns") or []),
         "mismatched_columns": list(verification.get("mismatched_columns") or []),
         "missing_indexes": list(verification.get("missing_indexes") or []),
+        "missing_batch_primary_keys": list(verification.get("missing_batch_primary_keys") or []),
+        "missing_batch_foreign_key": bool(verification.get("missing_batch_foreign_key")),
         "missing_grants": list(verification.get("missing_grants") or []),
         "missing_check_constraints": list(verification.get("missing_check_constraints") or []),
         "mismatched_check_constraints": list(verification.get("mismatched_check_constraints") or []),
@@ -765,9 +946,29 @@ def apply_plan_to_state(state: SchemaState) -> SchemaState:
                 column_default=requirement.column_default_contains or "",
             ),
         )
+    for qualified_column in (
+        "feature_store.entity_master.publication_batch_id",
+        "feature_store.entity_listing.publication_batch_id",
+    ):
+        current = columns[qualified_column]
+        columns[qualified_column] = ColumnState(
+            data_type=current.data_type,
+            is_nullable="NO",
+            column_default=current.column_default,
+        )
     indexes.update(INDEX_SQL)
     for requirement in REQUIRED_CHECK_CONSTRAINTS:
         check_constraints[requirement.qualified_constraint] = _expected_check_constraint_definition(requirement)
+    for table, primary_key_columns in REQUIRED_BATCH_PRIMARY_KEYS.items():
+        check_constraints[f"{table}.{table.rsplit('.', 1)[-1]}_pkey"] = (
+            "PRIMARY KEY (" + ", ".join(primary_key_columns) + ")"
+        )
+    check_constraints[
+        "feature_store.entity_listing.entity_listing_entity_batch_fkey"
+    ] = (
+        "FOREIGN KEY (publication_batch_id, entity_id) "
+        "REFERENCES feature_store.entity_master(publication_batch_id, entity_id)"
+    )
     check_constraints.pop("source_cache.gleif_entity_raw.gleif_entity_raw_pkey", None)
     if "source_cache.gleif_entity_raw.lei" in columns:
         current = columns["source_cache.gleif_entity_raw.lei"]
@@ -854,7 +1055,7 @@ def _fetch_check_constraints(conn: Any) -> dict[str, str]:
             from pg_constraint con
             join pg_class c on c.oid = con.conrelid
             join pg_namespace n on n.oid = c.relnamespace
-            where con.contype in ('c', 'p')
+            where con.contype in ('c', 'p', 'f')
               and n.nspname in ('source_cache', 'feature_store')
             """
         )
@@ -865,6 +1066,35 @@ def _fetch_roles(conn: Any) -> set[str]:
     with conn.cursor() as cur:
         cur.execute("select rolname from pg_roles")
         return {str(row[0]) for row in cur.fetchall()}
+
+
+def _primary_key_matches(state: SchemaState, *, table: str, columns: tuple[str, ...]) -> bool:
+    expected = [column.lower() for column in columns]
+    prefix = f"{table}."
+    for key, definition in state.check_constraints.items():
+        if not key.startswith(prefix) or "primary key" not in str(definition).lower():
+            continue
+        match = re.search(r"primary\s+key\s*\(([^)]+)\)", str(definition), flags=re.IGNORECASE)
+        if not match:
+            continue
+        actual = [part.strip().strip('"').lower() for part in match.group(1).split(",")]
+        return actual == expected
+    return False
+
+
+def _identity_batch_foreign_key_matches(state: SchemaState) -> bool:
+    table, local_columns, referenced_table, referenced_columns = REQUIRED_BATCH_FOREIGN_KEY
+    prefix = f"{table}."
+    expected_local = ",".join(local_columns)
+    expected_reference = f"references {referenced_table}({','.join(referenced_columns)})"
+    for key, definition in state.check_constraints.items():
+        normalized = re.sub(r'\s+', ' ', str(definition).lower().replace('"', '')).strip()
+        compact = normalized.replace(" ", "")
+        if not key.startswith(prefix) or not normalized.startswith("foreign key"):
+            continue
+        if f"foreignkey({expected_local})" in compact and expected_reference.replace(" ", "") in compact:
+            return True
+    return False
 
 
 def _fetch_grants(conn: Any) -> set[str]:
@@ -896,6 +1126,14 @@ def _missing_grants(state: SchemaState) -> list[str]:
         ):
             expected.append(f"{WORKER_ROLE}:{table}:INSERT")
             expected.append(f"{WORKER_ROLE}:{table}:UPDATE")
+    if FEATURE_STORE_WORKER_ROLE in state.roles:
+        for table in (
+            "feature_store.entity_master",
+            "feature_store.entity_listing",
+            "feature_store.entity_identity_publication_batch",
+            "feature_store.entity_identity_publication_current",
+        ):
+            expected.append(f"{FEATURE_STORE_WORKER_ROLE}:{table}:SELECT")
     for role in DEFAULT_BACKEND_READ_ROLES:
         if role in state.roles:
             for table in ("feature_store.entity_master", "feature_store.entity_listing"):
@@ -956,7 +1194,10 @@ def _assert_no_forbidden_sql(statements: list[str]) -> None:
         normalized = " ".join(statement.lower().split())
         if " cascade" in normalized:
             raise ValueError(f"forbidden_ddl_in_entity_schema_reconciliation: {normalized[:160]}")
-        if re.search(r"\bdrop\b", normalized) and not _is_allowed_check_constraint_drop(normalized):
+        if re.search(r"\bdrop\b", normalized) and not (
+            _is_allowed_check_constraint_drop(normalized)
+            or normalized == " ".join(BATCH_VERSION_MIGRATION_SQL.lower().split())
+        ):
             raise ValueError(f"forbidden_ddl_in_entity_schema_reconciliation: {normalized[:160]}")
 
 

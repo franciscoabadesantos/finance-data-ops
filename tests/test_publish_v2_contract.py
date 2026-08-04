@@ -6,7 +6,7 @@ import pandas as pd
 
 from finance_data_ops.publish.client import RecordingPublisher
 from finance_data_ops.publish.earnings import publish_earnings_surfaces
-from finance_data_ops.publish.fundamentals import publish_fundamentals_surfaces
+from finance_data_ops.publish.fundamentals import build_etf_holdings_payload, publish_fundamentals_surfaces
 
 
 def test_publish_v2_contract_writes_expected_tables() -> None:
@@ -212,7 +212,7 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
     conflicts = {call["table"]: call["on_conflict"] for call in publisher.upserts}
     assert conflicts["source_cache.fundamentals"] == "symbol,metric,period_end,period_type,report_date"
     assert conflicts["ticker_profile"] == "ticker"
-    assert conflicts["source_cache.etf_holdings"] == "etf_ticker,holding_symbol,as_of"
+    assert conflicts["source_cache.etf_holdings"] == "etf_ticker,holding_listing_key,as_of"
     assert conflicts["etf_holding_onboarding_identity"] == "etf_ticker,source_symbol,source_country"
     assert conflicts["etf_sector_weights"] == "etf_ticker,sector,as_of"
 
@@ -224,6 +224,7 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
 
     holding_row = next(call for call in publisher.upserts if call["table"] == "source_cache.etf_holdings")["rows"][0]
     assert holding_row["holding_symbol"] == "AAPL"
+    assert holding_row["holding_listing_key"] == "symbol:AAPL"
     assert holding_row["weight"] == 0.071
 
     identity_row = next(call for call in publisher.upserts if call["table"] == "etf_holding_onboarding_identity")[
@@ -236,3 +237,39 @@ def test_publish_fundamentals_writes_profile_and_etf_tables() -> None:
     sector_row = next(call for call in publisher.upserts if call["table"] == "etf_sector_weights")["rows"][0]
     assert sector_row["sector"] == "technology"
     assert sector_row["weight"] == 0.32
+
+
+def test_holdings_with_same_symbol_in_different_markets_do_not_collapse() -> None:
+    rows = build_etf_holdings_payload(
+        pd.DataFrame(
+            [
+                {"etf_ticker": "WORLD", "holding_symbol": "ABC", "holding_country": "GB", "as_of": "2026-08-01"},
+                {"etf_ticker": "WORLD", "holding_symbol": "ABC", "holding_country": "AU", "as_of": "2026-08-01"},
+            ]
+        )
+    )
+
+    assert len(rows) == 2
+    assert {row["holding_listing_key"] for row in rows} == {
+        "country:GB:symbol:ABC",
+        "country:AU:symbol:ABC",
+    }
+
+
+def test_holdings_preserve_an_existing_listing_key_after_enrichment() -> None:
+    rows = build_etf_holdings_payload(
+        pd.DataFrame(
+            [
+                {
+                    "etf_ticker": "WORLD",
+                    "holding_symbol": "ABC",
+                    "holding_country": "AU",
+                    "holding_figi": "BBG000NEWFIGI",
+                    "holding_listing_key": "country:AU:symbol:ABC",
+                    "as_of": "2026-08-01",
+                }
+            ]
+        )
+    )
+
+    assert rows[0]["holding_listing_key"] == "country:AU:symbol:ABC"

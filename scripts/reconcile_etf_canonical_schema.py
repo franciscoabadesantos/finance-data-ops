@@ -107,18 +107,80 @@ create table if not exists source_cache.etf_holdings (
   holding_symbol text not null,
   holding_name text,
   holding_country text,
+  holding_listing_key text not null,
+  holding_exchange text,
+  holding_exchange_mic text,
+  holding_isin text,
+  holding_figi text,
+  provider_symbol text,
   weight double precision,
   as_of date not null,
   source text,
   fetched_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  primary key (etf_ticker, holding_symbol, as_of)
+  primary key (etf_ticker, holding_listing_key, as_of)
 )
+"""
+
+MIGRATE_ETF_HOLDINGS_LISTING_KEY_SQL = """
+alter table source_cache.etf_holdings
+  add column if not exists holding_listing_key text,
+  add column if not exists holding_exchange text,
+  add column if not exists holding_exchange_mic text,
+  add column if not exists holding_isin text,
+  add column if not exists holding_figi text,
+  add column if not exists provider_symbol text;
+
+update source_cache.etf_holdings
+set holding_listing_key = coalesce(
+  case when nullif(btrim(holding_figi), '') is not null
+    then 'figi:' || upper(btrim(holding_figi)) end,
+  case when nullif(btrim(holding_isin), '') is not null and nullif(btrim(holding_exchange_mic), '') is not null
+    then 'isin:' || upper(btrim(holding_isin)) || ':mic:' || upper(btrim(holding_exchange_mic)) end,
+  case when nullif(btrim(holding_isin), '') is not null
+    then 'isin:' || upper(btrim(holding_isin)) end,
+  case when nullif(btrim(provider_symbol), '') is not null
+    then 'provider:' || upper(btrim(provider_symbol)) end,
+  case when nullif(btrim(holding_exchange_mic), '') is not null
+    then 'mic:' || upper(btrim(holding_exchange_mic)) || ':symbol:' || upper(btrim(holding_symbol)) end,
+  case when nullif(btrim(holding_country), '') is not null
+    then 'country:' || upper(btrim(holding_country)) || ':symbol:' || upper(btrim(holding_symbol)) end,
+  'symbol:' || upper(btrim(holding_symbol))
+)
+where holding_listing_key is null or btrim(holding_listing_key) = '';
+
+alter table source_cache.etf_holdings
+  alter column holding_listing_key set not null;
+
+do $$
+declare
+  primary_name text;
+  primary_definition text;
+begin
+  select conname, pg_get_constraintdef(oid)
+    into primary_name, primary_definition
+  from pg_constraint
+  where conrelid = 'source_cache.etf_holdings'::regclass
+    and contype = 'p';
+
+  if primary_definition is null or primary_definition not like '%holding_listing_key%' then
+    if primary_name is not null then
+      execute format('alter table source_cache.etf_holdings drop constraint %I', primary_name);
+    end if;
+    alter table source_cache.etf_holdings
+      add constraint etf_holdings_pkey primary key (etf_ticker, holding_listing_key, as_of);
+  end if;
+end $$
 """
 
 CREATE_ETF_HOLDINGS_INDEX_SQL = """
 create index if not exists idx_etf_holdings_ticker_weight
   on source_cache.etf_holdings (etf_ticker, as_of desc, weight desc)
+"""
+
+CREATE_ETF_HOLDINGS_MARKET_INDEX_SQL = """
+create index if not exists idx_etf_holdings_symbol_market
+  on source_cache.etf_holdings (holding_symbol, holding_country, holding_exchange_mic)
 """
 
 CREATE_ETF_THEMES_TABLE_SQL = """
@@ -173,6 +235,7 @@ insert into source_cache.etf_holdings (
   holding_symbol,
   holding_name,
   holding_country,
+  holding_listing_key,
   weight,
   as_of,
   source,
@@ -184,13 +247,17 @@ select
   holding_symbol,
   holding_name,
   holding_country,
+  case when nullif(btrim(holding_country), '') is not null
+    then 'country:' || upper(btrim(holding_country)) || ':symbol:' || upper(btrim(holding_symbol))
+    else 'symbol:' || upper(btrim(holding_symbol))
+  end,
   weight,
   as_of,
   source,
   fetched_at,
   updated_at
 from public.etf_holdings
-on conflict (etf_ticker, holding_symbol, as_of) do update set
+on conflict (etf_ticker, holding_listing_key, as_of) do update set
   holding_name = excluded.holding_name,
   holding_country = excluded.holding_country,
   weight = excluded.weight,
@@ -536,7 +603,8 @@ def build_plan(
     by_name = {state.qualified_name: state for state in states}
     dependencies = list(dependencies or [])
     actions: list[dict[str, Any]] = []
-    unexpected_dependencies = _unexpected_dependencies(dependencies)
+    replacing_views = _replaces_source_views(by_name)
+    unexpected_dependencies = _unexpected_dependencies(dependencies) if replacing_views else []
     if unexpected_dependencies:
         actions.append(
             {
@@ -545,7 +613,7 @@ def build_plan(
                 "dependencies": [dependency_to_dict(dependency) for dependency in unexpected_dependencies],
             }
         )
-    known_dependencies = _known_dependencies(dependencies)
+    known_dependencies = _known_dependencies(dependencies) if replacing_views else []
     if known_dependencies:
         actions.append(
             {
@@ -571,17 +639,28 @@ def build_plan(
             "rows_visible_before": readiness.rows,
         }
     )
+    copy_sources = {
+        "public.etf_holdings": by_name["source_cache.etf_holdings"].relkind in {None, "v"},
+        "public.etf_themes": by_name["source_cache.etf_themes"].relkind in {None, "v"},
+    }
     for name in ("public.etf_holdings", "public.etf_themes"):
         state = by_name[name]
         actions.append(
             {
-                "action": "copy_old_public_rows" if state.relkind else "old_public_source_missing",
+                "action": (
+                    "copy_old_public_rows"
+                    if state.relkind and copy_sources[name]
+                    else "old_public_source_not_needed"
+                    if state.relkind
+                    else "old_public_source_missing"
+                ),
                 "object": name,
                 "current_kind": state.kind,
                 "rows": state.rows,
             }
         )
-    actions.append({"action": "rebuild_readiness", "object": "source_cache.etf_theme_readiness"})
+    if _requires_readiness_rebuild(by_name):
+        actions.append({"action": "rebuild_readiness", "object": "source_cache.etf_theme_readiness"})
     if known_dependencies:
         actions.append(
             {
@@ -617,10 +696,12 @@ def apply_plan(
     dependencies = list(dependencies or [])
     _validate_apply_safe(states, dependencies=dependencies)
     by_name = {state.qualified_name: state for state in states}
-    captured_views = _capture_known_dependent_views(conn, dependencies)
+    replacing_views = _replaces_source_views(by_name)
+    migration_dependencies = dependencies if replacing_views else []
+    captured_views = _capture_known_dependent_views(conn, migration_dependencies)
     _execute(conn, "create schema if not exists source_cache")
     for statement in DROP_DEPENDENT_VIEWS_SQL:
-        if _should_drop_dependent_view(statement, dependencies):
+        if _should_drop_dependent_view(statement, migration_dependencies):
             _execute(conn, statement)
     if by_name["source_cache.etf_holdings"].relkind == "v":
         _execute(conn, "drop view source_cache.etf_holdings")
@@ -629,7 +710,9 @@ def apply_plan(
 
     for statement in [
         CREATE_ETF_HOLDINGS_TABLE_SQL,
+        MIGRATE_ETF_HOLDINGS_LISTING_KEY_SQL,
         CREATE_ETF_HOLDINGS_INDEX_SQL,
+        CREATE_ETF_HOLDINGS_MARKET_INDEX_SQL,
         CREATE_ETF_THEMES_TABLE_SQL,
         CREATE_ETF_THEMES_INDEX_SQL,
         CREATE_ETF_THEME_READINESS_TABLE_SQL,
@@ -637,11 +720,18 @@ def apply_plan(
     ]:
         _execute(conn, statement)
 
-    if by_name["public.etf_holdings"].relkind:
+    if (
+        by_name["public.etf_holdings"].relkind
+        and by_name["source_cache.etf_holdings"].relkind in {None, "v"}
+    ):
         _execute(conn, COPY_PUBLIC_HOLDINGS_SQL)
-    if by_name["public.etf_themes"].relkind:
+    if (
+        by_name["public.etf_themes"].relkind
+        and by_name["source_cache.etf_themes"].relkind in {None, "v"}
+    ):
         _execute(conn, COPY_PUBLIC_THEMES_SQL)
-    _execute(conn, REFRESH_READINESS_SQL)
+    if _requires_readiness_rebuild(by_name):
+        _execute(conn, REFRESH_READINESS_SQL)
     for view in _captured_views_in_recreate_order(captured_views):
         _execute(conn, view.create_sql)
     _validate_recreated_view_columns(conn, captured_views)
@@ -679,13 +769,31 @@ def _validate_apply_safe(states: list[ObjectState], *, dependencies: list[Depend
     if invalid:
         details = ", ".join(f"{state.qualified_name}={state.kind}" for state in invalid)
         raise RuntimeError(f"Cannot reconcile unexpected ETF object kind(s): {details}")
-    unexpected_dependencies = _unexpected_dependencies(dependencies)
+    by_name = {state.qualified_name: state for state in states}
+    unexpected_dependencies = (
+        _unexpected_dependencies(dependencies) if _replaces_source_views(by_name) else []
+    )
     if unexpected_dependencies:
         details = ", ".join(
             f"{dependency.dependent_qualified_name} depends on {dependency.source_qualified_name}"
             for dependency in unexpected_dependencies
         )
         raise RuntimeError(f"Cannot reconcile unexpected ETF dependencies without manual review: {details}")
+
+
+def _replaces_source_views(by_name: dict[str, ObjectState]) -> bool:
+    return any(
+        by_name[name].relkind == "v"
+        for name in ("source_cache.etf_holdings", "source_cache.etf_themes")
+    )
+
+
+def _requires_readiness_rebuild(by_name: dict[str, ObjectState]) -> bool:
+    return (
+        by_name["source_cache.etf_holdings"].relkind in {None, "v"}
+        or by_name["source_cache.etf_themes"].relkind in {None, "v"}
+        or by_name["source_cache.etf_theme_readiness"].relkind is None
+    )
 
 
 def _fetch_object_rows(conn: Any) -> dict[tuple[str, str], str]:

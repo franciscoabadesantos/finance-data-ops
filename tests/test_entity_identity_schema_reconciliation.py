@@ -49,6 +49,65 @@ def test_dry_run_plans_missing_columns_on_existing_entity_tables() -> None:
     assert "feature_store.entity_listing.publication_batch_id" in add_columns
 
 
+def test_dry_run_migrates_mutable_identity_keys_to_immutable_batch_keys() -> None:
+    state = reconcile.SchemaState(
+        tables=set(reconcile.REQUIRED_TABLES),
+        columns={
+            "feature_store.entity_master.publication_batch_id": reconcile.ColumnState("text", "YES", ""),
+            "feature_store.entity_listing.publication_batch_id": reconcile.ColumnState("text", "YES", ""),
+        },
+        indexes=set(),
+        roles=set(),
+        grants=set(),
+        check_constraints={
+            "feature_store.entity_master.entity_master_pkey": "PRIMARY KEY (entity_id)",
+            "feature_store.entity_listing.entity_listing_pkey": "PRIMARY KEY (symbol)",
+        },
+    )
+
+    plan = reconcile.build_reconciliation_plan(state)
+    migration = next(
+        action for action in plan["actions"]
+        if action["action"] == "migrate_identity_tables_to_batch_snapshots"
+    )
+    sql = "\n".join(plan["sql"])
+
+    assert migration["legacy_batch_id"] == "legacy:pre-versioned"
+    assert "primary key (publication_batch_id, entity_id)" in sql.lower()
+    assert "primary key (publication_batch_id, symbol)" in sql.lower()
+    assert "drop table" not in sql.lower()
+    assert " cascade" not in sql.lower()
+
+
+def test_partial_identity_schema_creates_missing_table_before_batch_migration() -> None:
+    state = reconcile.SchemaState(
+        tables={"feature_store.entity_master"},
+        columns={
+            "feature_store.entity_master.entity_id": reconcile.ColumnState("text", "NO", ""),
+            "feature_store.entity_master.publication_batch_id": reconcile.ColumnState("text", "YES", ""),
+        },
+        indexes=set(),
+        roles=set(),
+        grants=set(),
+        check_constraints={
+            "feature_store.entity_master.entity_master_pkey": "PRIMARY KEY (entity_id)",
+        },
+    )
+
+    plan = reconcile.build_reconciliation_plan(state)
+    create_listing_index = next(
+        index for index, statement in enumerate(plan["sql"])
+        if "create table if not exists feature_store.entity_listing" in statement.lower()
+    )
+    migration_index = plan["sql"].index(reconcile.BATCH_VERSION_MIGRATION_SQL)
+
+    assert create_listing_index < migration_index
+    assert any(
+        action["action"] == "migrate_identity_tables_to_batch_snapshots"
+        for action in plan["actions"]
+    )
+
+
 def test_dry_run_reconciles_legacy_gleif_entity_raw_query_key() -> None:
     state = reconcile.SchemaState(
         tables={"source_cache.gleif_entity_raw"},
@@ -236,7 +295,7 @@ def test_grants_and_indexes_are_planned() -> None:
         tables=set(reconcile.REQUIRED_TABLES),
         columns={},
         indexes=set(),
-        roles={"finance_data_ops_worker", "finance_backend_read"},
+        roles={"finance_data_ops_worker", "finance_feature_store_worker", "finance_backend_read"},
         grants=set(),
     )
 
@@ -249,6 +308,7 @@ def test_grants_and_indexes_are_planned() -> None:
     assert "idx_entity_listing_publication_batch_id" in sql
     assert "grant select, insert, update, delete" in sql
     assert "feature_store.entity_identity_publication_batch" in sql
+    assert "grant usage on schema feature_store to finance_feature_store_worker" in sql.lower()
 
 
 def test_idempotent_second_run_has_no_table_column_or_index_actions() -> None:

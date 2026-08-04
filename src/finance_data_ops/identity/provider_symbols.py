@@ -27,6 +27,7 @@ ONBOARDING_IDENTITY_COLUMNS = [
     "source_figi",
     "source_cusip",
     "canonical_entity_id",
+    "canonical_listing_key",
     "normalized_entity_symbol",
     "provider",
     "provider_symbol",
@@ -198,6 +199,7 @@ def resolve_holding_onboarding_identity(
         "source_figi": _text(source_figi, upper=True),
         "source_cusip": _text(source_cusip, upper=True),
         "canonical_entity_id": "",
+        "canonical_listing_key": "",
         "normalized_entity_symbol": "",
         "provider": "yahoo",
         "provider_symbol": "",
@@ -290,6 +292,7 @@ def _onboardable(
     base.update(
         {
             "canonical_entity_id": _text((entity or {}).get("entity_id"), upper=True),
+            "canonical_listing_key": symbol,
             "normalized_entity_symbol": symbol,
             "provider_symbol": symbol,
             "onboard_symbol": symbol,
@@ -301,8 +304,6 @@ def _onboardable(
             "resolution_confidence": float(confidence),
         }
     )
-    if not base["canonical_entity_id"]:
-        base["canonical_entity_id"] = symbol
     return base
 
 

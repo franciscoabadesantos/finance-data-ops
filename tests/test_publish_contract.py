@@ -232,6 +232,72 @@ def test_postgres_publisher_preserves_text_array_for_gleif_lei_isin_raw(monkeypa
     assert isinstance(by_column["response_payload"], Jsonb)
 
 
+def test_entity_identity_snapshot_uses_one_non_autocommit_transaction(monkeypatch) -> None:
+    _install_fake_jsonb_adapter(monkeypatch)
+    captured: dict[str, object] = {"statements": []}
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, query, params=None):
+            captured["statements"].append((str(query), params))
+
+        def executemany(self, query, values):
+            captured["statements"].append((str(query), values))
+
+    class Connection:
+        def __enter__(self):
+            captured["entered"] = True
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            captured["exit_type"] = exc_type
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+    def fake_connect(_dsn: str, _application: str, *, autocommit: bool = True):
+        captured["autocommit"] = autocommit
+        return Connection()
+
+    monkeypatch.setattr(publish_client, "_connect", fake_connect)
+    publisher = PostgresPublisher(database_dsn="postgresql://example")
+    result = publisher.publish_entity_identity_snapshot(
+        plan={
+            "planned_counts": {"entities": 1, "listings": 1},
+            "feature_store.entity_identity_publication_batch": [
+                {"batch_id": "batch-1", "scope_key": "tracked", "source": "test", "publication_gate": {}}
+            ],
+            "feature_store.entity_master": [
+                {"publication_batch_id": "batch-1", "entity_id": "lei:abc", "entity_source": "lei", "resolution_status": "resolved"}
+            ],
+            "feature_store.entity_listing": [
+                {"publication_batch_id": "batch-1", "symbol": "ABC", "entity_id": "lei:abc", "resolution_source": "lei", "resolution_status": "resolved"}
+            ],
+            "feature_store.entity_identity_review": [],
+            "feature_store.entity_identity_publication_current": [
+                {"scope_key": "tracked", "batch_id": "batch-1"}
+            ],
+        }
+    )
+
+    statements = [statement for statement, _params in captured["statements"]]
+    assert captured["autocommit"] is False
+    assert captured["entered"] is True
+    assert captured["exit_type"] is None
+    assert any('on conflict ("publication_batch_id", "entity_id")' in statement for statement in statements)
+    assert any('on conflict ("publication_batch_id", "symbol")' in statement for statement in statements)
+    pointer_index = next(index for index, statement in enumerate(statements) if '"entity_identity_publication_current"' in statement)
+    demotion_index = next(index for index, statement in enumerate(statements) if "SET is_current = FALSE" in statement)
+    assert demotion_index < pointer_index
+    assert result["publication_atomic"] is True
+
+
 def test_to_json_safe_converts_supported_scalars() -> None:
     payload = {
         "timestamp": pd.Timestamp("2026-04-10T21:00:00+00:00"),

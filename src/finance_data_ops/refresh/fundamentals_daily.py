@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pandas as pd
 
+from finance_data_ops.identity.listing_keys import build_holding_listing_key
 from finance_data_ops.ops.incidents import classify_failure, run_with_retry
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
 from finance_data_ops.refresh.market_daily import RefreshRunResult
@@ -113,12 +114,16 @@ def refresh_fundamentals_daily(
 
     merged_holdings = pd.concat(holding_rows, ignore_index=True) if holding_rows else pd.DataFrame()
     if not merged_holdings.empty:
+        merged_holdings["holding_listing_key"] = merged_holdings.apply(
+            build_holding_listing_key,
+            axis=1,
+        )
         write_parquet_table(
             "etf_holdings",
             merged_holdings,
             cache_root=cache_root,
             mode="append",
-            dedupe_subset=["etf_ticker", "holding_symbol", "as_of"],
+            dedupe_subset=["etf_ticker", "holding_listing_key", "as_of"],
         )
 
     merged_sector_weights = (

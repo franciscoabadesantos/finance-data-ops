@@ -67,7 +67,7 @@ def main() -> None:
             "etf_holdings": publisher.upsert(
                 ETF_HOLDINGS_TABLE,
                 build_etf_holdings_payload(cached_holdings),
-                on_conflict="etf_ticker,holding_symbol,as_of",
+                on_conflict="etf_ticker,holding_listing_key,as_of",
             ),
             "etf_themes": publisher.upsert(
                 ETF_THEMES_TABLE,

@@ -6,6 +6,7 @@ from typing import Any
 
 import pandas as pd
 
+from finance_data_ops.identity.listing_keys import build_holding_listing_key
 from finance_data_ops.identity.provider_symbols import ONBOARDING_IDENTITY_COLUMNS
 
 from finance_data_ops.publish.client import Publisher
@@ -106,6 +107,30 @@ def build_etf_holdings_payload(holdings_frame: pd.DataFrame) -> list[dict[str, A
             .str.upper(),
             "holding_name": frame.get("holding_name", pd.Series(index=frame.index, dtype=object)),
             "holding_country": frame.get("holding_country", pd.Series(index=frame.index, dtype=object)),
+            "holding_listing_key": frame.get(
+                "holding_listing_key",
+                frame.get("canonical_listing_key", pd.Series(index=frame.index, dtype=object)),
+            ),
+            "holding_exchange": frame.get(
+                "holding_exchange",
+                frame.get("source_exchange", pd.Series(index=frame.index, dtype=object)),
+            ),
+            "holding_exchange_mic": frame.get(
+                "holding_exchange_mic",
+                frame.get("source_exchange_mic", pd.Series(index=frame.index, dtype=object)),
+            ),
+            "holding_isin": frame.get(
+                "holding_isin",
+                frame.get("source_isin", pd.Series(index=frame.index, dtype=object)),
+            ),
+            "holding_figi": frame.get(
+                "holding_figi",
+                frame.get("source_figi", pd.Series(index=frame.index, dtype=object)),
+            ),
+            "provider_symbol": frame.get(
+                "provider_symbol",
+                frame.get("onboard_symbol", pd.Series(index=frame.index, dtype=object)),
+            ),
             "weight": pd.to_numeric(frame.get("weight"), errors="coerce"),
             "as_of": pd.to_datetime(frame.get("as_of"), errors="coerce").dt.date,
             "source": frame.get("source", frame.get("provider", "data_ops")),
@@ -122,17 +147,36 @@ def build_etf_holdings_payload(holdings_frame: pd.DataFrame) -> list[dict[str, A
     payload["holding_symbol"] = _normalize_string_series(payload["holding_symbol"])
     payload["holding_name"] = _normalize_string_series(payload["holding_name"])
     payload["holding_country"] = _normalize_string_series(payload["holding_country"])
+    payload["holding_listing_key"] = _normalize_string_series(payload["holding_listing_key"])
+    for column in (
+        "holding_exchange",
+        "holding_exchange_mic",
+        "holding_isin",
+        "holding_figi",
+        "provider_symbol",
+    ):
+        payload[column] = _normalize_string_series(payload[column])
+    payload["holding_listing_key"] = payload.apply(
+        build_holding_listing_key,
+        axis=1,
+    )
     payload["source"] = _normalize_string_series(payload["source"])
     payload["fetched_at"] = payload["fetched_at"].fillna(now_utc)
     payload["updated_at"] = payload["updated_at"].fillna(now_utc)
     payload = payload.dropna(subset=["etf_ticker", "holding_symbol", "as_of"])
-    payload = payload.drop_duplicates(subset=["etf_ticker", "holding_symbol", "as_of"], keep="last")
+    payload = payload.drop_duplicates(subset=["etf_ticker", "holding_listing_key", "as_of"], keep="last")
     return payload[
         [
             "etf_ticker",
             "holding_symbol",
             "holding_name",
             "holding_country",
+            "holding_listing_key",
+            "holding_exchange",
+            "holding_exchange_mic",
+            "holding_isin",
+            "holding_figi",
+            "provider_symbol",
             "weight",
             "as_of",
             "source",
@@ -369,7 +413,7 @@ def publish_fundamentals_surfaces(
         holdings_result = publisher.upsert(
             ETF_HOLDINGS_TABLE,
             holding_rows,
-            on_conflict="etf_ticker,holding_symbol,as_of",
+            on_conflict="etf_ticker,holding_listing_key,as_of",
         )
     identity_result: dict[str, Any] | None = None
     if identity_rows:

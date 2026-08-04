@@ -182,6 +182,9 @@ def test_candidate_universe_uses_entity_attributes_static_name_metadata() -> Non
                 {
                     "entity_id": "005930.KS",
                     "display_name": "Samsung Electronics Co Ltd",
+                    "home_country": "KR",
+                    "exchange_mic": "XKRX",
+                    "currency": "KRW",
                 }
             ]
         ),
@@ -189,6 +192,9 @@ def test_candidate_universe_uses_entity_attributes_static_name_metadata() -> Non
 
     assert candidates[0].symbol == "005930.KS"
     assert candidates[0].name == "Samsung Electronics Co Ltd"
+    assert candidates[0].country == "KR"
+    assert candidates[0].exchange_mic == "XKRX"
+    assert candidates[0].currency == "KRW"
 
 
 def test_candidate_universe_tracked_only_uses_explicit_is_tracked_rows() -> None:
