@@ -7,6 +7,9 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from typing import Any
+
+import pandas as pd
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,12 +17,13 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from finance_data_ops.publish.client import PostgresPublisher
+from finance_data_ops.publish.client import PostgresPublisher, Publisher
 from finance_data_ops.publish.fundamentals import (
     ETF_HOLDINGS_TABLE,
     ETF_THEMES_TABLE,
     ETF_THEME_READINESS_TABLE,
     build_etf_holdings_payload,
+    build_etf_holding_onboarding_identity_payload,
     build_etf_theme_readiness_payload,
 )
 from finance_data_ops.refresh.storage import read_parquet_table
@@ -63,23 +67,13 @@ def main() -> None:
     if args.publish:
         settings.require_database()
         publisher = PostgresPublisher(database_dsn=settings.database_dsn)
-        publish_result = {
-            "etf_holdings": publisher.upsert(
-                ETF_HOLDINGS_TABLE,
-                build_etf_holdings_payload(cached_holdings),
-                on_conflict="etf_ticker,holding_listing_key,as_of",
-            ),
-            "etf_themes": publisher.upsert(
-                ETF_THEMES_TABLE,
-                cached_themes.to_dict(orient="records"),
-                on_conflict="etf_ticker",
-            ),
-            "etf_theme_readiness": publisher.upsert(
-                ETF_THEME_READINESS_TABLE,
-                build_etf_theme_readiness_payload(readiness),
-                on_conflict="etf_symbol",
-            ),
-        }
+        publish_result = publish_theme_etf_surfaces(
+            publisher=publisher,
+            holdings=cached_holdings,
+            themes=cached_themes,
+            onboarding_identity=cached_identity,
+            readiness=readiness,
+        )
 
     active_themes = (
         cached_themes.loc[cached_themes["active"].fillna(True).astype(bool)]
@@ -106,6 +100,40 @@ def main() -> None:
         "publish": publish_result,
     }
     print(json.dumps(summary, indent=2, default=str))
+
+
+def publish_theme_etf_surfaces(
+    *,
+    publisher: Publisher,
+    holdings: pd.DataFrame,
+    themes: pd.DataFrame,
+    onboarding_identity: pd.DataFrame,
+    readiness: pd.DataFrame,
+) -> dict[str, Any]:
+    """Publish every canonical surface produced by theme ETF ingestion."""
+
+    return {
+        "etf_holdings": publisher.upsert(
+            ETF_HOLDINGS_TABLE,
+            build_etf_holdings_payload(holdings),
+            on_conflict="etf_ticker,holding_listing_key,as_of",
+        ),
+        "etf_themes": publisher.upsert(
+            ETF_THEMES_TABLE,
+            themes.to_dict(orient="records"),
+            on_conflict="etf_ticker",
+        ),
+        "etf_holding_onboarding_identity": publisher.upsert(
+            "etf_holding_onboarding_identity",
+            build_etf_holding_onboarding_identity_payload(onboarding_identity),
+            on_conflict="etf_ticker,source_symbol,source_country",
+        ),
+        "etf_theme_readiness": publisher.upsert(
+            ETF_THEME_READINESS_TABLE,
+            build_etf_theme_readiness_payload(readiness),
+            on_conflict="etf_symbol",
+        ),
+    }
 
 
 def _parser() -> argparse.ArgumentParser:

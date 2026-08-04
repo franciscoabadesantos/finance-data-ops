@@ -5,12 +5,14 @@ import io
 
 import pandas as pd
 
+from finance_data_ops.publish.client import RecordingPublisher
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_payload
 from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.theme_etfs.config import THEME_ETFS, ThemeETF
 from finance_data_ops.theme_etfs import holdings as holdings_mod
 from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
 from finance_data_ops.theme_etfs.universe import build_wave_universe_additions
+from scripts.run_theme_etf_ingestion import publish_theme_etf_surfaces
 
 
 def test_theme_etf_catalog_has_expected_waves_and_no_broad_sector_spdrs() -> None:
@@ -663,6 +665,57 @@ def test_theme_etf_cache_preserves_same_symbol_on_distinct_markets(tmp_path) -> 
         "country:AU:symbol:ABC",
         "country:GB:symbol:ABC",
     }
+
+
+def test_manual_theme_etf_publish_includes_onboarding_identity() -> None:
+    publisher = RecordingPublisher()
+    holdings = pd.DataFrame(
+        [
+            {
+                "etf_ticker": "GLOBAL",
+                "holding_symbol": "ABC",
+                "holding_name": "ABC Australia",
+                "holding_country": "AU",
+                "weight": 0.08,
+                "as_of": "2026-07-31",
+            }
+        ]
+    )
+    themes = pd.DataFrame([{"etf_ticker": "GLOBAL", "theme": "global", "wave": 1}])
+    identity = pd.DataFrame(
+        [
+            {
+                "etf_ticker": "GLOBAL",
+                "source_symbol": "ABC",
+                "source_country": "AU",
+                "onboard_symbol": "ABC.AX",
+                "is_onboardable": True,
+                "resolution_source": "country_suffix",
+                "resolution_confidence": 0.9,
+            }
+        ]
+    )
+    readiness = pd.DataFrame([{"etf_symbol": "GLOBAL", "theme": "global", "active": True}])
+
+    result = publish_theme_etf_surfaces(
+        publisher=publisher,
+        holdings=holdings,
+        themes=themes,
+        onboarding_identity=identity,
+        readiness=readiness,
+    )
+
+    calls = {call["table"]: call for call in publisher.upserts}
+    assert set(result) == {
+        "etf_holdings",
+        "etf_themes",
+        "etf_holding_onboarding_identity",
+        "etf_theme_readiness",
+    }
+    identity_call = calls["etf_holding_onboarding_identity"]
+    assert identity_call["on_conflict"] == "etf_ticker,source_symbol,source_country"
+    assert identity_call["rows"][0]["onboard_symbol"] == "ABC.AX"
+    assert identity_call["rows"][0]["is_onboardable"] is True
 
 
 def test_theme_etf_write_deactivates_stale_theme_and_removes_old_holdings(tmp_path) -> None:
