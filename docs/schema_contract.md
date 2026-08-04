@@ -40,6 +40,8 @@ point-in-time vendor metrics. Feature-store owns derived product read models.
 `etf_holding_onboarding_identity` preserves ETF/source identity separately from provider onboarding
 identity. Backend/frontier services should read `onboard_symbol` only when `is_onboardable=true`;
 country/exchange suffix resolution is owned by `finance_data_ops.identity`.
+The repository schema hook upgrades this table additively, preserves legacy rows, and reapplies the
+Data Ops and Feature Store runtime grants before downstream schema validation runs.
 
 ## Earnings surfaces
 

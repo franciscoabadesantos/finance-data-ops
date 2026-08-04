@@ -96,6 +96,7 @@ def test_dry_run_plan_detects_old_views_and_public_tables() -> None:
     assert next(action for action in copy_actions if action["object"] == "public.etf_holdings")["rows"] == 506
     assert any(action["action"] == "drop_known_dependent_views" for action in plan)
     assert any(action["action"] == "ensure_readiness_snapshot_table" for action in plan)
+    assert any(action["action"] == "ensure_onboarding_identity_table" for action in plan)
     assert any(action["action"] == "rebuild_readiness" for action in plan)
     assert any(action["action"] == "recreate_known_dependent_views" for action in plan)
 
@@ -129,6 +130,11 @@ def test_apply_replaces_views_creates_writable_tables_and_copies_rows() -> None:
     assert "create index if not exists idx_etf_holdings_symbol_market" in sql
     assert "create table if not exists source_cache.etf_themes" in sql
     assert "create table if not exists source_cache.etf_theme_readiness" in sql
+    assert "create table if not exists public.etf_holding_onboarding_identity" in sql
+    assert "add column if not exists etf_ticker text" in sql
+    assert "add column if not exists onboard_symbol text" in sql
+    assert "add column if not exists is_onboardable boolean not null default false" in sql
+    assert "unique (etf_ticker, source_symbol, source_country)" in sql
     assert "insert into source_cache.etf_holdings" in sql
     assert "from public.etf_holdings" in sql
     assert "insert into source_cache.etf_themes" in sql
@@ -156,6 +162,8 @@ def test_apply_on_canonical_tables_is_schema_only_and_does_not_refresh_data() ->
     sql = conn.normalized_sql
     assert "create table if not exists source_cache.etf_holdings" in sql
     assert "add column if not exists holding_listing_key text" in sql
+    assert "create table if not exists public.etf_holding_onboarding_identity" in sql
+    assert "add column if not exists source_symbol text" in sql
     assert "drop view if exists" not in sql
     assert "drop view source_cache" not in sql
     assert "from public.etf_holdings" not in sql
@@ -202,7 +210,11 @@ def test_apply_grants_are_conditional_for_worker_and_backend_read_roles() -> Non
 
     sql = conn.normalized_sql
     assert "if exists (select 1 from pg_roles where rolname = 'finance_data_ops_worker')" in sql
-    assert "grant select, insert, update, delete on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness to finance_data_ops_worker" in sql
+    assert "grant usage on schema source_cache, public to finance_data_ops_worker" in sql
+    assert "grant select, insert, update, delete on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness, public.etf_holding_onboarding_identity to finance_data_ops_worker" in sql
+    assert "if exists (select 1 from pg_roles where rolname = 'finance_feature_store_worker')" in sql
+    assert "grant usage on schema source_cache, public to finance_feature_store_worker" in sql
+    assert "grant select on source_cache.etf_holdings, source_cache.etf_themes, source_cache.etf_theme_readiness, public.etf_holding_onboarding_identity to finance_feature_store_worker" in sql
     assert "grant usage on schema feature_store to finance_data_ops_worker" in sql
     assert "grant select on feature_store.ticker_readiness to finance_data_ops_worker" in sql
     assert "grant select on feature_store.ticker_readiness_etf_constituents to finance_data_ops_worker" in sql
@@ -349,6 +361,10 @@ def test_runtime_schema_contains_final_etf_contract_and_conditional_grants() -> 
     assert "primary key (etf_ticker, holding_listing_key, as_of)" in schema
     assert "create table if not exists source_cache.etf_themes" in schema
     assert "create table if not exists source_cache.etf_theme_readiness" in schema
+    assert "create table if not exists public.etf_holding_onboarding_identity" in schema
+    assert "add column if not exists etf_ticker text" in schema
+    assert "add column if not exists onboard_symbol text" in schema
+    assert "unique (etf_ticker, source_symbol, source_country)" in schema
     assert "create table if not exists public.etf_holdings" not in schema
     assert "create table if not exists public.etf_themes" not in schema
     assert "Operational identity read model" in schema
@@ -427,6 +443,7 @@ def _old_live_states() -> list[reconcile.ObjectState]:
         reconcile.ObjectState("source_cache", "etf_holdings", "v", 506),
         reconcile.ObjectState("source_cache", "etf_themes", "v", 32),
         reconcile.ObjectState("source_cache", "etf_theme_readiness", None, None),
+        reconcile.ObjectState("public", "etf_holding_onboarding_identity", "r", 506),
         reconcile.ObjectState("public", "etf_holdings", "r", 506),
         reconcile.ObjectState("public", "etf_themes", "r", 32),
     ]
@@ -437,6 +454,7 @@ def _canonical_live_states() -> list[reconcile.ObjectState]:
         reconcile.ObjectState("source_cache", "etf_holdings", "r", 506),
         reconcile.ObjectState("source_cache", "etf_themes", "r", 32),
         reconcile.ObjectState("source_cache", "etf_theme_readiness", "r", 32),
+        reconcile.ObjectState("public", "etf_holding_onboarding_identity", "r", 506),
         reconcile.ObjectState("public", "etf_holdings", "r", 506),
         reconcile.ObjectState("public", "etf_themes", "r", 32),
     ]
@@ -506,6 +524,7 @@ class InspectCursor:
             self._rows = [
                 ("source_cache", "etf_holdings", "v"),
                 ("source_cache", "etf_themes", "v"),
+                ("public", "etf_holding_onboarding_identity", "r"),
                 ("public", "etf_holdings", "r"),
                 ("public", "etf_themes", "r"),
             ]

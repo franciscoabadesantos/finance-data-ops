@@ -748,7 +748,44 @@ create table if not exists public.etf_holding_onboarding_identity (
 );
 
 alter table public.etf_holding_onboarding_identity
-  add column if not exists canonical_listing_key text;
+  add column if not exists etf_ticker text,
+  add column if not exists theme text,
+  add column if not exists source_symbol text,
+  add column if not exists source_name text,
+  add column if not exists source_country text,
+  add column if not exists source_exchange text,
+  add column if not exists source_exchange_mic text,
+  add column if not exists source_isin text,
+  add column if not exists source_figi text,
+  add column if not exists source_cusip text,
+  add column if not exists canonical_entity_id text,
+  add column if not exists canonical_listing_key text,
+  add column if not exists normalized_entity_symbol text,
+  add column if not exists provider text default 'yahoo',
+  add column if not exists provider_symbol text,
+  add column if not exists onboard_symbol text,
+  add column if not exists onboard_region text,
+  add column if not exists onboard_exchange text,
+  add column if not exists is_onboardable boolean not null default false,
+  add column if not exists not_onboardable_reason text,
+  add column if not exists resolution_source text,
+  add column if not exists resolution_confidence double precision not null default 0;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.etf_holding_onboarding_identity'::regclass
+      and contype in ('p', 'u')
+      and replace(pg_get_constraintdef(oid), ' ', '')
+        like '%(etf_ticker,source_symbol,source_country)%'
+  ) then
+    alter table public.etf_holding_onboarding_identity
+      add constraint etf_holding_onboarding_identity_identity_key
+      unique (etf_ticker, source_symbol, source_country);
+  end if;
+end $$;
 
 create index if not exists idx_etf_holding_onboarding_identity_onboardable
   on public.etf_holding_onboarding_identity (is_onboardable, onboard_symbol)

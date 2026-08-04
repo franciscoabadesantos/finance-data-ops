@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""One-shot reconciliation for canonical ETF source-cache tables.
+"""Reconcile canonical ETF source-cache and onboarding-identity tables.
 
 Dry-run is the default. Use --apply to replace old source_cache ETF views with
-writable canonical tables and copy the old public ETF data into them.
+writable canonical tables, copy old public ETF data, and upgrade the operational
+onboarding identity read model without discarding legacy rows.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ ETF_OBJECTS = [
     ("source_cache", "etf_holdings"),
     ("source_cache", "etf_themes"),
     ("source_cache", "etf_theme_readiness"),
+    ("public", "etf_holding_onboarding_identity"),
     ("public", "etf_holdings"),
     ("public", "etf_themes"),
 ]
@@ -229,6 +231,87 @@ create index if not exists idx_etf_theme_readiness_eligibility
   on source_cache.etf_theme_readiness (relationship_map_eligible, active, computed_at desc)
 """
 
+CREATE_ETF_HOLDING_ONBOARDING_IDENTITY_TABLE_SQL = """
+create table if not exists public.etf_holding_onboarding_identity (
+  etf_ticker text not null,
+  theme text,
+  source_symbol text not null,
+  source_name text,
+  source_country text,
+  source_exchange text,
+  source_exchange_mic text,
+  source_isin text,
+  source_figi text,
+  source_cusip text,
+  canonical_entity_id text,
+  canonical_listing_key text,
+  normalized_entity_symbol text,
+  provider text not null default 'yahoo',
+  provider_symbol text,
+  onboard_symbol text,
+  onboard_region text,
+  onboard_exchange text,
+  is_onboardable boolean not null default false,
+  not_onboardable_reason text,
+  resolution_source text not null,
+  resolution_confidence double precision not null default 0,
+  primary key (etf_ticker, source_symbol, source_country)
+)
+"""
+
+MIGRATE_ETF_HOLDING_ONBOARDING_IDENTITY_SQL = """
+alter table public.etf_holding_onboarding_identity
+  add column if not exists etf_ticker text,
+  add column if not exists theme text,
+  add column if not exists source_symbol text,
+  add column if not exists source_name text,
+  add column if not exists source_country text,
+  add column if not exists source_exchange text,
+  add column if not exists source_exchange_mic text,
+  add column if not exists source_isin text,
+  add column if not exists source_figi text,
+  add column if not exists source_cusip text,
+  add column if not exists canonical_entity_id text,
+  add column if not exists canonical_listing_key text,
+  add column if not exists normalized_entity_symbol text,
+  add column if not exists provider text default 'yahoo',
+  add column if not exists provider_symbol text,
+  add column if not exists onboard_symbol text,
+  add column if not exists onboard_region text,
+  add column if not exists onboard_exchange text,
+  add column if not exists is_onboardable boolean not null default false,
+  add column if not exists not_onboardable_reason text,
+  add column if not exists resolution_source text,
+  add column if not exists resolution_confidence double precision not null default 0;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.etf_holding_onboarding_identity'::regclass
+      and contype in ('p', 'u')
+      and replace(pg_get_constraintdef(oid), ' ', '')
+        like '%(etf_ticker,source_symbol,source_country)%'
+  ) then
+    alter table public.etf_holding_onboarding_identity
+      add constraint etf_holding_onboarding_identity_identity_key
+      unique (etf_ticker, source_symbol, source_country);
+  end if;
+end $$
+"""
+
+CREATE_ETF_HOLDING_ONBOARDING_IDENTITY_ONBOARDABLE_INDEX_SQL = """
+create index if not exists idx_etf_holding_onboarding_identity_onboardable
+  on public.etf_holding_onboarding_identity (is_onboardable, onboard_symbol)
+  where is_onboardable = true
+"""
+
+CREATE_ETF_HOLDING_ONBOARDING_IDENTITY_SOURCE_INDEX_SQL = """
+create index if not exists idx_etf_holding_onboarding_identity_source
+  on public.etf_holding_onboarding_identity (source_symbol, source_country)
+"""
+
 COPY_PUBLIC_HOLDINGS_SQL = """
 insert into source_cache.etf_holdings (
   etf_ticker,
@@ -423,11 +506,12 @@ declare
   read_role text;
 begin
   if exists (select 1 from pg_roles where rolname = 'finance_data_ops_worker') then
-    grant usage on schema source_cache to finance_data_ops_worker;
+    grant usage on schema source_cache, public to finance_data_ops_worker;
     grant select, insert, update, delete
       on source_cache.etf_holdings,
          source_cache.etf_themes,
-         source_cache.etf_theme_readiness
+         source_cache.etf_theme_readiness,
+         public.etf_holding_onboarding_identity
       to finance_data_ops_worker;
     if to_regclass('feature_store.ticker_readiness') is not null then
       grant usage on schema feature_store to finance_data_ops_worker;
@@ -437,6 +521,16 @@ begin
       grant usage on schema feature_store to finance_data_ops_worker;
       grant select on feature_store.ticker_readiness_etf_constituents to finance_data_ops_worker;
     end if;
+  end if;
+
+  if exists (select 1 from pg_roles where rolname = 'finance_feature_store_worker') then
+    grant usage on schema source_cache, public to finance_feature_store_worker;
+    grant select
+      on source_cache.etf_holdings,
+         source_cache.etf_themes,
+         source_cache.etf_theme_readiness,
+         public.etf_holding_onboarding_identity
+      to finance_feature_store_worker;
   end if;
 
   foreach read_role in array {read_roles} loop
@@ -523,7 +617,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Reconcile live ETF objects to the canonical source_cache contract.")
+    parser = argparse.ArgumentParser(description="Reconcile live ETF objects to the canonical Data Ops contract.")
     parser.add_argument("--database-dsn", default=None)
     parser.add_argument("--apply", action="store_true", help="Apply the reconciliation. Dry-run is the default.")
     parser.add_argument(
@@ -639,6 +733,15 @@ def build_plan(
             "rows_visible_before": readiness.rows,
         }
     )
+    onboarding_identity = by_name["public.etf_holding_onboarding_identity"]
+    actions.append(
+        {
+            "action": "ensure_onboarding_identity_table",
+            "object": onboarding_identity.qualified_name,
+            "current_kind": onboarding_identity.kind,
+            "rows_visible_before": onboarding_identity.rows,
+        }
+    )
     copy_sources = {
         "public.etf_holdings": by_name["source_cache.etf_holdings"].relkind in {None, "v"},
         "public.etf_themes": by_name["source_cache.etf_themes"].relkind in {None, "v"},
@@ -717,6 +820,10 @@ def apply_plan(
         CREATE_ETF_THEMES_INDEX_SQL,
         CREATE_ETF_THEME_READINESS_TABLE_SQL,
         CREATE_ETF_THEME_READINESS_INDEX_SQL,
+        CREATE_ETF_HOLDING_ONBOARDING_IDENTITY_TABLE_SQL,
+        MIGRATE_ETF_HOLDING_ONBOARDING_IDENTITY_SQL,
+        CREATE_ETF_HOLDING_ONBOARDING_IDENTITY_ONBOARDABLE_INDEX_SQL,
+        CREATE_ETF_HOLDING_ONBOARDING_IDENTITY_SOURCE_INDEX_SQL,
     ]:
         _execute(conn, statement)
 
@@ -763,9 +870,21 @@ def _validate_apply_safe(states: list[ObjectState], *, dependencies: list[Depend
     invalid = [
         state
         for state in states
-        if state.qualified_name in {"source_cache.etf_holdings", "source_cache.etf_themes"}
+        if state.qualified_name
+        in {
+            "source_cache.etf_holdings",
+            "source_cache.etf_themes",
+            "public.etf_holding_onboarding_identity",
+        }
         and state.relkind not in {None, "r", "p", "v"}
     ]
+    invalid_onboarding = [
+        state
+        for state in states
+        if state.qualified_name == "public.etf_holding_onboarding_identity"
+        and state.relkind not in {None, "r", "p"}
+    ]
+    invalid.extend(state for state in invalid_onboarding if state not in invalid)
     if invalid:
         details = ", ".join(f"{state.qualified_name}={state.kind}" for state in invalid)
         raise RuntimeError(f"Cannot reconcile unexpected ETF object kind(s): {details}")
@@ -807,6 +926,7 @@ def _fetch_object_rows(conn: Any) -> dict[tuple[str, str], str]:
               ('source_cache', 'etf_holdings'),
               ('source_cache', 'etf_themes'),
               ('source_cache', 'etf_theme_readiness'),
+              ('public', 'etf_holding_onboarding_identity'),
               ('public', 'etf_holdings'),
               ('public', 'etf_themes')
             )
