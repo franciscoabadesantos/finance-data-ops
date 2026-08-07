@@ -29,7 +29,7 @@ from finance_data_ops.publish.fundamentals import (
 from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import load_settings
 from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
-from finance_data_ops.theme_etfs.readiness import build_etf_theme_readiness
+from finance_data_ops.theme_etfs.readiness import build_etf_theme_readiness, read_technical_symbols
 
 
 def main() -> None:
@@ -45,10 +45,12 @@ def main() -> None:
     cached_holdings = read_parquet_table("etf_holdings", cache_root=settings.cache_root, required=False)
     cached_themes = read_parquet_table("etf_themes", cache_root=settings.cache_root, required=False)
     cached_prices = read_parquet_table("source_cache.market_price_daily", cache_root=settings.cache_root, required=False)
-    cached_technicals = read_parquet_table(
-        "feature_store.technical_features_daily",
-        cache_root=settings.cache_root,
-        required=False,
+    # Same reason as the daily flow: this table is produced downstream of
+    # data-ops, so its parquet export never existed and the cache read silently
+    # returned nothing.
+    cached_technicals = read_technical_symbols(
+        database_dsn=settings.database_dsn,
+        cache_root=str(settings.cache_root),
     )
     cached_identity = read_parquet_table(
         "etf_holding_onboarding_identity",

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 import re
+
+import logging
 
 import pandas as pd
 
 from finance_data_ops.theme_etfs.readiness import (
     build_etf_theme_readiness,
+    read_technical_symbols,
     classify_relationship_map_theme_health,
 )
 
@@ -184,3 +187,68 @@ def _identity_for_holdings(holdings: pd.DataFrame) -> pd.DataFrame:
             for row in holdings.to_dict(orient="records")
         ]
     )
+
+
+def test_an_unreadable_technical_source_is_named_not_blamed_on_coverage() -> None:
+    """The distinction that hid the outage.
+
+    Zero technical constituents has two causes — no holding is tracked, or the
+    feature table never arrived — and they used to produce the same reason. In
+    production every one of the 37 themes reported insufficient coverage while
+    141 of their 371 constituents did have technical features in the database.
+    """
+
+    readiness = build_etf_theme_readiness(
+        etf_holdings=pd.DataFrame(
+            [{"etf_ticker": "AIQ", "holding_symbol": symbol, "as_of": date(2026, 8, 6)}
+             for symbol in ("NVDA", "MSFT", "GOOGL", "AVGO", "AMD", "META")]
+        ),
+        etf_themes=pd.DataFrame([{"etf_ticker": "AIQ", "theme": "ai", "active": True}]),
+        technical_features_daily=pd.DataFrame(),
+    )
+
+    assert not readiness.loc[0, "relationship_map_eligible"]
+    assert readiness.loc[0, "relationship_map_ineligible_reason"] == "technical_features_unavailable"
+
+
+def test_real_undercoverage_still_reports_undercoverage() -> None:
+    """With the source readable, a genuinely thin theme keeps its own reason."""
+
+    readiness = build_etf_theme_readiness(
+        etf_holdings=pd.DataFrame(
+            [{"etf_ticker": "AIQ", "holding_symbol": symbol, "as_of": date(2026, 8, 6)}
+             for symbol in ("NVDA", "MSFT", "GOOGL", "AVGO", "AMD", "META")]
+        ),
+        etf_themes=pd.DataFrame([{"etf_ticker": "AIQ", "theme": "ai", "active": True}]),
+        technical_features_daily=pd.DataFrame([{"symbol": "TSLA"}, {"symbol": "F"}]),
+    )
+
+    assert not readiness.loc[0, "relationship_map_eligible"]
+    assert readiness.loc[0, "relationship_map_ineligible_reason"] == "insufficient_constituent_coverage"
+
+
+def test_an_inactive_theme_keeps_its_reason_even_with_no_technical_source() -> None:
+    readiness = build_etf_theme_readiness(
+        etf_holdings=pd.DataFrame([{"etf_ticker": "AIQ", "holding_symbol": "NVDA", "as_of": date(2026, 8, 6)}]),
+        etf_themes=pd.DataFrame([{"etf_ticker": "AIQ", "theme": "ai", "active": False}]),
+        technical_features_daily=pd.DataFrame(),
+    )
+
+    assert readiness.loc[0, "relationship_map_ineligible_reason"] == "inactive"
+
+
+def test_read_technical_symbols_returns_empty_without_a_source() -> None:
+    assert read_technical_symbols(database_dsn=None, cache_root=None).empty
+
+
+def test_read_technical_symbols_survives_an_unreachable_database(caplog) -> None:
+    """Falls back rather than raising — but says so, instead of returning a
+    silent zero, which is the failure this whole change is about."""
+
+    with caplog.at_level(logging.ERROR):
+        frame = read_technical_symbols(
+            database_dsn="postgresql://nobody@127.0.0.1:1/nothing", cache_root=None
+        )
+
+    assert frame.empty
+    assert "Could not read technical features" in caplog.text
