@@ -19,6 +19,25 @@ Do not backdate or future-fill static metadata numerics into a historical scorec
 snapshot. A richer daily market-metrics series may be introduced separately; it is not supplied
 by `entity_attributes_static`.
 
+## Currency
+
+`source_cache.fundamentals` is **multi-currency and labelled**: each row carries the currency of its own listing, and
+nothing in the stack converts between them. 9984.T is reported in JPY, HSBA.L in USD.
+
+Consumers must filter or convert. Reading `value` without looking at `currency` produces a number with no unit, which is
+harmless for a page showing one ticker at a time and wrong the moment anything sums or ranks. It did: one relationship-map
+community totalled USD 4,882 bn plus non-USD 2,879,982 bn as a single figure, and 005930.KS alone read roughly 1,300×
+the largest US name. The feature store now restricts to a configured `base_currency`, at the cost of ~18% of nodes
+carrying a null cap instead of a wrong one.
+
+There is no FX source anywhere in the stack today — no rates table in any schema, no currency symbols in
+`market_price_daily`, and no entity with caps in two currencies to derive a rate from. The `fx` factor in
+`residualize_return_matrix` is not one: it averages peers sharing a currency, which is useful for residualising and
+useless for converting.
+
+When conversion arrives, store the converted value **together with the rate used**, rather than converting at read time.
+Converting on read makes a historical cap change whenever rates move, which destroys the point-in-time property.
+
 ## ETF And Fund Semantics
 
 For equities, `market_cap` means company market capitalization.

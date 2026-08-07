@@ -109,11 +109,41 @@ Sanity gate: reject a single holding > ~50% or a fund sum > ~135% (flag the ETF/
 
 ---
 
+## 4b. Eligibility gate: where the technical coverage count comes from
+
+A theme only reaches the relationship map when `source_cache.etf_theme_readiness.relationship_map_eligible` is true,
+which needs at least `MIN_TECHNICAL_CONSTITUENTS` holdings present in `feature_store.technical_features_daily` and a
+coverage ratio above `MIN_TECHNICAL_COVERAGE_RATIO`. The feature store then filters theme holdings on that flag, so an
+ineligible theme contributes no edges at all.
+
+**That count is read from the database, not from the parquet cache.** It used to come from
+`read_parquet_table("feature_store.technical_features_daily", required=False)`, and that file has never existed and never
+could: the table belongs to the feature store, which runs *after* data-ops. Data-ops was asking itself for an artifact
+produced downstream of itself, and `required=False` turned a permanent absence into an empty frame.
+
+The result was every one of the 37 themes reporting `technical_constituent_count = 0` and
+`insufficient_constituent_coverage`, while their constituents did have technical features sitting in the same database.
+`identity.universe` had been querying that exact table over Postgres all along; the theme path simply never followed.
+
+Zero technical constituents also stopped meaning one thing. It had two causes producing the same reason — no holding is
+tracked yet, or the feature table never arrived. The second now reports **`technical_features_unavailable`**, naming the
+missing input rather than blaming a theme that may well be ready. A failed database read is logged, never swallowed.
+
+This is the same guardrail the section below already asks for — *no-silent-drop, parser bugs can't silently kill a
+theme* — applied to the input the gate is measured against rather than to the weights.
+
+> **Known wrinkle: `coverage_ratio` can exceed 1.0.** XBI reports 1.02, because `constituent_symbols` comes from the
+> onboarding identity map (150 resolved) while `holdings_count` counts declared holdings (147). It does not affect
+> eligibility, which only compares against a floor, but a ratio above 1 is not meaningful and the two counts should be
+> reconciled to the same denominator.
+
 ## 5. What's LEFT
 ### Immediate
 - **Backoffice source-health monitoring** — surface + alert on: stale sources (holdings `as_of` age), themes with 0
   holdings, degraded/partial ingestion, shallow flags, weight-hygiene warnings. Every one of these we've so far caught **by
   hand** (SMH=0 edges, partial 516-holding publish, ARKX stale, 3 weight-parser bugs). Do this **before** global expansion.
+  The eligibility outage in §4b is the strongest argument yet: all 37 themes sat at zero coverage and the only signal was
+  a map with no themes in it.
 
 ### Parked (by decision, next step known)
 - **Theme-peer strength threshold** — names with only a broad-ETF membership (e.g. ACN, only in AIQ) show many weak,
