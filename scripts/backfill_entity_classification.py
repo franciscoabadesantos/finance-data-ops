@@ -107,12 +107,25 @@ def main() -> int:
     unresolved: list[str] = []
     updated = 0
 
+    unreachable: list[str] = []
+
     for index, entity_id in enumerate(symbols, start=1):
-        fields = descriptive_fields(safe_metadata_lookup(default_metadata_lookup, entity_id))
+        metadata = safe_metadata_lookup(default_metadata_lookup, entity_id)
+        fields = descriptive_fields(metadata)
         sector, industry = fields["sector"], fields["industry"]
         if not sector and not industry:
-            outcomes["provider_had_nothing"] += 1
-            unresolved.append(entity_id)
+            # An empty payload means the call failed or the symbol is unknown to
+            # the provider. A populated payload with no sector means the provider
+            # genuinely has no classification -- which is the right answer for an
+            # ETF. Collapsing the two is how a rate-limited run reports itself as
+            # a success: the first full run here hit YFRateLimitError and filed
+            # every throttled symbol under "provider had nothing".
+            if metadata:
+                outcomes["provider_had_nothing"] += 1
+                unresolved.append(entity_id)
+            else:
+                outcomes["unreachable"] += 1
+                unreachable.append(entity_id)
             continue
         outcomes["resolved"] += 1
         if args.dry_run:
@@ -127,9 +140,10 @@ def main() -> int:
             LOGGER.info("%d/%d processed.", index, len(symbols))
 
     LOGGER.info(
-        "Done. resolved=%d provider_had_nothing=%d rows_updated=%d%s",
+        "Done. resolved=%d provider_had_nothing=%d unreachable=%d rows_updated=%d%s",
         outcomes["resolved"],
         outcomes["provider_had_nothing"],
+        outcomes["unreachable"],
         updated,
         " (dry run, nothing written)" if args.dry_run else "",
     )
@@ -137,11 +151,18 @@ def main() -> int:
         # Named, not counted. A backfill that quietly fills 80% and reports
         # success is the failure this whole audit keeps finding.
         LOGGER.warning(
-            "The provider returned no sector and no industry for %d symbols: %s",
+            "Provider has no classification for %d symbols (expected for ETFs): %s",
             len(unresolved),
             ", ".join(unresolved),
         )
-    return 0
+    if unreachable:
+        LOGGER.error(
+            "Provider returned nothing at all for %d symbols -- failed call, rate limit, or "
+            "unknown ticker. These are NOT settled; re-run to retry them: %s",
+            len(unreachable),
+            ", ".join(unreachable),
+        )
+    return 2 if unreachable else 0
 
 
 if __name__ == "__main__":
