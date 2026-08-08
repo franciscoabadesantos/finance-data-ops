@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -63,6 +64,32 @@ UPDATE_ENTITY = """
     WHERE entity_id = :entity_id
       AND (sector IS NULL OR industry IS NULL)
 """
+
+
+def unresolvable_form(symbol: str) -> str | None:
+    """Why the provider cannot match this symbol as written, if it cannot.
+
+    A syntactic check, not a guess about the company. The registry took some
+    symbols straight from ETF holdings files, which use conventions no quote
+    provider accepts: Bloomberg codes carry the country after a space
+    (`AMMN IJ`), mainland listings arrive as bare exchange numbers with no
+    suffix (`601012`), and one row is a literal dash.
+
+    Reporting these as "re-run to retry" is false -- rerunning cannot fix a
+    symbol that is not a symbol. They need normalisation at onboarding, which
+    is a different job from asking the provider again.
+    """
+
+    text = symbol.strip()
+    if not text or text == "-":
+        return "empty or placeholder"
+    if " " in text:
+        return "Bloomberg-style code (exchange after a space)"
+    if text.startswith("."):
+        return "index-style prefix"
+    if re.fullmatch(r"\d+", text):
+        return "bare exchange number, no market suffix"
+    return None
 
 
 def _engine():
@@ -108,8 +135,15 @@ def main() -> int:
     updated = 0
 
     unreachable: list[str] = []
+    malformed: list[tuple[str, str]] = []
 
     for index, entity_id in enumerate(symbols, start=1):
+        if (reason := unresolvable_form(entity_id)) is not None:
+            # Not worth a network call, and more importantly not worth
+            # reporting as a retryable failure.
+            outcomes["malformed"] += 1
+            malformed.append((entity_id, reason))
+            continue
         metadata = safe_metadata_lookup(default_metadata_lookup, entity_id)
         fields = descriptive_fields(metadata)
         sector, industry = fields["sector"], fields["industry"]
@@ -140,10 +174,11 @@ def main() -> int:
             LOGGER.info("%d/%d processed.", index, len(symbols))
 
     LOGGER.info(
-        "Done. resolved=%d provider_had_nothing=%d unreachable=%d rows_updated=%d%s",
+        "Done. resolved=%d provider_had_nothing=%d unreachable=%d malformed=%d rows_updated=%d%s",
         outcomes["resolved"],
         outcomes["provider_had_nothing"],
         outcomes["unreachable"],
+        outcomes["malformed"],
         updated,
         " (dry run, nothing written)" if args.dry_run else "",
     )
@@ -155,14 +190,29 @@ def main() -> int:
             len(unresolved),
             ", ".join(unresolved),
         )
+    if malformed:
+        # Separated from `unreachable` on purpose. Telling someone to re-run
+        # over a symbol that is not a symbol sends them back to the provider
+        # forever; these need normalising where they are onboarded.
+        grouped: dict[str, list[str]] = {}
+        for entity_id, reason in malformed:
+            grouped.setdefault(reason, []).append(entity_id)
+        LOGGER.error(
+            "%d symbols cannot be looked up as written and re-running will not change that. "
+            "They need normalising at onboarding, not another provider call:",
+            len(malformed),
+        )
+        for reason, entity_ids in sorted(grouped.items()):
+            LOGGER.error("  %s (%d): %s", reason, len(entity_ids), ", ".join(sorted(entity_ids)))
     if unreachable:
         LOGGER.error(
-            "Provider returned nothing at all for %d symbols -- failed call, rate limit, or "
-            "unknown ticker. These are NOT settled; re-run to retry them: %s",
+            "Provider returned nothing for %d well-formed symbols -- failed call, rate limit, or "
+            "a ticker it does not know. These are NOT settled; re-run to retry them, and treat "
+            "any that survive several runs as delisted rather than throttled: %s",
             len(unreachable),
             ", ".join(unreachable),
         )
-    return 2 if unreachable else 0
+    return 2 if (unreachable or malformed) else 0
 
 
 if __name__ == "__main__":
