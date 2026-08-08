@@ -10,6 +10,12 @@ from typing import Any
 import pandas as pd
 
 from finance_data_ops.geography import infer_country_from_symbol
+from finance_data_ops.providers.entity_metadata import (
+    MetadataLookup,
+    default_metadata_lookup,
+    descriptive_fields,
+    safe_metadata_lookup,
+)
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_payload
 from finance_data_ops.symbology import is_placeholder_identifier, normalize_listing_symbol
 from finance_data_ops.validation.ticker_registry import build_registry_key
@@ -52,11 +58,12 @@ def build_wave_a_onboarding_payloads(
     *,
     holdings: pd.DataFrame,
     existing_registry: pd.DataFrame | None = None,
+    metadata_lookup: MetadataLookup | None = None,
 ) -> WaveAOnboardingPayloads:
     targets = build_wave_a_targets(holdings)
     existing_symbols = _existing_universe_symbols(existing_registry)
     new_targets = targets.loc[~targets["symbol"].isin(existing_symbols)].copy()
-    registry_rows = build_wave_a_registry_rows(new_targets)
+    registry_rows = build_wave_a_registry_rows(new_targets, metadata_lookup=metadata_lookup)
     entity_rows = build_entity_attributes_static_payload(registry_rows)
     symbols_to_backfill = sorted(new_targets["symbol"].astype(str).str.upper().tolist())
     summary = {
@@ -112,9 +119,26 @@ def build_wave_a_targets(holdings: pd.DataFrame) -> pd.DataFrame:
     return grouped[["symbol", "name", "source_etfs", "aggregate_weight"]].copy()
 
 
-def build_wave_a_registry_rows(targets: pd.DataFrame) -> list[dict[str, Any]]:
+def build_wave_a_registry_rows(
+    targets: pd.DataFrame,
+    *,
+    metadata_lookup: MetadataLookup | None = None,
+) -> list[dict[str, Any]]:
+    """Registry rows for the wave-A targets, with their descriptive metadata.
+
+    This used to build rows straight from ETF holdings without asking the
+    provider anything, so every symbol it onboarded arrived with no sector and
+    no industry. Those symbols are the ITB and GDX constituents, which is
+    exactly why the relationship map's gold-miner field had 34 of 39 members
+    with no sector and announced a dominant sector held by three of them.
+
+    The lookup is injectable for the same reason it is in the theme-ETF path:
+    the default reaches the network, and a test that forgets to pass one should
+    be passing one.
+    """
     if targets.empty:
         return []
+    lookup = metadata_lookup or default_metadata_lookup
     now_iso = datetime.now(UTC).isoformat()
     rows: list[dict[str, Any]] = []
     for _, target in targets.iterrows():
@@ -123,6 +147,7 @@ def build_wave_a_registry_rows(targets: pd.DataFrame) -> list[dict[str, Any]]:
             continue
         source_etfs = str(target.get("source_etfs") or "")
         aggregate_weight = float(target.get("aggregate_weight") or 0.0)
+        descriptive = descriptive_fields(safe_metadata_lookup(lookup, symbol))
         rows.append(
             {
                 "registry_key": build_registry_key(input_symbol=symbol, region=_US_REGION, exchange=None),
@@ -149,7 +174,11 @@ def build_wave_a_registry_rows(targets: pd.DataFrame) -> list[dict[str, Any]]:
                 ),
                 "updated_at": now_iso,
                 "country": infer_country_from_symbol(symbol),
-                "name": _text_or_none(target.get("name")),
+                # The holding name stays authoritative: it is what the ETF
+                # itself calls the position. The provider only fills a blank.
+                "name": _text_or_none(target.get("name")) or descriptive["name"],
+                "sector": descriptive["sector"],
+                "industry": descriptive["industry"],
             }
         )
     return rows

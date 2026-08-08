@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from finance_data_ops.providers.earnings import EarningsDataProvider
+from finance_data_ops.providers.entity_metadata import default_metadata_lookup
 from finance_data_ops.providers.exchange_calendar import mic_for_symbol
 from finance_data_ops.providers.fundamentals import FundamentalsDataProvider
 from finance_data_ops.providers.market import MarketDataProvider
@@ -451,7 +452,7 @@ def _lookup_instrument_metadata(
     candidate_symbol: str,
     metadata_lookup_fn: Callable[[str], Mapping[str, Any] | dict[str, Any] | None] | None,
 ) -> dict[str, Any]:
-    lookup_fn = metadata_lookup_fn or _default_metadata_lookup
+    lookup_fn = metadata_lookup_fn or default_metadata_lookup
     try:
         payload = lookup_fn(candidate_symbol)
     except Exception:
@@ -471,27 +472,6 @@ def _load_instrument_type_overrides() -> dict[str, str]:
         if symbol and instrument in SUPPORTED_INSTRUMENT_TYPES:
             out[symbol] = instrument
     return out
-
-
-def _default_metadata_lookup(symbol: str) -> dict[str, Any]:
-    try:
-        import yfinance as yf
-    except Exception:
-        return {}
-    try:
-        ticker = yf.Ticker(symbol)
-        info = dict(getattr(ticker, "info", {}) or {})
-        fast = dict(getattr(ticker, "fast_info", {}) or {})
-    except Exception:
-        return {}
-    merged = dict(info)
-    if "quoteType" not in merged and "quoteType" in fast:
-        merged["quoteType"] = fast.get("quoteType")
-    if "exchange" not in merged and "exchange" in fast:
-        merged["exchange"] = fast.get("exchange")
-    if "market" not in merged and "market" in fast:
-        merged["market"] = fast.get("market")
-    return merged
 
 
 def _infer_instrument_type_from_metadata(*, symbol: str, metadata: dict[str, Any]) -> str | None:

@@ -57,7 +57,18 @@ def test_wave_a_payloads_dedupe_existing_registry_and_populate_names() -> None:
         ]
     )
 
-    payloads = build_wave_a_onboarding_payloads(holdings=holdings, existing_registry=existing)
+    # Injected: the default lookup reaches the provider over the network, and a
+    # test that omits it is silently doing real HTTP for every target.
+    provider = {
+        "NEM": {"sector": "Basic Materials", "industry": "Gold"},
+        "LEN": {"sector": "Consumer Cyclical", "industry": "Residential Construction"},
+    }
+
+    payloads = build_wave_a_onboarding_payloads(
+        holdings=holdings,
+        existing_registry=existing,
+        metadata_lookup=lambda symbol: provider.get(symbol, {}),
+    )
 
     assert payloads.summary["target_symbols"] == 3
     assert payloads.summary["existing_symbols_skipped"] == 1
@@ -70,3 +81,14 @@ def test_wave_a_payloads_dedupe_existing_registry_and_populate_names() -> None:
 
     names = {row["entity_id"]: row["name"] for row in payloads.entity_rows}
     assert names == {"LEN": "Lennar Corp", "NEM": "Newmont Corp"}
+
+    # The whole point of the wave-A path having a lookup at all. Without these,
+    # every ITB and GDX constituent lands with a blank sector, which is how the
+    # atlas ended up calling the gold-miner field "Healthcare" on three votes.
+    classification = {
+        row["entity_id"]: (row["sector"], row["industry"]) for row in payloads.entity_rows
+    }
+    assert classification == {
+        "LEN": ("Consumer Cyclical", "Residential Construction"),
+        "NEM": ("Basic Materials", "Gold"),
+    }

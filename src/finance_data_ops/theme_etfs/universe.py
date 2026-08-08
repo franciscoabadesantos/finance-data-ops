@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,12 +10,15 @@ from typing import Any
 import pandas as pd
 
 from finance_data_ops.geography import country_from_source_or_symbol, infer_country_from_symbol, normalize_country, region_for_country
+from finance_data_ops.providers.entity_metadata import (
+    MetadataLookup,
+    default_metadata_lookup,
+    descriptive_fields,
+    safe_metadata_lookup,
+)
 from finance_data_ops.publish.ticker_registry import build_entity_attributes_static_payload
 from finance_data_ops.symbology import ADR_HOME_COUNTRY_BY_SYMBOL, normalize_symbol_with_country
 from finance_data_ops.validation.ticker_registry import build_registry_key, read_ticker_registry
-
-
-MetadataLookup = Callable[[str], Mapping[str, Any] | dict[str, Any] | None]
 
 NON_EQUITY_SYMBOLS = {"", "NAN", "NONE", "NULL", "CASH", "USD", "EUR", "GBP", "JPY", "CAD", "AUD"}
 SUPPORTED_WAVES = {1, 2}
@@ -55,13 +58,13 @@ def build_wave_universe_additions(
     rows: list[dict[str, Any]] = []
     skipped_existing = 0
     selected_count = 0
-    lookup = metadata_lookup or _default_metadata_lookup
+    lookup = metadata_lookup or default_metadata_lookup
     for _, candidate in candidates.iterrows():
         symbol = str(candidate["normalized_symbol"]).strip().upper()
         if symbol in current_symbols:
             skipped_existing += 1
             continue
-        metadata = _safe_metadata_lookup(lookup, symbol)
+        metadata = safe_metadata_lookup(lookup, symbol)
         registry_row = _build_registry_row(symbol=symbol, candidate=candidate, metadata=metadata, wave=wave)
         rows.append(registry_row)
         current_symbols.add(symbol)
@@ -155,7 +158,10 @@ def _build_registry_row(
     exchange = _metadata_text(metadata, "exchange", "fullExchangeName")
     exchange_mic = _metadata_text(metadata, "exchangeMic", "exchange_mic")
     currency = _metadata_text(metadata, "currency", "financialCurrency") or "USD"
-    sector = _metadata_text(metadata, "sector")
+    # Both fields, from the one helper that knows their provider aliases.
+    # `industry` used to be dropped here, which is why it was 0% populated
+    # across every entity and the atlas could never name a field by it.
+    descriptive = descriptive_fields(metadata)
     themes = str(candidate.get("themes") or "")
     source_etfs = str(candidate.get("source_etfs") or "")
     notes = (
@@ -188,7 +194,8 @@ def _build_registry_row(
         "country": country,
         "home_country": home_country,
         "name": name,
-        "sector": sector,
+        "sector": descriptive["sector"],
+        "industry": descriptive["industry"],
     }
 
 
@@ -221,25 +228,6 @@ def _is_candidate_equity_row(row: pd.Series) -> bool:
     if symbol.startswith("^"):
         return False
     return True
-
-
-def _default_metadata_lookup(symbol: str) -> dict[str, Any]:
-    try:
-        import yfinance as yf
-    except Exception:
-        return {}
-    try:
-        return dict(getattr(yf.Ticker(symbol), "info", {}) or {})
-    except Exception:
-        return {}
-
-
-def _safe_metadata_lookup(lookup: MetadataLookup, symbol: str) -> dict[str, Any]:
-    try:
-        payload = lookup(symbol)
-    except Exception:
-        return {}
-    return dict(payload or {}) if isinstance(payload, Mapping) else {}
 
 
 def _metadata_instrument_type(symbol: str, metadata: Mapping[str, Any], *, name: Any = None) -> str:
