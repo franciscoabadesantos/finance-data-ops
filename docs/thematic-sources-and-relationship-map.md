@@ -169,13 +169,37 @@ What holds it together now:
   the column is emptiest.
 
 Coverage after the 2026-08-08 backfill: **99.1%** sector and industry across the 669 symbols in the map, 90% across all
-1,738 entities. The remainder are foreign listings that hit a provider rate limit and are *not* settled; re-running the
-script retries them. Symbols the provider genuinely cannot classify — SPY, GLD, TLT and other ETFs — are correct as
-blanks and are named in the log rather than counted.
+1,738 entities. Of the 169 still blank: 55 are symbols the provider genuinely cannot classify — SPY, GLD, TLT and other
+ETFs — which are correct as blanks; 44 cannot be looked up as written at all; 70 are well-formed and worth retrying.
+The six blanks that are in the map are three ETFs, one renamed ticker, and two Korean listings.
 
 > **Lesson, same as everywhere else in this document.** A rate-limited backfill first reported its throttled symbols as
 > "provider had nothing", indistinguishable from the ETFs that really have no sector, and the run read as a success.
 > An empty payload and a populated payload without a sector are different facts and must be reported as different facts.
+> The same script then told the operator to re-run over 44 symbols that are not symbols. Three categories, three
+> reports — the count that matters is never the total.
+
+### Naming two fields that reach for the same name
+
+Support bars decide whether a name is *earned*. They cannot decide whether it is *taken*, because `_community_label`
+sees one community at a time. Two blocks dominated by biotech-tagged members both came out `biotech`, and on the
+2026-08-07 snapshot 11 named groups collided — several large: `Technology` at 132 and 80 members, `biotech` at 76 and
+71.
+
+The signal that separates them was already computed and already stored: the ranked themes past the first, which a
+top-1 label throws away. So a pass after every community is named qualifies the collisions from what each community
+already knows about itself.
+
+- Where one community is plainly the main body (at least **2×** the next), it keeps the bare name and the others are
+  qualified: `biotech` (130) and `biotech · genomics` (9) says the second is a pocket inside the first.
+- Where nobody dominates, crowning either is arbitrary, so all are qualified: `Technology · ai` (132) and
+  `Technology · ai_semis` (80) — which happens to be the more useful pair of names anyway.
+- A community with no theme beyond the shared one falls back to its most central member (`oil_gas · PSX`).
+- `Market cluster` is skipped. It is not a name two fields share; it is the absence of one, and appending a theme that
+  failed the support bar would assert precisely what the bar refused.
+
+The serving side carries the other half: `ATLAS_COMMUNITY_MIN_MEMBERS` (5) keeps a handful of tickers from being
+offered as a category. It was 3, and raising it drops six communities of which five are the unnamed fallback.
 
 ## 5. What's LEFT
 ### Immediate
@@ -185,13 +209,20 @@ blanks and are named in the log rather than counted.
   The eligibility outage in §4b is the strongest argument yet: all 37 themes sat at zero coverage and the only signal was
   a map with no themes in it.
 
-- **Finish the classification backfill** — ~174 entities outside the map are still unclassified after a provider rate
-  limit. They are named at ERROR in the script's log and the script exits 2, so a re-run is the whole fix. They are not
-  in the atlas today, so the map is unaffected until the universe grows.
-- **Communities that are not fields** — the `residual` view at 252 days emits 41 communities all called "Market
-  cluster", most of them with a single member. A one-symbol community is a ticker on its own being presented as a
-  category. Needs a minimum-size floor before communities are offered as fields, and a rule for genuinely distinct
-  communities that share a label (`biotech` appears twice in `timing`).
+- **44 registry symbols that no provider can resolve as written** — found by running the backfill over the whole
+  registry on 2026-08-08. They came straight from ETF holdings files, which use conventions no quote provider accepts:
+  25 Bloomberg codes with the country after a space (`AMMN IJ`, `CDR PW`, `SSW SJ`), 18 mainland listings as bare
+  exchange numbers with no market suffix (`601012`, `688032`), and one literal `-`. Re-running the backfill cannot fix
+  them — they need normalising at onboarding, in `normalize_symbol_with_country`. The script now reports them
+  separately from retryable failures, precisely so nobody is sent back to the provider forever.
+- **70 well-formed symbols the provider returned nothing for** — genuinely worth retrying; a symbol that survives
+  several runs is delisted rather than throttled. None are in the atlas.
+- **Unnamed communities sharing the fallback** — `Market cluster` still appears up to 5 times in one view (`timing`,
+  both windows). Unlike the named collisions, this is not one name two fields share; it is the absence of a name,
+  repeated. Qualifying it with a theme would assert exactly what the support bar refused, so the disambiguation pass
+  skips it on purpose. The real fix is that `timing` can rarely name anything: 5 of its 10 communities clear no
+  source. Either the view needs its own naming signal, or its unnamed fields need an honest discriminator that makes
+  no claim (their most central member, say).
 - **Edge hysteresis** — measured day over day on 2026-08-07 vs 08-06, `market` keeps 87% of its edges, `residual` 79%,
   `timing` 55%. The churn is concentrated in the weakest edges (66–74% of the ones that vanish sit below that day's
   median score), so it is threshold noise being re-rolled nightly rather than new structure. Requiring an edge to fail
