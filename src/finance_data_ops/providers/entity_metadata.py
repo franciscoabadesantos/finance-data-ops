@@ -1,8 +1,8 @@
 """One place that knows how to ask the provider what a company *is*.
 
 Descriptive metadata -- name, sector, industry, exchange, currency -- was being
-fetched by three separate copies of the same function, and they did not agree
-on what to keep. `theme_etfs.universe` kept `sector` and dropped `industry`.
+fetched by copies of the same function that did not agree on what to keep.
+`theme_etfs.universe` kept `sector` and dropped `industry`. The since-removed
 `onboarding.wave_a` never looked at all, building its registry rows straight
 from ETF holdings. `validation.ticker_validation` merged in `fast_info` for
 `quoteType` and kept neither.
@@ -10,8 +10,8 @@ from ETF holdings. `validation.ticker_validation` merged in `fast_info` for
 The result reached the relationship map: `industry` was 0% populated across
 1,738 entities, so the industry tier of the atlas's naming logic could never
 fire, and `sector` sat at 24%. The gold-miner field -- ITB and GDX
-constituents, onboarded by wave_a, which asks the provider nothing -- had 34 of
-39 members with no sector at all, and announced "Healthcare" on three votes.
+constituents, onboarded by the path that asked the provider nothing -- had 34
+of 39 members with no sector at all, and announced "Healthcare" on three votes.
 
 None of that was a provider limitation. The provider returns both fields for
 every symbol tried, US and non-US alike.

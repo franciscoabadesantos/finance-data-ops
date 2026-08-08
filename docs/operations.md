@@ -315,15 +315,27 @@ where indexname in (
 order by 1, 2;"
 ```
 
-Wave A onboarding (ITB homebuilders + US-listed GDX gold miners):
+### Onboarding ETF constituents
+
+There used to be a second, hand-rolled path here: `run_wave_a_itb_gdx_onboarding.py`, with ITB and GDX written into
+the code. It was removed on 2026-08-08. It had been added on 2026-07-05, two days *after* the thematic ETF foundation
+already carried both — `ITB -> homebuilders` and `GDX -> gold_miners`, both at wave 2 in `theme_etfs/config.py`. It was
+never a predecessor; it was a parallel implementation of a path that already existed.
+
+The duplication had a cost. `wave_a` built its registry rows straight from ETF holdings without asking the provider
+for anything, so every symbol it onboarded arrived with no sector and no industry. Those symbols are the ITB and GDX
+constituents, which is why the relationship map's gold-miner field had 34 of 39 members with no sector and announced a
+dominant sector held by three of them.
+
+Use the thematic path, which handles both ETFs, plus non-US listings, ADRs, batching and provider metadata:
 
 ```bash
-python scripts/run_wave_a_itb_gdx_onboarding.py --write-cache --publish --run-backfill
+python -c "from finance_data_ops.theme_etfs.universe import build_wave_universe_additions"  # wave=2 covers ITB and GDX
 ```
 
-This derives the bounded Wave A universe from cached `etf_holdings`, skips already-active registry symbols, publishes
-names from `holding_name`, and fetches full-history market prices from `1900-01-01` plus fundamentals, earnings history,
-and exchange calendars. Non-US GDX listings remain out of scope for the later international wave.
+Full-history backfill for the resulting symbols is owned by the `ticker-backfill` deployment
+(`dataops_ticker_backfill_flow`), and bulk onboarding by `ticker-onboarding-bulk`. Both isolate their parquet cache per
+run, which the removed script did not — concurrent runs through it could corrupt the shared cache.
 
 Parity gates:
 
