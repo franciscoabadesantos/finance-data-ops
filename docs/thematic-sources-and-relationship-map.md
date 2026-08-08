@@ -137,6 +137,46 @@ theme* — applied to the input the gate is measured against rather than to the 
 > eligibility, which only compares against a floor, but a ratio above 1 is not meaningful and the two counts should be
 > reconciled to the same denominator.
 
+## 4c. Entity classification: how fields get their names
+
+A community in the atlas is named from three sources in preference order — a theme, then an industry, then a sector.
+A theme says *why* these names move together; a taxonomy only says how they are filed. All three must clear the same
+support bar (35% of members), and the community records which one produced the name in `extras.label_source`.
+
+For a long time the middle tier was unreachable code. `industry` was **0% populated across all 1,738 entities**, and
+`sector` sat at 24%. Not a provider limitation: yfinance returns both for every symbol tried, US and non-US alike —
+`NEM -> Gold`, `DHI -> Residential Construction`, `0700.HK -> Internet Content & Information`.
+
+It was lost on the write path. `build_entity_attributes_static_payload` reads `extras.get("sector")` from the registry
+row, so a path that never set the key yielded NULL with no error and no trace. Three copies of the provider lookup
+existed and disagreed about what to keep: the thematic path kept `sector` and dropped `industry`, the ticker-validation
+path merged `fast_info` and kept neither, and the since-removed `wave_a` path never called the provider at all.
+
+The damage was visible in the map. The gold-miner field — ITB and GDX constituents, onboarded by the path that asked
+for nothing — had **34 of 39 members with no sector**, and the atlas served `dominantSector: "Healthcare"` on three
+votes. The gap even looked geographic (US 68%, non-US 36%) when it was really two US ETFs arriving without metadata.
+
+What holds it together now:
+
+- `providers/entity_metadata.py` is the single place that knows the provider's aliases for these fields. It logs
+  failures instead of returning an empty dict on its own: an empty result must be readable as *the provider has
+  nothing*, and it cannot be if it also means *the call raised*.
+- Both surviving onboarding paths call it, with the lookup injectable so tests do not silently make real HTTP calls.
+- `scripts/backfill_entity_classification.py` fills existing rows. It only ever writes where the column is NULL, so it
+  cannot relabel anything already classified and re-running is safe.
+- The feature store holds `dominant_sector` to the same 35% bar as the label, counted over **every** member rather than
+  over the members that happen to carry a sector — counting only the latter scores a field above the bar precisely when
+  the column is emptiest.
+
+Coverage after the 2026-08-08 backfill: **99.1%** sector and industry across the 669 symbols in the map, 90% across all
+1,738 entities. The remainder are foreign listings that hit a provider rate limit and are *not* settled; re-running the
+script retries them. Symbols the provider genuinely cannot classify — SPY, GLD, TLT and other ETFs — are correct as
+blanks and are named in the log rather than counted.
+
+> **Lesson, same as everywhere else in this document.** A rate-limited backfill first reported its throttled symbols as
+> "provider had nothing", indistinguishable from the ETFs that really have no sector, and the run read as a success.
+> An empty payload and a populated payload without a sector are different facts and must be reported as different facts.
+
 ## 5. What's LEFT
 ### Immediate
 - **Backoffice source-health monitoring** — surface + alert on: stale sources (holdings `as_of` age), themes with 0
@@ -144,6 +184,18 @@ theme* — applied to the input the gate is measured against rather than to the 
   hand** (SMH=0 edges, partial 516-holding publish, ARKX stale, 3 weight-parser bugs). Do this **before** global expansion.
   The eligibility outage in §4b is the strongest argument yet: all 37 themes sat at zero coverage and the only signal was
   a map with no themes in it.
+
+- **Finish the classification backfill** — ~174 entities outside the map are still unclassified after a provider rate
+  limit. They are named at ERROR in the script's log and the script exits 2, so a re-run is the whole fix. They are not
+  in the atlas today, so the map is unaffected until the universe grows.
+- **Communities that are not fields** — the `residual` view at 252 days emits 41 communities all called "Market
+  cluster", most of them with a single member. A one-symbol community is a ticker on its own being presented as a
+  category. Needs a minimum-size floor before communities are offered as fields, and a rule for genuinely distinct
+  communities that share a label (`biotech` appears twice in `timing`).
+- **Edge hysteresis** — measured day over day on 2026-08-07 vs 08-06, `market` keeps 87% of its edges, `residual` 79%,
+  `timing` 55%. The churn is concentrated in the weakest edges (66–74% of the ones that vanish sit below that day's
+  median score), so it is threshold noise being re-rolled nightly rather than new structure. Requiring an edge to fail
+  the threshold for several consecutive days before it drops would make a change on the map mean something.
 
 ### Parked (by decision, next step known)
 - **Theme-peer strength threshold** — names with only a broad-ETF membership (e.g. ACN, only in AIQ) show many weak,
