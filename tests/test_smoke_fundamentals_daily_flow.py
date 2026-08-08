@@ -284,7 +284,12 @@ def test_fundamentals_daily_refreshes_and_publishes_theme_etfs(tmp_path) -> None
     assert readiness_upsert["on_conflict"] == "etf_symbol"
     assert readiness_upsert["rows"][0]["etf_symbol"] == "ARKX"
     assert readiness_upsert["rows"][0]["relationship_map_eligible"] is False
-    assert readiness_upsert["rows"][0]["relationship_map_ineligible_reason"] == "insufficient_constituent_coverage"
+    # This flow provides no technical features at all, so the honest reason is
+    # that the input was unreadable — not that the theme's constituents fell
+    # short of coverage. Conflating the two is what hid a real outage: all 37
+    # production themes reported insufficient coverage while the feature table
+    # they were measured against had never been loaded.
+    assert readiness_upsert["rows"][0]["relationship_map_ineligible_reason"] == "technical_features_unavailable"
     holdings = pd.read_parquet(table_path("etf_holdings", cache_root=tmp_path))
     assert {"SPY", "ARKX"}.issubset(set(holdings["etf_ticker"]))
 

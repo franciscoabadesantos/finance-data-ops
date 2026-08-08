@@ -61,6 +61,13 @@ Ownership boundary:
 - Feature-store owns derived features, including `feature_store.scorecard_daily`.
 - Data Ops may trigger feature-store deployments only through configured Prefect deployment names.
 
+The boundary runs the other way too, and it has a sharp edge. `dataops_fundamentals_daily` computes theme ETF readiness,
+which needs to know which symbols have technical features — a `feature_store` table produced *after* this flow runs.
+**Read those cross-boundary tables from Postgres, never from the parquet cache.** Data Ops only ever writes its own
+exports there, so `read_parquet_table("feature_store.…", required=False)` returns an empty frame permanently rather than
+occasionally, and every downstream count silently reads zero. That is exactly what happened to theme eligibility; see
+`docs/thematic-sources-and-relationship-map.md` §4b.
+
 Deployment contract:
 
 - `FEATURE_BUILD_DAILY_DEPLOYMENT` is the Prefect deployment name for the full daily feature-store build.

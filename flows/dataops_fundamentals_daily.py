@@ -32,7 +32,7 @@ from finance_data_ops.refresh.storage import read_parquet_table
 from finance_data_ops.settings import load_settings
 from finance_data_ops.validation.symbol_resolution import resolve_source_refresh_universe
 from finance_data_ops.theme_etfs.holdings import fetch_theme_etf_holdings, write_theme_etf_outputs
-from finance_data_ops.theme_etfs.readiness import build_etf_theme_readiness
+from finance_data_ops.theme_etfs.readiness import build_etf_theme_readiness, read_technical_symbols
 from finance_data_ops.validation.coverage import (
     assess_symbol_coverage,
     build_symbol_coverage_rows,
@@ -98,10 +98,14 @@ def run_dataops_fundamentals_daily(
     fundamentals_summary = compute_fundamentals_summary(cached_fundamentals)
 
     cached_prices = read_parquet_table("source_cache.market_price_daily", cache_root=settings.cache_root, required=False)
-    cached_technical_features = read_parquet_table(
-        "feature_store.technical_features_daily",
-        cache_root=settings.cache_root,
-        required=False,
+    # Read from the database, not the cache. This table belongs to the feature
+    # store, which runs after data-ops, so nothing here ever wrote its parquet
+    # export — and `required=False` turned that permanent absence into an empty
+    # frame, which scored every theme at zero technical constituents and made
+    # all 37 of them ineligible for the relationship map.
+    cached_technical_features = read_technical_symbols(
+        database_dsn=settings.database_dsn,
+        cache_root=str(settings.cache_root),
     )
     cached_quotes = read_parquet_table("latest_quotes", cache_root=settings.cache_root, required=False)
     cached_earnings_events = read_parquet_table("earnings_events", cache_root=settings.cache_root, required=False)

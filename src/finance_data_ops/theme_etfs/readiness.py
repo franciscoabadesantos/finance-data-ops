@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
+
+LOGGER = logging.getLogger(__name__)
 
 
 MIN_TECHNICAL_CONSTITUENTS = 5
@@ -49,6 +52,15 @@ def build_etf_theme_readiness(
     priced_symbols = _symbol_set(market_price_daily, candidates=("symbol", "ticker"))
     technical_symbols = _symbol_set(technical_features_daily, candidates=("symbol", "ticker"))
 
+    # Every theme scoring zero technical constituents has two very different
+    # explanations — no holding is tracked yet, or the technical feature table
+    # never arrived — and they were indistinguishable. The second one happened:
+    # this input is read from a parquet cache with `required=False`, the file
+    # `feature_store.technical_features_daily.parquet` was never written, and
+    # all 37 themes recorded `insufficient_constituent_coverage` while 141 of
+    # their 371 constituents did have technical features in the database.
+    technical_source_missing = not technical_symbols
+
     rows: list[dict[str, Any]] = []
     themes = etf_themes.copy()
     themes["etf_ticker"] = _normalized_symbol_series(themes.get("etf_ticker", pd.Series(index=themes.index)))
@@ -67,6 +79,10 @@ def build_etf_theme_readiness(
         if eligible and coverage_ratio < MIN_TECHNICAL_COVERAGE_RATIO:
             eligible = False
             reason = "insufficient_constituent_coverage"
+        if not eligible and active and technical_source_missing:
+            # Naming the missing input rather than blaming coverage: the theme
+            # may well be ready and nobody could tell.
+            reason = "technical_features_unavailable"
 
         rows.append(
             {
@@ -236,3 +252,46 @@ def _normalized_symbol_series(series: pd.Series) -> pd.Series:
     text = series.astype(str).str.strip().str.upper()
     missing = text.str.lower().isin({"", "nan", "none", "nat", "<na>"})
     return text.where(~missing, None)
+
+
+def read_technical_symbols(*, database_dsn: str | None, cache_root: str | None = None) -> pd.DataFrame:
+    """Symbols that have technical features, preferring the database.
+
+    `feature_store.technical_features_daily` belongs to the feature store, which
+    runs *after* data-ops, so nothing here ever writes its parquet export and
+    the file has never existed. Reading it from the cache was asking data-ops
+    for an artifact produced downstream of itself.
+
+    The table sits in the same database this process already publishes to, so
+    read it there. The parquet path stays as a fallback for offline runs that
+    have no DSN, and `identity.universe` already queries this exact table the
+    same way.
+    """
+
+    if database_dsn and str(database_dsn).strip():
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+
+            with psycopg.connect(str(database_dsn), connect_timeout=30, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("select distinct symbol from feature_store.technical_features_daily")
+                    rows = [dict(row) for row in cur.fetchall()]
+            if rows:
+                return pd.DataFrame(rows)
+            LOGGER.warning(
+                "feature_store.technical_features_daily is empty; every theme will score zero coverage."
+            )
+        except Exception:
+            # Logged, never swallowed. An unreadable source becoming a silent
+            # zero is the bug this function exists to fix, and repeating it here
+            # would hide the replacement just as well as the original.
+            LOGGER.exception("Could not read technical features from the database; falling back to the cache.")
+
+    if cache_root:
+        from finance_data_ops.refresh.storage import read_parquet_table
+
+        return read_parquet_table(
+            "feature_store.technical_features_daily", cache_root=cache_root, required=False
+        )
+    return pd.DataFrame()
